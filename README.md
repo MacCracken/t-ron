@@ -86,8 +86,7 @@ let trail = query.agent_audit("data-pipeline", 50).await;
 
 ## Roadmap
 
-### Phase 1 -- Integration (current)
-- [ ] libro audit chain integration (cryptographic hash chain)
+### Post-release -- agnosticos integration
 - [ ] Load policy from `/etc/agnos/t-ron.toml` at startup
 - [ ] Hot-reload policy on SIGHUP
 - [ ] agnoshi intents for natural language security queries

@@ -1,6 +1,6 @@
 [package]
 name = "t-ron"
-version = "0.22.3"
+version = "0.22.4"
 edition = "2024"
 rust-version = "1.89"
 license = "GPL-3.0"
@@ -23,6 +23,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 dashmap = "6"
 regex = "1"
 bote = "0.22"
+libro = { version = "0.22.4", path = "../libro" }
 
 [dev-dependencies]
 tempfile = "3"

@@ -2,6 +2,16 @@
 
 All notable changes to t-ron are documented here.
 
+## [0.22.4] — 2026-03-22
+
+### Added
+- libro audit chain integration: every security event is dual-written to an in-memory ring buffer (fast queries) and a libro cryptographic hash chain (tamper-proof audit trail)
+- `AuditLogger::verify_chain()` — verify libro chain integrity
+- `AuditLogger::chain_review()` — structured chain summary
+- `AuditLogger::chain_len()` — libro chain entry count
+- `TRonQuery::verify_chain()`, `chain_review()`, `chain_len()` — chain access from query API
+- Verdict-to-libro mapping: Allow→Info, Flag→Warning, Deny→Security; source `"t-ron"`, actions `tool_call.{allow,deny,flag}`
+
 ## [0.22.3] — 2026-03-22
 
 ### Added

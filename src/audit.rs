@@ -1,14 +1,19 @@
 //! Audit logger — logs every tool call verdict.
+//!
+//! Dual-writes to an in-memory ring buffer (fast operational queries) and a
+//! libro audit chain (tamper-proof cryptographic hash chain).
 
-use crate::gate::{ToolCall, Verdict, VerdictKind};
+use crate::gate::{DenyCode, ToolCall, Verdict, VerdictKind};
+use libro::{AuditChain, EventSeverity};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+use std::sync::Mutex;
 use tokio::sync::RwLock;
 
-/// Maximum audit events kept in memory.
+/// Maximum audit events kept in the operational ring buffer.
 const MAX_EVENTS: usize = 10_000;
 
-/// A logged security event.
+/// A logged security event (operational view).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SecurityEvent {
     pub id: uuid::Uuid,
@@ -20,7 +25,10 @@ pub struct SecurityEvent {
 }
 
 pub struct AuditLogger {
+    /// Fast ring buffer for operational queries (risk scoring, recent events).
     events: RwLock<VecDeque<SecurityEvent>>,
+    /// Cryptographic hash chain for tamper-proof audit trail.
+    chain: Mutex<AuditChain>,
 }
 
 impl Default for AuditLogger {
@@ -33,10 +41,11 @@ impl AuditLogger {
     pub fn new() -> Self {
         Self {
             events: RwLock::new(VecDeque::new()),
+            chain: Mutex::new(AuditChain::new()),
         }
     }
 
-    /// Log a tool call verdict.
+    /// Log a tool call verdict to both the ring buffer and the libro chain.
     pub async fn log(&self, call: &ToolCall, verdict: &Verdict) {
         let reason = match verdict {
             Verdict::Allow => None,
@@ -50,10 +59,35 @@ impl AuditLogger {
             agent_id: call.agent_id.clone(),
             tool_name: call.tool_name.clone(),
             verdict: verdict.kind(),
-            reason,
+            reason: reason.clone(),
         };
 
-        // TODO: Also write to libro chain
+        // Write to libro chain (sync lock, fast — no await points)
+        {
+            let severity = match verdict.kind() {
+                VerdictKind::Allow => EventSeverity::Info,
+                VerdictKind::Flag => EventSeverity::Warning,
+                VerdictKind::Deny => EventSeverity::Security,
+            };
+            let action = match verdict.kind() {
+                VerdictKind::Allow => "tool_call.allow",
+                VerdictKind::Flag => "tool_call.flag",
+                VerdictKind::Deny => "tool_call.deny",
+            };
+            let mut details = serde_json::json!({
+                "tool_name": call.tool_name,
+            });
+            if let Some(ref r) = reason {
+                details["reason"] = serde_json::Value::String(r.clone());
+            }
+            if let Verdict::Deny { code, .. } = verdict {
+                details["deny_code"] = serde_json::Value::String(deny_code_str(*code).to_string());
+            }
+            let mut chain = self.chain.lock().expect("chain lock poisoned");
+            chain.append_with_agent(severity, "t-ron", action, details, &call.agent_id);
+        }
+
+        // Write to operational ring buffer
         let mut events = self.events.write().await;
         events.push_back(event);
         if events.len() > MAX_EVENTS {
@@ -92,6 +126,35 @@ impl AuditLogger {
     /// Total event count.
     pub async fn total_count(&self) -> usize {
         self.events.read().await.len()
+    }
+
+    /// Verify the libro audit chain integrity.
+    pub fn verify_chain(&self) -> libro::Result<()> {
+        let chain = self.chain.lock().expect("chain lock poisoned");
+        chain.verify()
+    }
+
+    /// Get a structured review/summary of the audit chain.
+    pub fn chain_review(&self) -> libro::ChainReview {
+        let chain = self.chain.lock().expect("chain lock poisoned");
+        chain.review()
+    }
+
+    /// Number of entries in the libro chain (may differ from ring buffer
+    /// if ring buffer has evicted old entries).
+    pub fn chain_len(&self) -> usize {
+        self.chain.lock().expect("chain lock poisoned").len()
+    }
+}
+
+fn deny_code_str(code: DenyCode) -> &'static str {
+    match code {
+        DenyCode::Unauthorized => "unauthorized",
+        DenyCode::RateLimited => "rate_limited",
+        DenyCode::InjectionDetected => "injection_detected",
+        DenyCode::ToolDisabled => "tool_disabled",
+        DenyCode::AnomalyDetected => "anomaly_detected",
+        DenyCode::ParameterTooLarge => "parameter_too_large",
     }
 }
 
@@ -250,5 +313,107 @@ mod tests {
 
         let events = logger.recent(2).await;
         assert_ne!(events[0].id, events[1].id);
+    }
+
+    #[tokio::test]
+    async fn chain_written_on_log() {
+        let logger = AuditLogger::new();
+        let call = ToolCall {
+            agent_id: "agent-1".to_string(),
+            tool_name: "tarang_probe".to_string(),
+            params: serde_json::json!({}),
+            timestamp: chrono::Utc::now(),
+        };
+        logger.log(&call, &Verdict::Allow).await;
+        logger
+            .log(
+                &call,
+                &Verdict::Deny {
+                    reason: "blocked".into(),
+                    code: DenyCode::Unauthorized,
+                },
+            )
+            .await;
+
+        assert_eq!(logger.chain_len(), 2);
+        assert!(logger.verify_chain().is_ok());
+    }
+
+    #[tokio::test]
+    async fn chain_integrity_after_many_writes() {
+        let logger = AuditLogger::new();
+        let call = ToolCall {
+            agent_id: "agent-1".to_string(),
+            tool_name: "tool".to_string(),
+            params: serde_json::json!({}),
+            timestamp: chrono::Utc::now(),
+        };
+        for _ in 0..100 {
+            logger.log(&call, &Verdict::Allow).await;
+        }
+        assert_eq!(logger.chain_len(), 100);
+        assert!(logger.verify_chain().is_ok());
+    }
+
+    #[tokio::test]
+    async fn chain_has_agent_id() {
+        let logger = AuditLogger::new();
+        let call = ToolCall {
+            agent_id: "web-agent".to_string(),
+            tool_name: "tarang_probe".to_string(),
+            params: serde_json::json!({}),
+            timestamp: chrono::Utc::now(),
+        };
+        logger.log(&call, &Verdict::Allow).await;
+
+        let chain = logger.chain.lock().unwrap();
+        let entry = &chain.entries()[0];
+        assert_eq!(entry.agent_id(), Some("web-agent"));
+        assert_eq!(entry.source(), "t-ron");
+        assert_eq!(entry.action(), "tool_call.allow");
+    }
+
+    #[tokio::test]
+    async fn chain_deny_has_details() {
+        let logger = AuditLogger::new();
+        let call = ToolCall {
+            agent_id: "bad-agent".to_string(),
+            tool_name: "aegis_scan".to_string(),
+            params: serde_json::json!({}),
+            timestamp: chrono::Utc::now(),
+        };
+        logger
+            .log(
+                &call,
+                &Verdict::Deny {
+                    reason: "rate limit exceeded".into(),
+                    code: DenyCode::RateLimited,
+                },
+            )
+            .await;
+
+        let chain = logger.chain.lock().unwrap();
+        let entry = &chain.entries()[0];
+        assert_eq!(entry.action(), "tool_call.deny");
+        assert_eq!(entry.severity(), EventSeverity::Security);
+        let details = entry.details();
+        assert_eq!(details["tool_name"], "aegis_scan");
+        assert_eq!(details["reason"], "rate limit exceeded");
+        assert_eq!(details["deny_code"], "rate_limited");
+    }
+
+    #[tokio::test]
+    async fn chain_review_works() {
+        let logger = AuditLogger::new();
+        let call = ToolCall {
+            agent_id: "agent-1".to_string(),
+            tool_name: "tool".to_string(),
+            params: serde_json::json!({}),
+            timestamp: chrono::Utc::now(),
+        };
+        logger.log(&call, &Verdict::Allow).await;
+
+        let review = logger.chain_review();
+        assert_eq!(review.entry_count, 1);
     }
 }

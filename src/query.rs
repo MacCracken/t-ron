@@ -35,6 +35,21 @@ impl TRonQuery {
     pub async fn agent_audit(&self, agent_id: &str, limit: usize) -> Vec<SecurityEvent> {
         self.audit.agent_events(agent_id, limit).await
     }
+
+    /// Verify the libro audit chain integrity (tamper detection).
+    pub fn verify_chain(&self) -> libro::Result<()> {
+        self.audit.verify_chain()
+    }
+
+    /// Structured review/summary of the audit chain.
+    pub fn chain_review(&self) -> libro::ChainReview {
+        self.audit.chain_review()
+    }
+
+    /// Number of entries in the libro chain.
+    pub fn chain_len(&self) -> usize {
+        self.audit.chain_len()
+    }
 }
 
 #[cfg(test)]
@@ -137,5 +152,27 @@ mod tests {
 
         // Limit works
         assert_eq!(query.agent_audit("agent-b", 2).await.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn query_chain_verification() {
+        let tron = TRon::new(permissive_config());
+        let query = tron.query();
+
+        let call = crate::gate::ToolCall {
+            agent_id: "agent-1".to_string(),
+            tool_name: "tool".to_string(),
+            params: serde_json::json!({}),
+            timestamp: chrono::Utc::now(),
+        };
+        for _ in 0..10 {
+            tron.check(&call).await;
+        }
+
+        assert!(query.verify_chain().is_ok());
+        assert_eq!(query.chain_len(), 10);
+
+        let review = query.chain_review();
+        assert_eq!(review.entry_count, 10);
     }
 }
