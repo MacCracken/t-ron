@@ -4,8 +4,8 @@ use dashmap::DashMap;
 use std::time::Instant;
 
 pub struct RateLimiter {
-    /// (agent_id, tool_name) -> bucket
-    buckets: DashMap<(String, String), TokenBucket>,
+    /// "agent_id\x1ftool_name" -> bucket (unit separator avoids tuple allocation)
+    buckets: DashMap<String, TokenBucket>,
     /// Default calls per minute
     default_rate: u64,
 }
@@ -33,7 +33,7 @@ impl RateLimiter {
 
     /// Check if a call is within rate limits. Consumes a token if allowed.
     pub fn check(&self, agent_id: &str, tool_name: &str) -> bool {
-        let key = (agent_id.to_string(), tool_name.to_string());
+        let key = bucket_key(agent_id, tool_name);
         let mut bucket = self.buckets.entry(key).or_insert_with(|| TokenBucket {
             tokens: self.default_rate as f64,
             max_tokens: self.default_rate as f64,
@@ -59,9 +59,10 @@ impl RateLimiter {
     /// Set rate limit for a specific agent (calls per minute).
     pub fn set_rate(&self, agent_id: &str, calls_per_minute: u64) {
         let new_max = calls_per_minute as f64;
+        let prefix = format!("{agent_id}\x1f");
         // Update all existing buckets for this agent
         for mut entry in self.buckets.iter_mut() {
-            if entry.key().0 == agent_id {
+            if entry.key().starts_with(&prefix) {
                 let bucket = entry.value_mut();
                 bucket.max_tokens = new_max;
                 bucket.refill_rate = new_max / 60.0;
@@ -70,6 +71,11 @@ impl RateLimiter {
             }
         }
     }
+}
+
+/// Build a bucket key from agent + tool using ASCII unit separator.
+fn bucket_key(agent_id: &str, tool_name: &str) -> String {
+    format!("{agent_id}\x1f{tool_name}")
 }
 
 #[cfg(test)]
@@ -158,10 +164,6 @@ mod tests {
         // Manually advance the bucket's last_refill to simulate time passing
         // We can't easily sleep in tests, but we can verify the refill logic
         // by checking that the bucket key exists
-        assert!(
-            limiter
-                .buckets
-                .contains_key(&("agent".to_string(), "tool".to_string()))
-        );
+        assert!(limiter.buckets.contains_key(&bucket_key("agent", "tool")));
     }
 }

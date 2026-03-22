@@ -27,7 +27,7 @@ impl PatternAnalyzer {
     }
 
     /// Record a tool call.
-    pub async fn record(&self, call: &ToolCall) {
+    pub fn record(&self, call: &ToolCall) {
         let mut entry = self.history.entry(call.agent_id.clone()).or_default();
         entry.push_back(call.tool_name.clone());
         if entry.len() > MAX_HISTORY {
@@ -36,7 +36,7 @@ impl PatternAnalyzer {
     }
 
     /// Check for anomalous patterns. Returns description if anomaly detected.
-    pub async fn check_anomaly(&self, agent_id: &str) -> Option<String> {
+    pub fn check_anomaly(&self, agent_id: &str) -> Option<String> {
         let history = self.history.get(agent_id)?;
 
         // Check for tool enumeration (calling many distinct tools rapidly)
@@ -82,9 +82,9 @@ mod tests {
                 params: serde_json::json!({}),
                 timestamp: chrono::Utc::now(),
             };
-            analyzer.record(&call).await;
+            analyzer.record(&call);
         }
-        assert!(analyzer.check_anomaly("agent-1").await.is_none());
+        assert!(analyzer.check_anomaly("agent-1").is_none());
     }
 
     #[tokio::test]
@@ -97,9 +97,9 @@ mod tests {
                 params: serde_json::json!({}),
                 timestamp: chrono::Utc::now(),
             };
-            analyzer.record(&call).await;
+            analyzer.record(&call);
         }
-        let anomaly = analyzer.check_anomaly("agent-1").await;
+        let anomaly = analyzer.check_anomaly("agent-1");
         assert!(anomaly.is_some());
         assert!(anomaly.unwrap().contains("enumeration"));
     }
@@ -107,7 +107,7 @@ mod tests {
     #[tokio::test]
     async fn no_anomaly_for_unknown_agent() {
         let analyzer = PatternAnalyzer::new();
-        assert!(analyzer.check_anomaly("nobody").await.is_none());
+        assert!(analyzer.check_anomaly("nobody").is_none());
     }
 
     #[tokio::test]
@@ -121,7 +121,7 @@ mod tests {
                 params: serde_json::json!({}),
                 timestamp: chrono::Utc::now(),
             };
-            analyzer.record(&call).await;
+            analyzer.record(&call);
         }
         // Pad to 20 calls with duplicates
         for _ in 0..6 {
@@ -131,9 +131,9 @@ mod tests {
                 params: serde_json::json!({}),
                 timestamp: chrono::Utc::now(),
             };
-            analyzer.record(&call).await;
+            analyzer.record(&call);
         }
-        assert!(analyzer.check_anomaly("agent-1").await.is_none());
+        assert!(analyzer.check_anomaly("agent-1").is_none());
     }
 
     #[tokio::test]
@@ -153,9 +153,9 @@ mod tests {
                 params: serde_json::json!({}),
                 timestamp: chrono::Utc::now(),
             };
-            analyzer.record(&call).await;
+            analyzer.record(&call);
         }
-        let anomaly = analyzer.check_anomaly("agent-1").await;
+        let anomaly = analyzer.check_anomaly("agent-1");
         assert!(anomaly.is_some());
         assert!(anomaly.unwrap().contains("escalation"));
     }
@@ -177,9 +177,9 @@ mod tests {
                 params: serde_json::json!({}),
                 timestamp: chrono::Utc::now(),
             };
-            analyzer.record(&call).await;
+            analyzer.record(&call);
         }
-        assert!(analyzer.check_anomaly("admin").await.is_none());
+        assert!(analyzer.check_anomaly("admin").is_none());
     }
 
     #[tokio::test]
@@ -193,7 +193,7 @@ mod tests {
                 params: serde_json::json!({}),
                 timestamp: chrono::Utc::now(),
             };
-            analyzer.record(&call).await;
+            analyzer.record(&call);
         }
         let history = analyzer.history.get("agent-1").unwrap();
         assert_eq!(history.len(), MAX_HISTORY);
@@ -209,7 +209,7 @@ mod tests {
                 params: serde_json::json!({}),
                 timestamp: chrono::Utc::now(),
             };
-            analyzer.record(&call).await;
+            analyzer.record(&call);
         }
         // agent-b has clean history
         let call = ToolCall {
@@ -218,8 +218,8 @@ mod tests {
             params: serde_json::json!({}),
             timestamp: chrono::Utc::now(),
         };
-        analyzer.record(&call).await;
-        assert!(analyzer.check_anomaly("agent-a").await.is_some());
-        assert!(analyzer.check_anomaly("agent-b").await.is_none());
+        analyzer.record(&call);
+        assert!(analyzer.check_anomaly("agent-a").is_some());
+        assert!(analyzer.check_anomaly("agent-b").is_none());
     }
 }

@@ -35,7 +35,6 @@ use std::sync::Arc;
 pub struct TRon {
     policy: Arc<policy::PolicyEngine>,
     rate_limiter: Arc<rate::RateLimiter>,
-    scanner: Arc<scanner::PayloadScanner>,
     pattern: Arc<pattern::PatternAnalyzer>,
     audit: Arc<audit::AuditLogger>,
     config: TRonConfig,
@@ -82,7 +81,6 @@ impl TRon {
         Self {
             policy: Arc::new(policy::PolicyEngine::new()),
             rate_limiter: Arc::new(rate::RateLimiter::new()),
-            scanner: Arc::new(scanner::PayloadScanner::new()),
             pattern: Arc::new(pattern::PatternAnalyzer::new()),
             audit: Arc::new(audit::AuditLogger::new()),
             config,
@@ -152,7 +150,7 @@ impl TRon {
 
         // 4. Payload scanning
         if self.config.scan_payloads
-            && let Some(threat) = self.scanner.scan(&call.params)
+            && let Some(threat) = scanner::scan(&call.params)
         {
             let verdict = gate::Verdict::Deny {
                 reason: format!("injection detected: {threat}"),
@@ -164,8 +162,8 @@ impl TRon {
 
         // 5. Pattern analysis
         if self.config.analyze_patterns {
-            self.pattern.record(call).await;
-            if let Some(anomaly) = self.pattern.check_anomaly(&call.agent_id).await {
+            self.pattern.record(call);
+            if let Some(anomaly) = self.pattern.check_anomaly(&call.agent_id) {
                 let verdict = gate::Verdict::Flag {
                     reason: format!("anomalous pattern: {anomaly}"),
                 };
