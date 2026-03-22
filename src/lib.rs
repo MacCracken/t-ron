@@ -17,12 +17,14 @@
 
 pub mod audit;
 pub mod gate;
+pub mod middleware;
 pub mod pattern;
 pub mod policy;
 pub mod query;
 pub mod rate;
 pub mod scanner;
 pub mod score;
+pub mod tools;
 
 mod error;
 pub use error::TRonError;
@@ -209,6 +211,11 @@ impl TRon {
         query::TRonQuery {
             audit: self.audit.clone(),
         }
+    }
+
+    /// Get a shared reference to the policy engine (for tool handlers).
+    pub fn policy_arc(&self) -> Arc<policy::PolicyEngine> {
+        self.policy.clone()
     }
 }
 

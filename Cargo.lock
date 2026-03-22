@@ -39,6 +39,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "843867be96c8daad0d758b57df9392b6d8d271134fce549de6ce169ff98a92af"
 
 [[package]]
+name = "bote"
+version = "0.22.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "119a5d314ce7fdd501aa133eb00e5e9917a89922180162626b3031bb1363c2e3"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tracing",
+]
+
+[[package]]
 name = "bumpalo"
 version = "3.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -487,6 +499,7 @@ dependencies = [
 name = "t-ron"
 version = "0.1.0"
 dependencies = [
+ "bote",
  "chrono",
  "dashmap",
  "regex",
