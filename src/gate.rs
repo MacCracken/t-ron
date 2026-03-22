@@ -29,6 +29,24 @@ impl Verdict {
     }
 }
 
+/// High-level verdict kind (for audit storage without carrying payload).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VerdictKind {
+    Allow,
+    Deny,
+    Flag,
+}
+
+impl Verdict {
+    pub fn kind(&self) -> VerdictKind {
+        match self {
+            Self::Allow => VerdictKind::Allow,
+            Self::Deny { .. } => VerdictKind::Deny,
+            Self::Flag { .. } => VerdictKind::Flag,
+        }
+    }
+}
+
 /// Reason code for denial.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DenyCode {
@@ -52,14 +70,19 @@ mod tests {
 
     #[test]
     fn verdict_deny() {
-        let v = Verdict::Deny { reason: "nope".into(), code: DenyCode::Unauthorized };
+        let v = Verdict::Deny {
+            reason: "nope".into(),
+            code: DenyCode::Unauthorized,
+        };
         assert!(v.is_denied());
         assert!(!v.is_allowed());
     }
 
     #[test]
     fn verdict_flag_is_allowed() {
-        let v = Verdict::Flag { reason: "suspicious".into() };
+        let v = Verdict::Flag {
+            reason: "suspicious".into(),
+        };
         assert!(v.is_allowed());
         assert!(!v.is_denied());
     }

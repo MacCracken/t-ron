@@ -1,17 +1,12 @@
 //! Query API — what T.Ron personality in SecureYeoman queries.
 
 use crate::audit::{AuditLogger, SecurityEvent};
-use crate::pattern::PatternAnalyzer;
-use crate::policy::PolicyEngine;
 use crate::score::RiskScorer;
 use std::sync::Arc;
 
 /// Query interface for the T.Ron SecureYeoman personality.
-#[allow(dead_code)]
 pub struct TRonQuery {
     pub(crate) audit: Arc<AuditLogger>,
-    pub(crate) pattern: Arc<PatternAnalyzer>,
-    pub(crate) policy: Arc<PolicyEngine>,
 }
 
 impl TRonQuery {
@@ -43,7 +38,6 @@ impl TRonQuery {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::TRon;
     use crate::TRonConfig;
 

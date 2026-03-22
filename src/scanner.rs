@@ -12,14 +12,23 @@ static SHELL_INJECTION: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static TEMPLATE_INJECTION: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\{\{.*\}\}|\$\{.*\}|<%.*%>").unwrap()
+    // Jinja2/Twig {{...}} with method-like content, ERB <% %>, ${...} with dot-access or builtins
+    Regex::new(
+        r"\{\{.*(\.|__|config|self|request).*\}\}|<%.*%>|\$\{.*(\.|Runtime|Process|exec).*\}",
+    )
+    .unwrap()
 });
 
-static PATH_TRAVERSAL: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"\.\./|\.\.\\|%2e%2e").unwrap()
-});
+static PATH_TRAVERSAL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\.\./|\.\.\\|%2e%2e").unwrap());
 
 pub struct PayloadScanner;
+
+impl Default for PayloadScanner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl PayloadScanner {
     pub fn new() -> Self {
@@ -28,8 +37,32 @@ impl PayloadScanner {
 
     /// Scan a JSON value for injection patterns. Returns threat description if found.
     pub fn scan(&self, params: &serde_json::Value) -> Option<String> {
-        let text = params.to_string();
-        self.scan_text(&text)
+        let mut result = None;
+        self.walk(params, &mut result);
+        result
+    }
+
+    /// Recursively walk JSON, scanning only string leaves.
+    fn walk(&self, value: &serde_json::Value, result: &mut Option<String>) {
+        if result.is_some() {
+            return; // Short-circuit once a threat is found.
+        }
+        match value {
+            serde_json::Value::String(s) => {
+                *result = self.scan_text(s);
+            }
+            serde_json::Value::Array(arr) => {
+                for item in arr {
+                    self.walk(item, result);
+                }
+            }
+            serde_json::Value::Object(map) => {
+                for v in map.values() {
+                    self.walk(v, result);
+                }
+            }
+            _ => {} // Numbers, bools, null — nothing to scan.
+        }
     }
 
     fn scan_text(&self, text: &str) -> Option<String> {
@@ -86,5 +119,12 @@ mod tests {
         let scanner = PayloadScanner::new();
         let params = serde_json::json!({"input": "{{config.items()}}"});
         assert!(scanner.scan(&params).unwrap().contains("template"));
+    }
+
+    #[test]
+    fn allow_benign_template_literal() {
+        let scanner = PayloadScanner::new();
+        let params = serde_json::json!({"msg": "Hello ${username}, welcome!"});
+        assert!(scanner.scan(&params).is_none());
     }
 }

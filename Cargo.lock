@@ -487,7 +487,6 @@ dependencies = [
 name = "t-ron"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "chrono",
  "dashmap",
  "regex",

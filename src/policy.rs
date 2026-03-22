@@ -8,7 +8,10 @@ use std::sync::RwLock;
 pub enum PolicyResult {
     Allow,
     Deny(String),
-    Unknown,
+    /// Agent has no policy entry at all.
+    UnknownAgent,
+    /// Agent exists but tool didn't match any allow/deny pattern.
+    UnknownTool,
 }
 
 /// Per-agent tool policy.
@@ -38,6 +41,12 @@ pub struct PolicyEngine {
     config: RwLock<PolicyConfig>,
 }
 
+impl Default for PolicyEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PolicyEngine {
     pub fn new() -> Self {
         Self {
@@ -47,25 +56,27 @@ impl PolicyEngine {
 
     /// Load policy from TOML string.
     pub fn load_toml(&self, toml_str: &str) -> Result<(), TRonError> {
-        let config: PolicyConfig = toml::from_str(toml_str)
-            .map_err(|e| TRonError::PolicyConfig(e.to_string()))?;
-        *self.config.write().unwrap() = config;
+        let config: PolicyConfig =
+            toml::from_str(toml_str).map_err(|e| TRonError::PolicyConfig(e.to_string()))?;
+        *self.config.write().expect("policy lock poisoned") = config;
         Ok(())
     }
 
     /// Check if an agent is allowed to call a tool.
     pub fn check(&self, agent_id: &str, tool_name: &str) -> PolicyResult {
-        let config = self.config.read().unwrap();
+        let config = self.config.read().expect("policy lock poisoned");
 
         let policy = match config.agent.get(agent_id) {
             Some(p) => p,
-            None => return PolicyResult::Unknown,
+            None => return PolicyResult::UnknownAgent,
         };
 
         // Check deny list first (deny wins over allow)
         for pattern in &policy.deny {
             if matches_glob(pattern, tool_name) {
-                return PolicyResult::Deny(format!("tool '{tool_name}' denied by policy for agent '{agent_id}'"));
+                return PolicyResult::Deny(format!(
+                    "tool '{tool_name}' denied by policy for agent '{agent_id}'"
+                ));
             }
         }
 
@@ -76,29 +87,35 @@ impl PolicyEngine {
             }
         }
 
-        // No match — treat as unknown
-        PolicyResult::Unknown
+        // Agent exists but tool not in any list
+        PolicyResult::UnknownTool
     }
 
     /// Grant an agent access to tools matching a pattern.
     pub fn grant(&self, agent_id: &str, pattern: &str) {
-        let mut config = self.config.write().unwrap();
-        let policy = config.agent.entry(agent_id.to_string()).or_insert_with(|| AgentPolicy {
-            allow: vec![],
-            deny: vec![],
-            rate_limit: None,
-        });
+        let mut config = self.config.write().expect("policy lock poisoned");
+        let policy = config
+            .agent
+            .entry(agent_id.to_string())
+            .or_insert_with(|| AgentPolicy {
+                allow: vec![],
+                deny: vec![],
+                rate_limit: None,
+            });
         policy.allow.push(pattern.to_string());
     }
 
     /// Revoke an agent's access to tools matching a pattern.
     pub fn revoke(&self, agent_id: &str, pattern: &str) {
-        let mut config = self.config.write().unwrap();
-        let policy = config.agent.entry(agent_id.to_string()).or_insert_with(|| AgentPolicy {
-            allow: vec![],
-            deny: vec![],
-            rate_limit: None,
-        });
+        let mut config = self.config.write().expect("policy lock poisoned");
+        let policy = config
+            .agent
+            .entry(agent_id.to_string())
+            .or_insert_with(|| AgentPolicy {
+                allow: vec![],
+                deny: vec![],
+                rate_limit: None,
+            });
         policy.deny.push(pattern.to_string());
     }
 }
@@ -135,14 +152,23 @@ mod tests {
         engine.grant("agent-1", "tarang_*");
         engine.revoke("agent-1", "tarang_delete");
 
-        assert!(matches!(engine.check("agent-1", "tarang_probe"), PolicyResult::Allow));
-        assert!(matches!(engine.check("agent-1", "tarang_delete"), PolicyResult::Deny(_)));
+        assert!(matches!(
+            engine.check("agent-1", "tarang_probe"),
+            PolicyResult::Allow
+        ));
+        assert!(matches!(
+            engine.check("agent-1", "tarang_delete"),
+            PolicyResult::Deny(_)
+        ));
     }
 
     #[test]
     fn unknown_agent() {
         let engine = PolicyEngine::new();
-        assert!(matches!(engine.check("nobody", "any_tool"), PolicyResult::Unknown));
+        assert!(matches!(
+            engine.check("nobody", "any_tool"),
+            PolicyResult::UnknownAgent
+        ));
     }
 
     #[test]
@@ -154,7 +180,13 @@ allow = ["tarang_*", "rasa_*"]
 deny = ["aegis_*"]
 "#;
         engine.load_toml(toml).unwrap();
-        assert!(matches!(engine.check("web-agent", "tarang_probe"), PolicyResult::Allow));
-        assert!(matches!(engine.check("web-agent", "aegis_scan"), PolicyResult::Deny(_)));
+        assert!(matches!(
+            engine.check("web-agent", "tarang_probe"),
+            PolicyResult::Allow
+        ));
+        assert!(matches!(
+            engine.check("web-agent", "aegis_scan"),
+            PolicyResult::Deny(_)
+        ));
     }
 }

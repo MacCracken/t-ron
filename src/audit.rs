@@ -1,8 +1,12 @@
 //! Audit logger — logs every tool call verdict.
 
-use crate::gate::{ToolCall, Verdict};
+use crate::gate::{ToolCall, Verdict, VerdictKind};
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use tokio::sync::RwLock;
+
+/// Maximum audit events kept in memory.
+const MAX_EVENTS: usize = 10_000;
 
 /// A logged security event.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -11,27 +15,33 @@ pub struct SecurityEvent {
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub agent_id: String,
     pub tool_name: String,
-    pub verdict: String,
+    pub verdict: VerdictKind,
     pub reason: Option<String>,
 }
 
 pub struct AuditLogger {
-    events: RwLock<Vec<SecurityEvent>>,
+    events: RwLock<VecDeque<SecurityEvent>>,
+}
+
+impl Default for AuditLogger {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl AuditLogger {
     pub fn new() -> Self {
         Self {
-            events: RwLock::new(Vec::new()),
+            events: RwLock::new(VecDeque::new()),
         }
     }
 
     /// Log a tool call verdict.
     pub async fn log(&self, call: &ToolCall, verdict: &Verdict) {
-        let (verdict_str, reason) = match verdict {
-            Verdict::Allow => ("allow".to_string(), None),
-            Verdict::Deny { reason, .. } => ("deny".to_string(), Some(reason.clone())),
-            Verdict::Flag { reason } => ("flag".to_string(), Some(reason.clone())),
+        let reason = match verdict {
+            Verdict::Allow => None,
+            Verdict::Deny { reason, .. } => Some(reason.clone()),
+            Verdict::Flag { reason } => Some(reason.clone()),
         };
 
         let event = SecurityEvent {
@@ -39,12 +49,16 @@ impl AuditLogger {
             timestamp: chrono::Utc::now(),
             agent_id: call.agent_id.clone(),
             tool_name: call.tool_name.clone(),
-            verdict: verdict_str,
+            verdict: verdict.kind(),
             reason,
         };
 
         // TODO: Also write to libro chain
-        self.events.write().await.push(event);
+        let mut events = self.events.write().await;
+        events.push_back(event);
+        if events.len() > MAX_EVENTS {
+            events.pop_front();
+        }
     }
 
     /// Get recent events.
@@ -67,7 +81,12 @@ impl AuditLogger {
 
     /// Count denied calls.
     pub async fn deny_count(&self) -> usize {
-        self.events.read().await.iter().filter(|e| e.verdict == "deny").count()
+        self.events
+            .read()
+            .await
+            .iter()
+            .filter(|e| e.verdict == VerdictKind::Deny)
+            .count()
     }
 
     /// Total event count.
@@ -91,13 +110,21 @@ mod tests {
         };
 
         logger.log(&call, &Verdict::Allow).await;
-        logger.log(&call, &Verdict::Deny { reason: "nope".into(), code: crate::gate::DenyCode::Unauthorized }).await;
+        logger
+            .log(
+                &call,
+                &Verdict::Deny {
+                    reason: "nope".into(),
+                    code: crate::gate::DenyCode::Unauthorized,
+                },
+            )
+            .await;
 
         assert_eq!(logger.total_count().await, 2);
         assert_eq!(logger.deny_count().await, 1);
 
         let recent = logger.recent(10).await;
         assert_eq!(recent.len(), 2);
-        assert_eq!(recent[0].verdict, "deny"); // Most recent first
+        assert_eq!(recent[0].verdict, VerdictKind::Deny); // Most recent first
     }
 }

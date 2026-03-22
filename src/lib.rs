@@ -15,14 +15,14 @@
 //!                                  └── audit logging (libro)
 //! ```
 
-pub mod policy;
-pub mod gate;
 pub mod audit;
+pub mod gate;
+pub mod pattern;
+pub mod policy;
+pub mod query;
 pub mod rate;
 pub mod scanner;
-pub mod pattern;
 pub mod score;
-pub mod query;
 
 mod error;
 pub use error::TRonError;
@@ -93,7 +93,11 @@ impl TRon {
         let param_str = call.params.to_string();
         if param_str.len() > self.config.max_param_size_bytes {
             let verdict = gate::Verdict::Deny {
-                reason: format!("parameter size {} exceeds limit {}", param_str.len(), self.config.max_param_size_bytes),
+                reason: format!(
+                    "parameter size {} exceeds limit {}",
+                    param_str.len(),
+                    self.config.max_param_size_bytes
+                ),
                 code: gate::DenyCode::ParameterTooLarge,
             };
             self.audit.log(call, &verdict).await;
@@ -111,26 +115,48 @@ impl TRon {
                 self.audit.log(call, &verdict).await;
                 return verdict;
             }
-            policy::PolicyResult::Unknown => {
-                match self.config.default_unknown_agent {
-                    DefaultAction::Deny => {
-                        let verdict = gate::Verdict::Deny {
-                            reason: "unknown agent".to_string(),
-                            code: gate::DenyCode::Unauthorized,
-                        };
-                        self.audit.log(call, &verdict).await;
-                        return verdict;
-                    }
-                    DefaultAction::Flag => {
-                        let verdict = gate::Verdict::Flag {
-                            reason: "unknown agent".to_string(),
-                        };
-                        self.audit.log(call, &verdict).await;
-                        return verdict;
-                    }
-                    DefaultAction::Allow => {}
+            policy::PolicyResult::UnknownAgent => match self.config.default_unknown_agent {
+                DefaultAction::Deny => {
+                    let verdict = gate::Verdict::Deny {
+                        reason: "unknown agent".to_string(),
+                        code: gate::DenyCode::Unauthorized,
+                    };
+                    self.audit.log(call, &verdict).await;
+                    return verdict;
                 }
-            }
+                DefaultAction::Flag => {
+                    let verdict = gate::Verdict::Flag {
+                        reason: "unknown agent".to_string(),
+                    };
+                    self.audit.log(call, &verdict).await;
+                    return verdict;
+                }
+                DefaultAction::Allow => {}
+            },
+            policy::PolicyResult::UnknownTool => match self.config.default_unknown_tool {
+                DefaultAction::Deny => {
+                    let verdict = gate::Verdict::Deny {
+                        reason: format!(
+                            "tool '{}' not in policy for agent '{}'",
+                            call.tool_name, call.agent_id
+                        ),
+                        code: gate::DenyCode::Unauthorized,
+                    };
+                    self.audit.log(call, &verdict).await;
+                    return verdict;
+                }
+                DefaultAction::Flag => {
+                    let verdict = gate::Verdict::Flag {
+                        reason: format!(
+                            "tool '{}' not in policy for agent '{}'",
+                            call.tool_name, call.agent_id
+                        ),
+                    };
+                    self.audit.log(call, &verdict).await;
+                    return verdict;
+                }
+                DefaultAction::Allow => {}
+            },
         }
 
         // 3. Rate limit check
@@ -144,15 +170,15 @@ impl TRon {
         }
 
         // 4. Payload scanning
-        if self.config.scan_payloads {
-            if let Some(threat) = self.scanner.scan(&call.params) {
-                let verdict = gate::Verdict::Deny {
-                    reason: format!("injection detected: {threat}"),
-                    code: gate::DenyCode::InjectionDetected,
-                };
-                self.audit.log(call, &verdict).await;
-                return verdict;
-            }
+        if self.config.scan_payloads
+            && let Some(threat) = self.scanner.scan(&call.params)
+        {
+            let verdict = gate::Verdict::Deny {
+                reason: format!("injection detected: {threat}"),
+                code: gate::DenyCode::InjectionDetected,
+            };
+            self.audit.log(call, &verdict).await;
+            return verdict;
         }
 
         // 5. Pattern analysis
@@ -182,8 +208,6 @@ impl TRon {
     pub fn query(&self) -> query::TRonQuery {
         query::TRonQuery {
             audit: self.audit.clone(),
-            pattern: self.pattern.clone(),
-            policy: self.policy.clone(),
         }
     }
 }
@@ -228,6 +252,12 @@ mod tests {
             timestamp: chrono::Utc::now(),
         };
         let verdict = tron.check(&call).await;
-        assert!(matches!(verdict, gate::Verdict::Deny { code: gate::DenyCode::ParameterTooLarge, .. }));
+        assert!(matches!(
+            verdict,
+            gate::Verdict::Deny {
+                code: gate::DenyCode::ParameterTooLarge,
+                ..
+            }
+        ));
     }
 }
