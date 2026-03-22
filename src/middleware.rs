@@ -57,9 +57,9 @@ impl SecurityGate {
         use crate::tools;
         let query = self.tron.query();
         self.inner
-            .handle("tron_status", tools::status_handler(self.tron.query()));
+            .handle("tron_status", tools::status_handler(query.clone()));
         self.inner
-            .handle("tron_risk", tools::risk_handler(self.tron.query()));
+            .handle("tron_risk", tools::risk_handler(query.clone()));
         self.inner.handle("tron_audit", tools::audit_handler(query));
         self.inner
             .handle("tron_policy", tools::policy_handler(&self.tron));
@@ -105,11 +105,16 @@ impl SecurityGate {
         agent_id: &str,
     ) -> Option<JsonRpcResponse> {
         let id = request.id.clone().unwrap_or(serde_json::Value::Null);
-        let tool_name = request
-            .params
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let tool_name = match request.params.get("name").and_then(|v| v.as_str()) {
+            Some(name) if !name.is_empty() => name,
+            _ => {
+                return Some(Self::deny_response(
+                    id,
+                    "missing or empty tool name in tools/call",
+                    DenyCode::Unauthorized,
+                ));
+            }
+        };
         let arguments = request
             .params
             .get("arguments")
@@ -363,6 +368,36 @@ deny = ["echo"]
 
         let query = gate.tron().query();
         assert_eq!(query.total_events().await, 1);
+    }
+
+    #[tokio::test]
+    async fn deny_missing_tool_name() {
+        let config = TRonConfig {
+            default_unknown_agent: DefaultAction::Allow,
+            default_unknown_tool: DefaultAction::Allow,
+            ..Default::default()
+        };
+        let gate = make_gate(config);
+        // tools/call with no "name" field
+        let req = JsonRpcRequest::new(1, "tools/call")
+            .with_params(serde_json::json!({"arguments": {}}));
+        let resp = gate.dispatch(&req, "agent").await.unwrap();
+        assert!(resp.error.is_some());
+        assert!(resp.error.unwrap().message.contains("missing"));
+    }
+
+    #[tokio::test]
+    async fn deny_empty_tool_name() {
+        let config = TRonConfig {
+            default_unknown_agent: DefaultAction::Allow,
+            default_unknown_tool: DefaultAction::Allow,
+            ..Default::default()
+        };
+        let gate = make_gate(config);
+        let req = tool_call_request("", serde_json::json!({}));
+        let resp = gate.dispatch(&req, "agent").await.unwrap();
+        assert!(resp.error.is_some());
+        assert!(resp.error.unwrap().message.contains("missing"));
     }
 
     #[tokio::test]

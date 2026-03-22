@@ -20,7 +20,7 @@ static TEMPLATE_INJECTION: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static PATH_TRAVERSAL: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\.\./|\.\.\\|%2e%2e").unwrap());
+    LazyLock::new(|| Regex::new(r"(?i)\.\./|\.\.\\|%2e%2e").unwrap());
 
 pub struct PayloadScanner;
 
@@ -179,6 +179,20 @@ mod tests {
     fn detect_url_encoded_traversal() {
         let scanner = PayloadScanner::new();
         let params = serde_json::json!({"path": "%2e%2e/etc/passwd"});
+        assert!(scanner.scan(&params).unwrap().contains("path traversal"));
+    }
+
+    #[test]
+    fn detect_uppercase_url_encoded_traversal() {
+        let scanner = PayloadScanner::new();
+        let params = serde_json::json!({"path": "%2E%2E/etc/shadow"});
+        assert!(scanner.scan(&params).unwrap().contains("path traversal"));
+    }
+
+    #[test]
+    fn detect_mixed_case_url_encoded_traversal() {
+        let scanner = PayloadScanner::new();
+        let params = serde_json::json!({"path": "%2e%2E/%2E%2e/etc/passwd"});
         assert!(scanner.scan(&params).unwrap().contains("path traversal"));
     }
 

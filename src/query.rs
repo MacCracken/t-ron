@@ -5,6 +5,7 @@ use crate::score::RiskScorer;
 use std::sync::Arc;
 
 /// Query interface for the T.Ron SecureYeoman personality.
+#[derive(Clone)]
 pub struct TRonQuery {
     pub(crate) audit: Arc<AuditLogger>,
 }

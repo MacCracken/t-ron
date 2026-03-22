@@ -143,7 +143,11 @@ pub fn audit_handler(query: TRonQuery) -> ToolHandler {
             .get("agent_id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
-        let limit = params.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
+        let limit = params
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(20)
+            .min(1000) as usize;
         let rt = tokio::runtime::Handle::current();
         rt.block_on(async {
             let q = query.lock().await;
@@ -172,6 +176,15 @@ pub fn policy_handler(tron: &crate::TRon) -> ToolHandler {
     let policy = tron.policy_arc();
     Arc::new(move |params| {
         let toml_str = params.get("toml").and_then(|v| v.as_str()).unwrap_or("");
+        if toml_str.trim().is_empty() {
+            return serde_json::json!({
+                "content": [{
+                    "type": "text",
+                    "text": "policy error: empty TOML input"
+                }],
+                "isError": true
+            });
+        }
         match policy.load_toml(toml_str) {
             Ok(()) => serde_json::json!({
                 "content": [{

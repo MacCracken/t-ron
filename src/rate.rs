@@ -58,11 +58,15 @@ impl RateLimiter {
 
     /// Set rate limit for a specific agent (calls per minute).
     pub fn set_rate(&self, agent_id: &str, calls_per_minute: u64) {
+        let new_max = calls_per_minute as f64;
         // Update all existing buckets for this agent
         for mut entry in self.buckets.iter_mut() {
             if entry.key().0 == agent_id {
-                entry.value_mut().max_tokens = calls_per_minute as f64;
-                entry.value_mut().refill_rate = calls_per_minute as f64 / 60.0;
+                let bucket = entry.value_mut();
+                bucket.max_tokens = new_max;
+                bucket.refill_rate = new_max / 60.0;
+                // Clamp current tokens so a lowered limit takes effect immediately
+                bucket.tokens = bucket.tokens.min(new_max);
             }
         }
     }
@@ -107,27 +111,20 @@ mod tests {
     #[test]
     fn set_rate_lowers_limit() {
         let limiter = RateLimiter::new();
-        // Prime the bucket for agent
+        // Prime the bucket for agent — consumes 1 token, leaving 59
         assert!(limiter.check("agent", "tool"));
-        // Lower rate to 10/min
+        // Lower rate to 10/min — clamps current tokens from 59 to 10
         limiter.set_rate("agent", 10);
-        // Exhaust remaining tokens (bucket was at 59 tokens, but max_tokens is now 10,
-        // so refill is capped at 10 — but existing tokens may exceed new max until refill)
-        // After set_rate, the bucket's max_tokens changes but current tokens aren't reduced.
-        // On next check(), refill clamps to new max_tokens.
-        // Consume until denied — should happen within original 60.
+        // Should allow exactly 10 more calls (tokens clamped to 10)
         let mut allowed = 0;
-        for _ in 0..60 {
+        for _ in 0..20 {
             if limiter.check("agent", "tool") {
                 allowed += 1;
             } else {
                 break;
             }
         }
-        // The bucket started with 59 tokens remaining, set_rate changed max but not current.
-        // On next check, refill clamps tokens to min(current + elapsed*rate, 10).
-        // So it should quickly exhaust.
-        assert!(allowed < 60);
+        assert_eq!(allowed, 10);
     }
 
     #[test]

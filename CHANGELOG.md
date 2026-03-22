@@ -17,3 +17,10 @@ All notable changes to t-ron are documented here.
 - MCP tools: `tron_status`, `tron_risk`, `tron_audit`, `tron_policy`
 - Streaming dispatch support via `dispatch_streaming()`
 - JSON-RPC error responses (code -32001) with deny code labels for blocked calls
+
+### Fixed
+- Path traversal scanner now case-insensitive for URL-encoded sequences (`%2E%2E` was bypassing detection)
+- `set_rate` now clamps current tokens to new max (lowered rate limits take effect immediately)
+- `SecurityGate` rejects `tools/call` requests with missing or empty tool name
+- `tron_policy` tool rejects empty TOML input instead of silently wiping all policy
+- `tron_audit` tool caps limit at 1000 to prevent unbounded responses
