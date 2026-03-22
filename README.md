@@ -4,7 +4,7 @@
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 
-T-Ron is a security middleware library that sits between [bote](https://github.com/MacCracken/bote) (MCP protocol layer) and tool handlers, enforcing per-agent permissions, rate limiting, payload scanning, pattern analysis, and auditing every call. Named after Tron, the security program that fights the Master Control Program.
+T-Ron is a security middleware library that sits between [bote](https://github.com/MacCracken/bote) (MCP protocol layer) and tool handlers, enforcing per-agent permissions, rate limiting, payload scanning, pattern analysis, and auditing every call to a tamper-proof [libro](https://github.com/MacCracken/libro) hash chain. Named after Tron, the security program that fights the Master Control Program.
 
 ## Architecture
 
@@ -14,15 +14,16 @@ Agent --> bote (MCP protocol) --> t-ron (security gate) --> tool handler
                                     |-- rate limiting (token bucket)
                                     |-- payload scanning (injection detection)
                                     |-- pattern analysis (anomaly detection)
-                                    '-- audit logging (libro chain)
+                                    '-- audit logging (libro hash chain)
 ```
 
-T-Ron is a **library crate** -- no HTTP server, no CLI, no binary. Consumers embed it as middleware in their MCP tool dispatch pipeline. The SecureYeoman T.Ron personality queries it for security insights.
+T-Ron is a **library crate** -- no HTTP server, no CLI, no binary. Consumers embed it as middleware in their MCP tool dispatch pipeline via `SecurityGate`. The SecureYeoman T.Ron personality queries it for security insights.
 
 ## Quick Start
 
 ```rust
-use t_ron::{TRon, TRonConfig, DefaultAction, gate::ToolCall};
+use t_ron::{TRon, TRonConfig, middleware::SecurityGate, tools};
+use bote::{Dispatcher, registry::ToolRegistry};
 
 // Create monitor with deny-by-default policy
 let tron = TRon::new(TRonConfig::default());
@@ -34,34 +35,33 @@ allow = ["tarang_*", "rasa_*"]
 deny = ["aegis_*", "phylax_*"]
 "#)?;
 
-// Check every tool call before dispatch
-let call = ToolCall {
-    agent_id: "web-agent".to_string(),
-    tool_name: "tarang_probe".to_string(),
-    params: serde_json::json!({"path": "/media/video.mp4"}),
-    timestamp: chrono::Utc::now(),
-};
-
-let verdict = tron.check(&call).await;
-if verdict.is_denied() {
-    // Block the call
+// Register t-ron's tool definitions alongside your app tools
+let mut registry = ToolRegistry::new();
+for def in tools::tool_defs() {
+    registry.register(def);
 }
+// ... register your app tools ...
 
-// Query API for the T.Ron SecureYeoman personality
-let query = tron.query();
-let risk = query.agent_risk_score("web-agent").await;
-let events = query.recent_events(50).await;
+// Wrap bote dispatcher with security gate
+let dispatcher = Dispatcher::new(registry);
+let mut gate = SecurityGate::new(tron, dispatcher);
+gate.register_tool_handlers();
+
+// Every tools/call is now security-checked before reaching your handler
+let response = gate.dispatch(&request, "web-agent").await;
 ```
 
 ## Features
 
+- **SecurityGate Middleware** -- wraps bote `Dispatcher` with pre-dispatch security checks on every `tools/call`; non-tool methods pass through unmodified
 - **Policy Engine** -- per-agent ACLs with glob pattern matching (`tarang_*`), deny-wins-over-allow semantics, TOML configuration
 - **Rate Limiter** -- per-agent, per-tool token bucket with configurable rates (default 60 calls/minute)
 - **Payload Scanner** -- regex-based injection detection: SQL injection, shell injection, template injection, path traversal
 - **Pattern Analyzer** -- anomaly detection on tool call sequences: tool enumeration detection, privilege escalation monitoring
 - **Risk Scoring** -- rolling per-agent threat score (0.0 = trusted, 1.0 = hostile) based on audit history
-- **Audit Logger** -- every call and verdict logged with UUID, timestamp, agent, tool, verdict, and reason
-- **Query API** -- read-only interface for the T.Ron personality in SecureYeoman to query security state
+- **Audit Logger** -- dual-write to an in-memory ring buffer (fast operational queries) and a libro cryptographic hash chain (tamper-proof audit trail with integrity verification)
+- **MCP Tools** -- `tron_status`, `tron_risk`, `tron_audit`, `tron_policy` registered as bote tool handlers for the T.Ron personality
+- **Query API** -- read-only interface for the T.Ron personality in SecureYeoman: security events, risk scores, chain verification
 - **Default Deny** -- unknown agents and tools are denied by default (configurable: allow, deny, or flag)
 
 ## T.Ron Personality Integration
@@ -82,7 +82,15 @@ let denials = query.total_denials().await;
 
 // "What happened with agent data-pipeline?"
 let trail = query.agent_audit("data-pipeline", 50).await;
+
+// "Is the audit chain intact?"
+query.verify_chain()?;
+
+// "Give me a security summary"
+let review = query.chain_review();
 ```
+
+The same queries are available as MCP tools (`tron_status`, `tron_risk`, `tron_audit`, `tron_policy`) for agents to call directly through bote.
 
 ## Roadmap
 
@@ -109,11 +117,11 @@ let trail = query.agent_audit("data-pipeline", 50).await;
 
 | Source | Relevance | Location |
 |--------|-----------|----------|
-| [bote](https://github.com/MacCracken/bote) | MCP protocol layer -- t-ron sits as middleware | `/home/macro/Repos/bote` |
-| [libro](https://github.com/MacCracken/libro) | Audit chain -- t-ron will write to libro | `/home/macro/Repos/libro` |
+| [bote](https://github.com/MacCracken/bote) | MCP protocol layer -- t-ron wraps its Dispatcher via SecurityGate | `/home/macro/Repos/bote` |
+| [libro](https://github.com/MacCracken/libro) | Cryptographic audit chain -- t-ron writes every verdict to libro | `/home/macro/Repos/libro` |
 | [aegis](https://github.com/MacCracken/agnosticos) `aegis.rs` | System security daemon -- t-ron is the MCP-specific complement | `userland/agent-runtime/src/aegis.rs` |
 | [phylax](https://github.com/MacCracken/agnosticos) `phylax.rs` | Threat detection engine -- t-ron focuses on MCP layer | `userland/agent-runtime/src/phylax.rs` |
-| [SecureYeoman](https://github.com/MacCracken/SecureYeoman) | T.Ron personality consumes query API | `/home/macro/Repos/SecureYeoman` |
+| [SecureYeoman](https://github.com/MacCracken/SecureYeoman) | T.Ron personality consumes query API and MCP tools | `/home/macro/Repos/SecureYeoman` |
 
 ## License
 
