@@ -154,11 +154,7 @@ impl SecurityGate {
 
     /// Build a JSON-RPC error response for a denied call.
     fn deny_response(id: serde_json::Value, reason: &str, code: DenyCode) -> JsonRpcResponse {
-        JsonRpcResponse::error(
-            id,
-            SECURITY_DENIED,
-            format!("security: {reason} [{code}]"),
-        )
+        JsonRpcResponse::error(id, SECURITY_DENIED, format!("security: {reason} [{code}]"))
     }
 }
 
@@ -368,8 +364,8 @@ deny = ["echo"]
         };
         let gate = make_gate(config);
         // tools/call with no "name" field
-        let req = JsonRpcRequest::new(1, "tools/call")
-            .with_params(serde_json::json!({"arguments": {}}));
+        let req =
+            JsonRpcRequest::new(1, "tools/call").with_params(serde_json::json!({"arguments": {}}));
         let resp = gate.dispatch(&req, "agent").await.unwrap();
         assert!(resp.error.is_some());
         assert!(resp.error.unwrap().message.contains("missing"));
