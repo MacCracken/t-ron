@@ -317,6 +317,8 @@ checksum = "b5b646652bf6661599e1da8901b3b9522896f01e736bad5f723fe7a3a27f899d"
 [[package]]
 name = "libro"
 version = "0.22.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6dad244cbaf3a1b611b4566d2dedee414098df06b2b92ee11b63bc0fbc69c8cb"
 dependencies = [
  "chrono",
  "fs2",

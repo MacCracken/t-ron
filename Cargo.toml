@@ -25,7 +25,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 dashmap = "6"
 regex = "1"
 bote = "0.22"
-libro = { version = "0.22.4", path = "../libro" }
+libro = "0.22.4"
 
 [dev-dependencies]
 tempfile = "3"
