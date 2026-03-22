@@ -8,8 +8,10 @@ description = "MCP security monitor — tool call auditing, rate limiting, injec
 homepage = "https://github.com/MacCracken/t-ron"
 repository = "https://github.com/MacCracken/t-ron"
 readme = "README.md"
+documentation = "https://docs.rs/t-ron"
 keywords = ["mcp", "security", "audit", "firewall", "agent"]
 categories = ["authentication", "web-programming"]
+exclude = [".claude/", ".github/", "docs/", "scripts/"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

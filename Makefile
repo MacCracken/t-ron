@@ -1,4 +1,4 @@
-.PHONY: check fmt clippy test bench audit deny build doc clean
+.PHONY: check fmt clippy test bench audit deny build doc coverage clean
 
 # Run all CI checks locally
 check: fmt clippy test
@@ -34,6 +34,10 @@ build:
 # Generate documentation
 doc:
 	cargo doc --no-deps
+
+# Code coverage report
+coverage:
+	cargo llvm-cov --html
 
 # Clean build artifacts
 clean:
