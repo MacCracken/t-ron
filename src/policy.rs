@@ -21,14 +21,16 @@ pub struct AgentPolicy {
     pub allow: Vec<String>,
     #[serde(default)]
     pub deny: Vec<String>,
-    #[serde(default)]
-    pub rate_limit: Option<RateLimitPolicy>,
+    // TODO: wire into RateLimiter — parsed but not yet enforced
+    // #[serde(default)]
+    // pub rate_limit: Option<RateLimitPolicy>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RateLimitPolicy {
-    pub calls_per_minute: u64,
-}
+// TODO: wire into RateLimiter — parsed but not yet enforced
+// #[derive(Debug, Clone, Serialize, Deserialize)]
+// pub struct RateLimitPolicy {
+//     pub calls_per_minute: u64,
+// }
 
 /// Policy configuration loaded from TOML.
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -100,7 +102,6 @@ impl PolicyEngine {
             .or_insert_with(|| AgentPolicy {
                 allow: vec![],
                 deny: vec![],
-                rate_limit: None,
             });
         policy.allow.push(pattern.to_string());
     }
@@ -114,7 +115,6 @@ impl PolicyEngine {
             .or_insert_with(|| AgentPolicy {
                 allow: vec![],
                 deny: vec![],
-                rate_limit: None,
             });
         policy.deny.push(pattern.to_string());
     }

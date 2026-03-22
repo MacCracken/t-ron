@@ -2,7 +2,7 @@
 
 All notable changes to t-ron are documented here.
 
-## [0.1.0] — 2026-03-22
+## [0.22.3] — 2026-03-22
 
 ### Added
 - Core security gate types: `ToolCall`, `Verdict`, `DenyCode`
@@ -24,3 +24,5 @@ All notable changes to t-ron are documented here.
 - `SecurityGate` rejects `tools/call` requests with missing or empty tool name
 - `tron_policy` tool rejects empty TOML input instead of silently wiping all policy
 - `tron_audit` tool caps limit at 1000 to prevent unbounded responses
+- Removed unnecessary `tokio::sync::Mutex` from tool handlers (`TRonQuery` is already `Send+Sync` via `Arc` internals)
+- Commented out `RateLimitPolicy` in policy config (was parsed from TOML but silently ignored by rate limiter)

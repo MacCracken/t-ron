@@ -76,15 +76,13 @@ pub fn tool_defs() -> Vec<ToolDef> {
 
 /// Create handler for `tron_status`.
 pub fn status_handler(query: TRonQuery) -> ToolHandler {
-    let query = Arc::new(tokio::sync::Mutex::new(query));
     Arc::new(move |_params| {
-        let query = query.clone();
-        // Use block_on since bote handlers are sync.
+        // block_on since bote handlers are sync; TRonQuery is Send+Sync (Arc internals)
+        // so no mutex needed — &self methods only.
         let rt = tokio::runtime::Handle::current();
         rt.block_on(async {
-            let q = query.lock().await;
-            let total = q.total_events().await;
-            let denials = q.total_denials().await;
+            let total = query.total_events().await;
+            let denials = query.total_denials().await;
             serde_json::json!({
                 "content": [{
                     "type": "text",
@@ -102,9 +100,7 @@ pub fn status_handler(query: TRonQuery) -> ToolHandler {
 
 /// Create handler for `tron_risk`.
 pub fn risk_handler(query: TRonQuery) -> ToolHandler {
-    let query = Arc::new(tokio::sync::Mutex::new(query));
     Arc::new(move |params| {
-        let query = query.clone();
         let agent_id = params
             .get("agent_id")
             .and_then(|v| v.as_str())
@@ -112,8 +108,7 @@ pub fn risk_handler(query: TRonQuery) -> ToolHandler {
             .to_string();
         let rt = tokio::runtime::Handle::current();
         rt.block_on(async {
-            let q = query.lock().await;
-            let score = q.agent_risk_score(&agent_id).await;
+            let score = query.agent_risk_score(&agent_id).await;
             let level = match score {
                 s if s >= 0.8 => "critical",
                 s if s >= 0.5 => "high",
@@ -136,9 +131,7 @@ pub fn risk_handler(query: TRonQuery) -> ToolHandler {
 
 /// Create handler for `tron_audit`.
 pub fn audit_handler(query: TRonQuery) -> ToolHandler {
-    let query = Arc::new(tokio::sync::Mutex::new(query));
     Arc::new(move |params| {
-        let query = query.clone();
         let agent_id = params
             .get("agent_id")
             .and_then(|v| v.as_str())
@@ -150,11 +143,10 @@ pub fn audit_handler(query: TRonQuery) -> ToolHandler {
             .min(1000) as usize;
         let rt = tokio::runtime::Handle::current();
         rt.block_on(async {
-            let q = query.lock().await;
             let events = if let Some(ref aid) = agent_id {
-                q.agent_audit(aid, limit).await
+                query.agent_audit(aid, limit).await
             } else {
-                q.recent_events(limit).await
+                query.recent_events(limit).await
             };
             serde_json::json!({
                 "content": [{
