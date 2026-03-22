@@ -86,22 +86,10 @@ let trail = query.agent_audit("data-pipeline", 50).await;
 
 ## Roadmap
 
-### Phase 0 -- Scaffold (current)
-- [x] Core gate types (ToolCall, Verdict, DenyCode)
-- [x] Policy engine with glob ACLs and TOML config
-- [x] Token bucket rate limiter
-- [x] Regex payload scanner (SQL, shell, template, path traversal)
-- [x] Pattern analyzer (tool enumeration detection)
-- [x] Risk scorer
-- [x] Audit logger
-- [x] Query API for T.Ron personality
-
-### Phase 1 -- Integration
-- [ ] Wire into bote as middleware (pre-dispatch hook)
+### Phase 1 -- Integration (current)
 - [ ] libro audit chain integration (cryptographic hash chain)
 - [ ] Load policy from `/etc/agnos/t-ron.toml` at startup
 - [ ] Hot-reload policy on SIGHUP
-- [ ] MCP tools: `tron_status`, `tron_risk`, `tron_audit`, `tron_policy`
 - [ ] agnoshi intents for natural language security queries
 
 ### Phase 2 -- Advanced Detection
