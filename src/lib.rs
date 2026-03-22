@@ -117,48 +117,27 @@ impl TRon {
                 self.audit.log(call, &verdict).await;
                 return verdict;
             }
-            policy::PolicyResult::UnknownAgent => match self.config.default_unknown_agent {
-                DefaultAction::Deny => {
-                    let verdict = gate::Verdict::Deny {
-                        reason: "unknown agent".to_string(),
-                        code: gate::DenyCode::Unauthorized,
-                    };
-                    self.audit.log(call, &verdict).await;
-                    return verdict;
+            policy::PolicyResult::UnknownAgent => {
+                if let Some(v) = default_action_verdict(
+                    self.config.default_unknown_agent,
+                    "unknown agent".to_string(),
+                ) {
+                    self.audit.log(call, &v).await;
+                    return v;
                 }
-                DefaultAction::Flag => {
-                    let verdict = gate::Verdict::Flag {
-                        reason: "unknown agent".to_string(),
-                    };
-                    self.audit.log(call, &verdict).await;
-                    return verdict;
+            }
+            policy::PolicyResult::UnknownTool => {
+                if let Some(v) = default_action_verdict(
+                    self.config.default_unknown_tool,
+                    format!(
+                        "tool '{}' not in policy for agent '{}'",
+                        call.tool_name, call.agent_id
+                    ),
+                ) {
+                    self.audit.log(call, &v).await;
+                    return v;
                 }
-                DefaultAction::Allow => {}
-            },
-            policy::PolicyResult::UnknownTool => match self.config.default_unknown_tool {
-                DefaultAction::Deny => {
-                    let verdict = gate::Verdict::Deny {
-                        reason: format!(
-                            "tool '{}' not in policy for agent '{}'",
-                            call.tool_name, call.agent_id
-                        ),
-                        code: gate::DenyCode::Unauthorized,
-                    };
-                    self.audit.log(call, &verdict).await;
-                    return verdict;
-                }
-                DefaultAction::Flag => {
-                    let verdict = gate::Verdict::Flag {
-                        reason: format!(
-                            "tool '{}' not in policy for agent '{}'",
-                            call.tool_name, call.agent_id
-                        ),
-                    };
-                    self.audit.log(call, &verdict).await;
-                    return verdict;
-                }
-                DefaultAction::Allow => {}
-            },
+            }
         }
 
         // 3. Rate limit check
@@ -216,6 +195,18 @@ impl TRon {
     /// Get a shared reference to the policy engine (for tool handlers).
     pub fn policy_arc(&self) -> Arc<policy::PolicyEngine> {
         self.policy.clone()
+    }
+}
+
+/// Convert a `DefaultAction` + reason into a verdict, or `None` for `Allow`.
+fn default_action_verdict(action: DefaultAction, reason: String) -> Option<gate::Verdict> {
+    match action {
+        DefaultAction::Deny => Some(gate::Verdict::Deny {
+            reason,
+            code: gate::DenyCode::Unauthorized,
+        }),
+        DefaultAction::Flag => Some(gate::Verdict::Flag { reason }),
+        DefaultAction::Allow => None,
     }
 }
 

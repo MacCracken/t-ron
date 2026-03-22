@@ -58,6 +58,26 @@ pub enum DenyCode {
     ParameterTooLarge,
 }
 
+impl DenyCode {
+    /// Stable label for JSON-RPC error messages and audit details.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unauthorized => "unauthorized",
+            Self::RateLimited => "rate_limited",
+            Self::InjectionDetected => "injection_detected",
+            Self::ToolDisabled => "tool_disabled",
+            Self::AnomalyDetected => "anomaly_detected",
+            Self::ParameterTooLarge => "parameter_too_large",
+        }
+    }
+}
+
+impl std::fmt::Display for DenyCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

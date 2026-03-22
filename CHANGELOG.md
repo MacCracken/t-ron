@@ -11,6 +11,12 @@ All notable changes to t-ron are documented here.
 - `AuditLogger::chain_len()` — libro chain entry count
 - `TRonQuery::verify_chain()`, `chain_review()`, `chain_len()` — chain access from query API
 - Verdict-to-libro mapping: Allow→Info, Flag→Warning, Deny→Security; source `"t-ron"`, actions `tool_call.{allow,deny,flag}`
+- `DenyCode::as_str()` and `Display` impl — canonical deny code labels consolidated in one place
+
+### Fixed
+- Payload scanner now enforces max recursion depth (64) to prevent stack overflow on deeply nested JSON
+- Removed duplicated deny code label functions from `audit.rs` and `middleware.rs` (now uses `DenyCode::as_str()`)
+- Extracted `default_action_verdict()` helper to reduce duplication in `TRon::check()` policy handling
 
 ## [0.22.3] — 2026-03-22
 

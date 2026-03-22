@@ -160,11 +160,6 @@ pub fn audit_handler(query: TRonQuery) -> ToolHandler {
 
 /// Create handler for `tron_policy`.
 pub fn policy_handler(tron: &crate::TRon) -> ToolHandler {
-    // policy_handler needs access to TRon to call load_policy.
-    // Since load_policy takes &self and PolicyEngine uses RwLock internally,
-    // we can share TRon behind an Arc. But TRon isn't Clone, so the caller
-    // must provide a reference and we'll wrap the policy engine directly.
-    // For now, take a clone of the policy Arc.
     let policy = tron.policy_arc();
     Arc::new(move |params| {
         let toml_str = params.get("toml").and_then(|v| v.as_str()).unwrap_or("");

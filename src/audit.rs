@@ -3,7 +3,7 @@
 //! Dual-writes to an in-memory ring buffer (fast operational queries) and a
 //! libro audit chain (tamper-proof cryptographic hash chain).
 
-use crate::gate::{DenyCode, ToolCall, Verdict, VerdictKind};
+use crate::gate::{ToolCall, Verdict, VerdictKind};
 use libro::{AuditChain, EventSeverity};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -81,7 +81,7 @@ impl AuditLogger {
                 details["reason"] = serde_json::Value::String(r.clone());
             }
             if let Verdict::Deny { code, .. } = verdict {
-                details["deny_code"] = serde_json::Value::String(deny_code_str(*code).to_string());
+                details["deny_code"] = serde_json::Value::String(code.as_str().to_owned());
             }
             let mut chain = self.chain.lock().expect("chain lock poisoned");
             chain.append_with_agent(severity, "t-ron", action, details, &call.agent_id);
@@ -147,20 +147,10 @@ impl AuditLogger {
     }
 }
 
-fn deny_code_str(code: DenyCode) -> &'static str {
-    match code {
-        DenyCode::Unauthorized => "unauthorized",
-        DenyCode::RateLimited => "rate_limited",
-        DenyCode::InjectionDetected => "injection_detected",
-        DenyCode::ToolDisabled => "tool_disabled",
-        DenyCode::AnomalyDetected => "anomaly_detected",
-        DenyCode::ParameterTooLarge => "parameter_too_large",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gate::DenyCode;
 
     #[tokio::test]
     async fn log_and_retrieve() {

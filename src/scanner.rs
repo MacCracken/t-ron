@@ -22,6 +22,9 @@ static TEMPLATE_INJECTION: LazyLock<Regex> = LazyLock::new(|| {
 static PATH_TRAVERSAL: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)\.\./|\.\.\\|%2e%2e").unwrap());
 
+/// Maximum JSON nesting depth before scanning is aborted.
+const MAX_SCAN_DEPTH: usize = 64;
+
 pub struct PayloadScanner;
 
 impl Default for PayloadScanner {
@@ -38,14 +41,17 @@ impl PayloadScanner {
     /// Scan a JSON value for injection patterns. Returns threat description if found.
     pub fn scan(&self, params: &serde_json::Value) -> Option<String> {
         let mut result = None;
-        self.walk(params, &mut result);
+        self.walk(params, &mut result, 0);
         result
     }
 
     /// Recursively walk JSON, scanning only string leaves.
-    fn walk(&self, value: &serde_json::Value, result: &mut Option<String>) {
+    fn walk(&self, value: &serde_json::Value, result: &mut Option<String>, depth: usize) {
         if result.is_some() {
             return; // Short-circuit once a threat is found.
+        }
+        if depth > MAX_SCAN_DEPTH {
+            return; // Prevent stack overflow on deeply nested payloads.
         }
         match value {
             serde_json::Value::String(s) => {
@@ -53,12 +59,12 @@ impl PayloadScanner {
             }
             serde_json::Value::Array(arr) => {
                 for item in arr {
-                    self.walk(item, result);
+                    self.walk(item, result, depth + 1);
                 }
             }
             serde_json::Value::Object(map) => {
                 for v in map.values() {
-                    self.walk(v, result);
+                    self.walk(v, result, depth + 1);
                 }
             }
             _ => {} // Numbers, bools, null — nothing to scan.

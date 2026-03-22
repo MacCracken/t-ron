@@ -157,19 +157,8 @@ impl SecurityGate {
         JsonRpcResponse::error(
             id,
             SECURITY_DENIED,
-            format!("security: {reason} [{}]", deny_code_label(code)),
+            format!("security: {reason} [{code}]"),
         )
-    }
-}
-
-fn deny_code_label(code: DenyCode) -> &'static str {
-    match code {
-        DenyCode::Unauthorized => "unauthorized",
-        DenyCode::RateLimited => "rate_limited",
-        DenyCode::InjectionDetected => "injection_detected",
-        DenyCode::ToolDisabled => "tool_disabled",
-        DenyCode::AnomalyDetected => "anomaly_detected",
-        DenyCode::ParameterTooLarge => "parameter_too_large",
     }
 }
 
