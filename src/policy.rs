@@ -189,4 +189,109 @@ deny = ["aegis_*"]
             PolicyResult::Deny(_)
         ));
     }
+
+    #[test]
+    fn unknown_tool_for_known_agent() {
+        let engine = PolicyEngine::new();
+        engine.grant("agent-1", "tarang_*");
+        // Agent exists but tool doesn't match any pattern
+        assert!(matches!(
+            engine.check("agent-1", "rasa_edit"),
+            PolicyResult::UnknownTool
+        ));
+    }
+
+    #[test]
+    fn malformed_toml_error() {
+        let engine = PolicyEngine::new();
+        let result = engine.load_toml("this is not valid toml {{{}}}");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn deny_only_policy() {
+        let engine = PolicyEngine::new();
+        let toml = r#"
+[agent."lockdown"]
+deny = ["*"]
+"#;
+        engine.load_toml(toml).unwrap();
+        assert!(matches!(
+            engine.check("lockdown", "anything"),
+            PolicyResult::Deny(_)
+        ));
+    }
+
+    #[test]
+    fn allow_only_policy() {
+        let engine = PolicyEngine::new();
+        let toml = r#"
+[agent."open"]
+allow = ["*"]
+"#;
+        engine.load_toml(toml).unwrap();
+        assert!(matches!(
+            engine.check("open", "anything"),
+            PolicyResult::Allow
+        ));
+    }
+
+    #[test]
+    fn reload_policy_replaces_previous() {
+        let engine = PolicyEngine::new();
+        engine.grant("agent-1", "tarang_*");
+        assert!(matches!(
+            engine.check("agent-1", "tarang_probe"),
+            PolicyResult::Allow
+        ));
+
+        // Reload with empty policy — agent-1 no longer exists
+        engine.load_toml("").unwrap();
+        assert!(matches!(
+            engine.check("agent-1", "tarang_probe"),
+            PolicyResult::UnknownAgent
+        ));
+    }
+
+    #[test]
+    fn multiple_agents_in_policy() {
+        let engine = PolicyEngine::new();
+        let toml = r#"
+[agent."reader"]
+allow = ["tarang_*"]
+
+[agent."admin"]
+allow = ["*"]
+deny = ["ark_remove"]
+"#;
+        engine.load_toml(toml).unwrap();
+        assert!(matches!(
+            engine.check("reader", "tarang_probe"),
+            PolicyResult::Allow
+        ));
+        assert!(matches!(
+            engine.check("reader", "aegis_scan"),
+            PolicyResult::UnknownTool
+        ));
+        assert!(matches!(
+            engine.check("admin", "aegis_scan"),
+            PolicyResult::Allow
+        ));
+        assert!(matches!(
+            engine.check("admin", "ark_remove"),
+            PolicyResult::Deny(_)
+        ));
+    }
+
+    #[test]
+    fn empty_pattern_no_match() {
+        assert!(!matches_glob("", "anything"));
+        assert!(matches_glob("", ""));
+    }
+
+    #[test]
+    fn glob_star_suffix_only() {
+        // Leading star is not supported — treated as literal
+        assert!(!matches_glob("*_delete", "tarang_delete"));
+    }
 }

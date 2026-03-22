@@ -103,4 +103,123 @@ mod tests {
         assert!(anomaly.is_some());
         assert!(anomaly.unwrap().contains("enumeration"));
     }
+
+    #[tokio::test]
+    async fn no_anomaly_for_unknown_agent() {
+        let analyzer = PatternAnalyzer::new();
+        assert!(analyzer.check_anomaly("nobody").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn enumeration_boundary_14_distinct_no_flag() {
+        let analyzer = PatternAnalyzer::new();
+        // 14 distinct tools in 20 calls — below the 15 threshold
+        for i in 0..14 {
+            let call = ToolCall {
+                agent_id: "agent-1".to_string(),
+                tool_name: format!("tool_{i}"),
+                params: serde_json::json!({}),
+                timestamp: chrono::Utc::now(),
+            };
+            analyzer.record(&call).await;
+        }
+        // Pad to 20 calls with duplicates
+        for _ in 0..6 {
+            let call = ToolCall {
+                agent_id: "agent-1".to_string(),
+                tool_name: "tool_0".to_string(),
+                params: serde_json::json!({}),
+                timestamp: chrono::Utc::now(),
+            };
+            analyzer.record(&call).await;
+        }
+        assert!(analyzer.check_anomaly("agent-1").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn detect_privilege_escalation() {
+        let analyzer = PatternAnalyzer::new();
+        // 2 benign calls then 3 sensitive — triggers escalation (3+ of 5, mixed)
+        for name in [
+            "tarang_probe",
+            "rasa_edit",
+            "aegis_scan",
+            "phylax_alert",
+            "aegis_quarantine",
+        ] {
+            let call = ToolCall {
+                agent_id: "agent-1".to_string(),
+                tool_name: name.to_string(),
+                params: serde_json::json!({}),
+                timestamp: chrono::Utc::now(),
+            };
+            analyzer.record(&call).await;
+        }
+        let anomaly = analyzer.check_anomaly("agent-1").await;
+        assert!(anomaly.is_some());
+        assert!(anomaly.unwrap().contains("escalation"));
+    }
+
+    #[tokio::test]
+    async fn pure_sensitive_no_escalation() {
+        let analyzer = PatternAnalyzer::new();
+        // All 5 calls are sensitive — should NOT flag (normal for admin agents)
+        for name in [
+            "aegis_scan",
+            "aegis_quarantine",
+            "phylax_alert",
+            "aegis_report",
+            "phylax_sweep",
+        ] {
+            let call = ToolCall {
+                agent_id: "admin".to_string(),
+                tool_name: name.to_string(),
+                params: serde_json::json!({}),
+                timestamp: chrono::Utc::now(),
+            };
+            analyzer.record(&call).await;
+        }
+        assert!(analyzer.check_anomaly("admin").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn ring_buffer_overflow() {
+        let analyzer = PatternAnalyzer::new();
+        // Record 110 calls — should keep only last 100
+        for i in 0..110 {
+            let call = ToolCall {
+                agent_id: "agent-1".to_string(),
+                tool_name: format!("tool_{}", i % 5),
+                params: serde_json::json!({}),
+                timestamp: chrono::Utc::now(),
+            };
+            analyzer.record(&call).await;
+        }
+        let history = analyzer.history.get("agent-1").unwrap();
+        assert_eq!(history.len(), MAX_HISTORY);
+    }
+
+    #[tokio::test]
+    async fn separate_agent_histories() {
+        let analyzer = PatternAnalyzer::new();
+        for i in 0..20 {
+            let call = ToolCall {
+                agent_id: "agent-a".to_string(),
+                tool_name: format!("tool_{i}"),
+                params: serde_json::json!({}),
+                timestamp: chrono::Utc::now(),
+            };
+            analyzer.record(&call).await;
+        }
+        // agent-b has clean history
+        let call = ToolCall {
+            agent_id: "agent-b".to_string(),
+            tool_name: "tarang_probe".to_string(),
+            params: serde_json::json!({}),
+            timestamp: chrono::Utc::now(),
+        };
+        analyzer.record(&call).await;
+        assert!(analyzer.check_anomaly("agent-a").await.is_some());
+        assert!(analyzer.check_anomaly("agent-b").await.is_none());
+    }
 }

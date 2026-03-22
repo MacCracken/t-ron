@@ -127,4 +127,128 @@ mod tests {
         assert_eq!(recent.len(), 2);
         assert_eq!(recent[0].verdict, VerdictKind::Deny); // Most recent first
     }
+
+    #[tokio::test]
+    async fn log_flag_verdict() {
+        let logger = AuditLogger::new();
+        let call = ToolCall {
+            agent_id: "agent-1".to_string(),
+            tool_name: "test_tool".to_string(),
+            params: serde_json::json!({}),
+            timestamp: chrono::Utc::now(),
+        };
+        logger
+            .log(
+                &call,
+                &Verdict::Flag {
+                    reason: "suspicious".into(),
+                },
+            )
+            .await;
+
+        let events = logger.recent(1).await;
+        assert_eq!(events[0].verdict, VerdictKind::Flag);
+        assert_eq!(events[0].reason.as_deref(), Some("suspicious"));
+        // Flags are not denials
+        assert_eq!(logger.deny_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn agent_events_filtering() {
+        let logger = AuditLogger::new();
+        let call_a = ToolCall {
+            agent_id: "agent-a".to_string(),
+            tool_name: "tool".to_string(),
+            params: serde_json::json!({}),
+            timestamp: chrono::Utc::now(),
+        };
+        let call_b = ToolCall {
+            agent_id: "agent-b".to_string(),
+            tool_name: "tool".to_string(),
+            params: serde_json::json!({}),
+            timestamp: chrono::Utc::now(),
+        };
+
+        for _ in 0..5 {
+            logger.log(&call_a, &Verdict::Allow).await;
+        }
+        for _ in 0..3 {
+            logger.log(&call_b, &Verdict::Allow).await;
+        }
+
+        assert_eq!(logger.agent_events("agent-a", 100).await.len(), 5);
+        assert_eq!(logger.agent_events("agent-b", 100).await.len(), 3);
+        assert_eq!(logger.agent_events("nobody", 100).await.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn agent_events_respects_limit() {
+        let logger = AuditLogger::new();
+        let call = ToolCall {
+            agent_id: "agent-1".to_string(),
+            tool_name: "tool".to_string(),
+            params: serde_json::json!({}),
+            timestamp: chrono::Utc::now(),
+        };
+        for _ in 0..10 {
+            logger.log(&call, &Verdict::Allow).await;
+        }
+        assert_eq!(logger.agent_events("agent-1", 3).await.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn recent_limit_larger_than_count() {
+        let logger = AuditLogger::new();
+        let call = ToolCall {
+            agent_id: "agent-1".to_string(),
+            tool_name: "tool".to_string(),
+            params: serde_json::json!({}),
+            timestamp: chrono::Utc::now(),
+        };
+        logger.log(&call, &Verdict::Allow).await;
+        // Ask for 100 but only 1 exists
+        assert_eq!(logger.recent(100).await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn empty_log_queries() {
+        let logger = AuditLogger::new();
+        assert_eq!(logger.total_count().await, 0);
+        assert_eq!(logger.deny_count().await, 0);
+        assert!(logger.recent(10).await.is_empty());
+        assert!(logger.agent_events("nobody", 10).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn max_events_eviction() {
+        let logger = AuditLogger::new();
+        let call = ToolCall {
+            agent_id: "agent-1".to_string(),
+            tool_name: "tool".to_string(),
+            params: serde_json::json!({}),
+            timestamp: chrono::Utc::now(),
+        };
+
+        // Log MAX_EVENTS + 100 events
+        for _ in 0..(MAX_EVENTS + 100) {
+            logger.log(&call, &Verdict::Allow).await;
+        }
+        assert_eq!(logger.total_count().await, MAX_EVENTS);
+    }
+
+    #[tokio::test]
+    async fn event_has_unique_id() {
+        let logger = AuditLogger::new();
+        let call = ToolCall {
+            agent_id: "agent-1".to_string(),
+            tool_name: "tool".to_string(),
+            params: serde_json::json!({}),
+            timestamp: chrono::Utc::now(),
+        };
+        logger.log(&call, &Verdict::Allow).await;
+        logger.log(&call, &Verdict::Allow).await;
+
+        let events = logger.recent(2).await;
+        assert_ne!(events[0].id, events[1].id);
+    }
 }

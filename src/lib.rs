@@ -260,4 +260,252 @@ mod tests {
             }
         ));
     }
+
+    #[tokio::test]
+    async fn allow_known_agent_known_tool() {
+        let tron = TRon::new(TRonConfig::default());
+        tron.load_policy(
+            r#"
+[agent."web-agent"]
+allow = ["tarang_*"]
+"#,
+        )
+        .unwrap();
+        let call = gate::ToolCall {
+            agent_id: "web-agent".to_string(),
+            tool_name: "tarang_probe".to_string(),
+            params: serde_json::json!({"path": "/test"}),
+            timestamp: chrono::Utc::now(),
+        };
+        let verdict = tron.check(&call).await;
+        assert!(verdict.is_allowed());
+        assert!(!verdict.is_denied());
+    }
+
+    #[tokio::test]
+    async fn flag_unknown_agent() {
+        let config = TRonConfig {
+            default_unknown_agent: DefaultAction::Flag,
+            ..Default::default()
+        };
+        let tron = TRon::new(config);
+        let call = gate::ToolCall {
+            agent_id: "mystery".to_string(),
+            tool_name: "tool".to_string(),
+            params: serde_json::json!({}),
+            timestamp: chrono::Utc::now(),
+        };
+        let verdict = tron.check(&call).await;
+        assert!(matches!(verdict, gate::Verdict::Flag { .. }));
+        assert!(verdict.is_allowed()); // Flags are allowed
+    }
+
+    #[tokio::test]
+    async fn deny_unknown_tool_for_known_agent() {
+        let tron = TRon::new(TRonConfig::default());
+        tron.load_policy(
+            r#"
+[agent."limited"]
+allow = ["tarang_*"]
+"#,
+        )
+        .unwrap();
+        let call = gate::ToolCall {
+            agent_id: "limited".to_string(),
+            tool_name: "aegis_scan".to_string(), // Not in allow list
+            params: serde_json::json!({}),
+            timestamp: chrono::Utc::now(),
+        };
+        let verdict = tron.check(&call).await;
+        assert!(verdict.is_denied());
+    }
+
+    #[tokio::test]
+    async fn flag_unknown_tool() {
+        let config = TRonConfig {
+            default_unknown_tool: DefaultAction::Flag,
+            ..Default::default()
+        };
+        let tron = TRon::new(config);
+        tron.load_policy(
+            r#"
+[agent."agent-1"]
+allow = ["tarang_*"]
+"#,
+        )
+        .unwrap();
+        let call = gate::ToolCall {
+            agent_id: "agent-1".to_string(),
+            tool_name: "rasa_edit".to_string(),
+            params: serde_json::json!({}),
+            timestamp: chrono::Utc::now(),
+        };
+        let verdict = tron.check(&call).await;
+        assert!(matches!(verdict, gate::Verdict::Flag { .. }));
+    }
+
+    #[tokio::test]
+    async fn allow_unknown_agent_passthrough() {
+        let config = TRonConfig {
+            default_unknown_agent: DefaultAction::Allow,
+            default_unknown_tool: DefaultAction::Allow,
+            ..Default::default()
+        };
+        let tron = TRon::new(config);
+        let call = gate::ToolCall {
+            agent_id: "whoever".to_string(),
+            tool_name: "whatever".to_string(),
+            params: serde_json::json!({"safe": true}),
+            timestamp: chrono::Utc::now(),
+        };
+        let verdict = tron.check(&call).await;
+        assert!(verdict.is_allowed());
+    }
+
+    #[tokio::test]
+    async fn deny_injection_through_pipeline() {
+        let config = TRonConfig {
+            default_unknown_agent: DefaultAction::Allow,
+            default_unknown_tool: DefaultAction::Allow,
+            ..Default::default()
+        };
+        let tron = TRon::new(config);
+        let call = gate::ToolCall {
+            agent_id: "agent".to_string(),
+            tool_name: "tool".to_string(),
+            params: serde_json::json!({"q": "1 UNION SELECT * FROM passwords"}),
+            timestamp: chrono::Utc::now(),
+        };
+        let verdict = tron.check(&call).await;
+        assert!(matches!(
+            verdict,
+            gate::Verdict::Deny {
+                code: gate::DenyCode::InjectionDetected,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn scan_payloads_disabled_bypass() {
+        let config = TRonConfig {
+            default_unknown_agent: DefaultAction::Allow,
+            default_unknown_tool: DefaultAction::Allow,
+            scan_payloads: false,
+            ..Default::default()
+        };
+        let tron = TRon::new(config);
+        let call = gate::ToolCall {
+            agent_id: "agent".to_string(),
+            tool_name: "tool".to_string(),
+            params: serde_json::json!({"q": "1 UNION SELECT * FROM passwords"}),
+            timestamp: chrono::Utc::now(),
+        };
+        // With scanning disabled, injection payload should pass
+        let verdict = tron.check(&call).await;
+        assert!(verdict.is_allowed());
+    }
+
+    #[tokio::test]
+    async fn analyze_patterns_disabled_bypass() {
+        let config = TRonConfig {
+            default_unknown_agent: DefaultAction::Allow,
+            default_unknown_tool: DefaultAction::Allow,
+            analyze_patterns: false,
+            ..Default::default()
+        };
+        let tron = TRon::new(config);
+        // Even with 20 distinct tools, no anomaly should be flagged
+        for i in 0..20 {
+            let call = gate::ToolCall {
+                agent_id: "agent".to_string(),
+                tool_name: format!("tool_{i}"),
+                params: serde_json::json!({}),
+                timestamp: chrono::Utc::now(),
+            };
+            let verdict = tron.check(&call).await;
+            assert!(verdict.is_allowed());
+        }
+    }
+
+    #[tokio::test]
+    async fn rate_limit_through_pipeline() {
+        let config = TRonConfig {
+            default_unknown_agent: DefaultAction::Allow,
+            default_unknown_tool: DefaultAction::Allow,
+            scan_payloads: false,
+            analyze_patterns: false,
+            ..Default::default()
+        };
+        let tron = TRon::new(config);
+        let call = gate::ToolCall {
+            agent_id: "agent".to_string(),
+            tool_name: "tool".to_string(),
+            params: serde_json::json!({}),
+            timestamp: chrono::Utc::now(),
+        };
+        for _ in 0..60 {
+            let v = tron.check(&call).await;
+            assert!(v.is_allowed());
+        }
+        // 61st should be rate limited
+        let v = tron.check(&call).await;
+        assert!(matches!(
+            v,
+            gate::Verdict::Deny {
+                code: gate::DenyCode::RateLimited,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn policy_deny_through_pipeline() {
+        let tron = TRon::new(TRonConfig::default());
+        tron.load_policy(
+            r#"
+[agent."restricted"]
+allow = ["tarang_*"]
+deny = ["tarang_delete"]
+"#,
+        )
+        .unwrap();
+        let call = gate::ToolCall {
+            agent_id: "restricted".to_string(),
+            tool_name: "tarang_delete".to_string(),
+            params: serde_json::json!({}),
+            timestamp: chrono::Utc::now(),
+        };
+        let verdict = tron.check(&call).await;
+        assert!(verdict.is_denied());
+    }
+
+    #[tokio::test]
+    async fn load_policy_error() {
+        let tron = TRon::new(TRonConfig::default());
+        assert!(tron.load_policy("not valid toml {{{").is_err());
+    }
+
+    #[tokio::test]
+    async fn audit_logged_for_every_verdict() {
+        let config = TRonConfig {
+            default_unknown_agent: DefaultAction::Allow,
+            default_unknown_tool: DefaultAction::Allow,
+            scan_payloads: false,
+            analyze_patterns: false,
+            ..Default::default()
+        };
+        let tron = TRon::new(config);
+        let call = gate::ToolCall {
+            agent_id: "agent".to_string(),
+            tool_name: "tool".to_string(),
+            params: serde_json::json!({}),
+            timestamp: chrono::Utc::now(),
+        };
+        tron.check(&call).await;
+        tron.check(&call).await;
+
+        let query = tron.query();
+        assert_eq!(query.total_events().await, 2);
+    }
 }

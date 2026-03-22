@@ -86,4 +86,72 @@ mod tests {
         assert!(v.is_allowed());
         assert!(!v.is_denied());
     }
+
+    #[test]
+    fn verdict_kind_mapping() {
+        assert_eq!(Verdict::Allow.kind(), VerdictKind::Allow);
+        assert_eq!(
+            Verdict::Deny {
+                reason: "x".into(),
+                code: DenyCode::Unauthorized
+            }
+            .kind(),
+            VerdictKind::Deny
+        );
+        assert_eq!(
+            Verdict::Flag { reason: "x".into() }.kind(),
+            VerdictKind::Flag
+        );
+    }
+
+    #[test]
+    fn verdict_serde_roundtrip() {
+        let verdicts = vec![
+            Verdict::Allow,
+            Verdict::Deny {
+                reason: "bad".into(),
+                code: DenyCode::InjectionDetected,
+            },
+            Verdict::Flag {
+                reason: "sus".into(),
+            },
+        ];
+        for v in &verdicts {
+            let json = serde_json::to_string(v).unwrap();
+            let back: Verdict = serde_json::from_str(&json).unwrap();
+            assert_eq!(v.is_allowed(), back.is_allowed());
+            assert_eq!(v.is_denied(), back.is_denied());
+        }
+    }
+
+    #[test]
+    fn tool_call_serde_roundtrip() {
+        let call = ToolCall {
+            agent_id: "agent-1".into(),
+            tool_name: "tarang_probe".into(),
+            params: serde_json::json!({"key": "value"}),
+            timestamp: chrono::Utc::now(),
+        };
+        let json = serde_json::to_string(&call).unwrap();
+        let back: ToolCall = serde_json::from_str(&json).unwrap();
+        assert_eq!(call.agent_id, back.agent_id);
+        assert_eq!(call.tool_name, back.tool_name);
+    }
+
+    #[test]
+    fn deny_code_all_variants() {
+        let codes = [
+            DenyCode::Unauthorized,
+            DenyCode::RateLimited,
+            DenyCode::InjectionDetected,
+            DenyCode::ToolDisabled,
+            DenyCode::AnomalyDetected,
+            DenyCode::ParameterTooLarge,
+        ];
+        for code in &codes {
+            let json = serde_json::to_string(code).unwrap();
+            let back: DenyCode = serde_json::from_str(&json).unwrap();
+            assert_eq!(*code, back);
+        }
+    }
 }
