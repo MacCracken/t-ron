@@ -22,10 +22,10 @@
 ## Upcoming
 
 ### Post-release -- agnosticos integration
-- [ ] Load policy from `/etc/agnos/t-ron.toml` at startup
-- [ ] Hot-reload policy on SIGHUP
+- [x] Load policy from file path (`load_policy_file`)
+- [x] Hot-reload policy support (`reload_policy` for SIGHUP handlers)
 - [ ] agnoshi intents for natural language security queries
-- [ ] Wire `RateLimitPolicy` from TOML config to rate limiter
+- [x] Wire `RateLimitPolicy` from TOML config to rate limiter
 
 ### Phase 2 -- Advanced Detection
 - [ ] ML-based anomaly detection (train on normal patterns, flag deviations)

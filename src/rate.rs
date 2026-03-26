@@ -8,6 +8,8 @@ pub struct RateLimiter {
     buckets: DashMap<String, TokenBucket>,
     /// Default calls per minute
     default_rate: u64,
+    /// Per-agent rate overrides (from policy config).
+    agent_rates: DashMap<String, u64>,
 }
 
 struct TokenBucket {
@@ -28,6 +30,7 @@ impl RateLimiter {
         Self {
             buckets: DashMap::new(),
             default_rate: 60, // 60 calls/minute default
+            agent_rates: DashMap::new(),
         }
     }
 
@@ -35,10 +38,15 @@ impl RateLimiter {
     #[inline]
     pub fn check(&self, agent_id: &str, tool_name: &str) -> bool {
         let key = bucket_key(agent_id, tool_name);
+        let rate = self
+            .agent_rates
+            .get(agent_id)
+            .map(|r| *r)
+            .unwrap_or(self.default_rate);
         let mut bucket = self.buckets.entry(key).or_insert_with(|| TokenBucket {
-            tokens: self.default_rate as f64,
-            max_tokens: self.default_rate as f64,
-            refill_rate: self.default_rate as f64 / 60.0,
+            tokens: rate as f64,
+            max_tokens: rate as f64,
+            refill_rate: rate as f64 / 60.0,
             last_refill: Instant::now(),
         });
 
@@ -58,10 +66,16 @@ impl RateLimiter {
     }
 
     /// Set rate limit for a specific agent (calls per minute).
+    ///
+    /// Applies immediately to existing buckets and is stored so that
+    /// future buckets for this agent also use the new rate.
     pub fn set_rate(&self, agent_id: &str, calls_per_minute: u64) {
         let new_max = calls_per_minute as f64;
-        let prefix = format!("{agent_id}\x1f");
+        // Store the per-agent rate for future bucket creation
+        self.agent_rates
+            .insert(agent_id.to_string(), calls_per_minute);
         // Update all existing buckets for this agent
+        let prefix = format!("{agent_id}\x1f");
         for mut entry in self.buckets.iter_mut() {
             if entry.key().starts_with(&prefix) {
                 let bucket = entry.value_mut();
@@ -160,17 +174,16 @@ mod tests {
     #[test]
     fn set_rate_before_any_check() {
         let limiter = RateLimiter::new();
-        // set_rate on an agent that has no buckets yet — should be a no-op
+        // set_rate stores the rate so future buckets use it
         limiter.set_rate("nobody", 5);
-        // First check should create a bucket with the DEFAULT rate, not 5
-        // because set_rate only modifies existing buckets
+        // First check should create a bucket with rate=5, not the default 60
         let mut count = 0;
-        for _ in 0..60 {
+        for _ in 0..10 {
             if limiter.check("nobody", "tool") {
                 count += 1;
             }
         }
-        assert_eq!(count, 60);
+        assert_eq!(count, 5);
     }
 
     #[test]

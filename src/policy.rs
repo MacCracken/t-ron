@@ -22,19 +22,18 @@ pub struct AgentPolicy {
     pub allow: Vec<String>,
     #[serde(default)]
     pub deny: Vec<String>,
-    // TODO: wire into RateLimiter — parsed but not yet enforced
-    // #[serde(default)]
-    // pub rate_limit: Option<RateLimitPolicy>,
+    #[serde(default)]
+    pub rate_limit: Option<RateLimitPolicy>,
 }
 
-// TODO: wire into RateLimiter — parsed but not yet enforced
-// #[derive(Debug, Clone, Serialize, Deserialize)]
-// pub struct RateLimitPolicy {
-//     pub calls_per_minute: u64,
-// }
+/// Per-agent rate limit configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimitPolicy {
+    pub calls_per_minute: u64,
+}
 
 /// Policy configuration loaded from TOML.
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PolicyConfig {
     #[serde(default)]
     pub agent: HashMap<String, AgentPolicy>,
@@ -55,6 +54,15 @@ impl PolicyEngine {
         Self {
             config: RwLock::new(PolicyConfig::default()),
         }
+    }
+
+    /// Get a snapshot of the current policy config.
+    #[must_use]
+    pub fn config(&self) -> PolicyConfig {
+        self.config
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     /// Load policy from TOML string.
@@ -115,6 +123,7 @@ impl PolicyEngine {
             .or_insert_with(|| AgentPolicy {
                 allow: vec![],
                 deny: vec![],
+                rate_limit: None,
             });
         policy.allow.push(pattern.to_string());
     }
@@ -131,6 +140,7 @@ impl PolicyEngine {
             .or_insert_with(|| AgentPolicy {
                 allow: vec![],
                 deny: vec![],
+                rate_limit: None,
             });
         policy.deny.push(pattern.to_string());
     }
@@ -310,5 +320,34 @@ deny = ["ark_remove"]
     fn glob_star_suffix_only() {
         // Leading star is not supported — treated as literal
         assert!(!matches_glob("*_delete", "tarang_delete"));
+    }
+
+    #[test]
+    fn rate_limit_parsed_from_toml() {
+        let engine = PolicyEngine::new();
+        let toml = r#"
+[agent."limited"]
+allow = ["*"]
+[agent."limited".rate_limit]
+calls_per_minute = 10
+
+[agent."unlimited"]
+allow = ["*"]
+"#;
+        engine.load_toml(toml).unwrap();
+        let config = engine.config();
+        let limited = config.agent.get("limited").unwrap();
+        assert_eq!(limited.rate_limit.as_ref().unwrap().calls_per_minute, 10);
+        let unlimited = config.agent.get("unlimited").unwrap();
+        assert!(unlimited.rate_limit.is_none());
+    }
+
+    #[test]
+    fn config_snapshot() {
+        let engine = PolicyEngine::new();
+        engine.grant("agent-1", "tarang_*");
+        let config = engine.config();
+        assert!(config.agent.contains_key("agent-1"));
+        assert_eq!(config.agent["agent-1"].allow, vec!["tarang_*"]);
     }
 }

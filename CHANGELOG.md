@@ -2,6 +2,30 @@
 
 All notable changes to t-ron are documented here.
 
+## [0.26.3] — 2026-03-26
+
+### Added
+- `load_policy_file(path)` — load policy from a TOML file and store the path for hot-reload
+- `reload_policy()` — re-read the stored policy file (designed for SIGHUP handlers)
+- `RateLimitPolicy` in per-agent TOML config — `calls_per_minute` now wired into the rate limiter
+- Per-agent rate overrides stored in `RateLimiter` — new buckets respect policy rates from creation
+- `PolicyEngine::config()` — read snapshot of current policy config
+- Benchmark suite (`benches/pipeline.rs`) — 10 criterion benchmarks covering the full pipeline
+- `scripts/bench-history.sh` — CSV benchmark history tracking
+
+### Changed
+- `scanner::scan()` returns `Option<&'static str>` instead of `Option<String>` (avoids allocation per threat)
+- `RiskScorer::score()` uses single-pass fold instead of two iterator passes
+- `TRon::check()` uses zero-alloc `ByteCounter` for param size check instead of `to_string()`
+- `RateLimiter::bucket_key()` uses `write!` with pre-sized `String` instead of `format!`
+- All lock acquisitions use `unwrap_or_else(|p| p.into_inner())` — no more panics on lock poisoning
+
+### Fixed
+- Added `#[non_exhaustive]` to all public enums (`Verdict`, `VerdictKind`, `DenyCode`, `DefaultAction`, `PolicyResult`, `TRonError`)
+- Added `#[must_use]` to all pure functions and constructors
+- Added `#[inline]` to hot-path functions
+- Removed `expect()` panics from library code (was violating no-panic policy)
+
 ## [0.22.4] — 2026-03-22
 
 ### Added
