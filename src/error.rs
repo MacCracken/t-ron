@@ -1,6 +1,7 @@
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum TRonError {
     #[error("policy error: {0}")]
     Policy(String),

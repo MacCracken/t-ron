@@ -57,6 +57,7 @@ pub struct TRonConfig {
 
 /// Default action for unmatched requests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
 pub enum DefaultAction {
     Allow,
     Deny,
@@ -77,6 +78,7 @@ impl Default for TRonConfig {
 
 impl TRon {
     /// Create a new t-ron security monitor.
+    #[must_use]
     pub fn new(config: TRonConfig) -> Self {
         Self {
             policy: Arc::new(policy::PolicyEngine::new()),
@@ -89,14 +91,18 @@ impl TRon {
 
     /// Check if a tool call is permitted.
     pub async fn check(&self, call: &gate::ToolCall) -> gate::Verdict {
-        // 1. Check param size
-        let param_str = call.params.to_string();
-        if param_str.len() > self.config.max_param_size_bytes {
+        // 1. Check param size (counting writer avoids allocating the serialized string)
+        let param_size = {
+            let mut counter = ByteCounter(0);
+            // serde_json::to_writer on Value with a non-failing writer is infallible
+            let _ = serde_json::to_writer(&mut counter, &call.params);
+            counter.0
+        };
+        if param_size > self.config.max_param_size_bytes {
             let verdict = gate::Verdict::Deny {
                 reason: format!(
                     "parameter size {} exceeds limit {}",
-                    param_str.len(),
-                    self.config.max_param_size_bytes
+                    param_size, self.config.max_param_size_bytes
                 ),
                 code: gate::DenyCode::ParameterTooLarge,
             };
@@ -184,6 +190,7 @@ impl TRon {
     }
 
     /// Get the query API (for T.Ron personality in SecureYeoman).
+    #[must_use]
     pub fn query(&self) -> query::TRonQuery {
         query::TRonQuery {
             audit: self.audit.clone(),
@@ -191,8 +198,25 @@ impl TRon {
     }
 
     /// Get a shared reference to the policy engine (for tool handlers).
+    #[must_use]
     pub fn policy_arc(&self) -> Arc<policy::PolicyEngine> {
         self.policy.clone()
+    }
+}
+
+/// Counts bytes written without allocating a buffer.
+struct ByteCounter(usize);
+
+impl std::io::Write for ByteCounter {
+    #[inline]
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0 += buf.len();
+        Ok(buf.len())
+    }
+
+    #[inline]
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -480,6 +504,43 @@ deny = ["tarang_delete"]
     async fn load_policy_error() {
         let tron = TRon::new(TRonConfig::default());
         assert!(tron.load_policy("not valid toml {{{").is_err());
+    }
+
+    #[tokio::test]
+    async fn param_size_boundary() {
+        // Exactly at the limit should pass
+        let config = TRonConfig {
+            max_param_size_bytes: 2, // Tiny limit: "{}" is 2 bytes
+            default_unknown_agent: DefaultAction::Allow,
+            default_unknown_tool: DefaultAction::Allow,
+            scan_payloads: false,
+            analyze_patterns: false,
+        };
+        let tron = TRon::new(config);
+        let call = gate::ToolCall {
+            agent_id: "agent".to_string(),
+            tool_name: "tool".to_string(),
+            params: serde_json::json!({}), // serializes to "{}" = 2 bytes
+            timestamp: chrono::Utc::now(),
+        };
+        let verdict = tron.check(&call).await;
+        assert!(verdict.is_allowed());
+
+        // One byte over should deny
+        let call_over = gate::ToolCall {
+            agent_id: "agent".to_string(),
+            tool_name: "tool".to_string(),
+            params: serde_json::json!({"a":1}), // serializes to {"a":1} = 7 bytes
+            timestamp: chrono::Utc::now(),
+        };
+        let verdict = tron.check(&call_over).await;
+        assert!(matches!(
+            verdict,
+            gate::Verdict::Deny {
+                code: gate::DenyCode::ParameterTooLarge,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]

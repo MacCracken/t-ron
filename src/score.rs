@@ -8,6 +8,7 @@ pub struct RiskScorer;
 
 impl RiskScorer {
     /// Calculate risk score based on recent audit events.
+    #[must_use]
     pub async fn score(audit: &AuditLogger, agent_id: &str) -> f64 {
         let events = audit.agent_events(agent_id, 100).await;
         if events.is_empty() {
@@ -15,14 +16,14 @@ impl RiskScorer {
         }
 
         let total = events.len() as f64;
-        let denials = events
-            .iter()
-            .filter(|e| e.verdict == VerdictKind::Deny)
-            .count() as f64;
-        let flags = events
-            .iter()
-            .filter(|e| e.verdict == VerdictKind::Flag)
-            .count() as f64;
+        let (denials, flags) =
+            events
+                .iter()
+                .fold((0.0_f64, 0.0_f64), |(d, f), e| match e.verdict {
+                    VerdictKind::Deny => (d + 1.0, f),
+                    VerdictKind::Flag => (d, f + 1.0),
+                    _ => (d, f),
+                });
 
         // Weighted score: denials are 2x flags
         let raw = (denials * 2.0 + flags) / (total * 2.0);

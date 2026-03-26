@@ -28,5 +28,10 @@ bote = "0.22"
 libro = "0.22.4"
 
 [dev-dependencies]
+criterion = { version = "0.5", features = ["async_tokio"] }
 tempfile = "3"
 tokio = { version = "1", features = ["test-util", "rt-multi-thread"] }
+
+[[bench]]
+name = "pipeline"
+harness = false

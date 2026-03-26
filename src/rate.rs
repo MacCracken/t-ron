@@ -32,6 +32,7 @@ impl RateLimiter {
     }
 
     /// Check if a call is within rate limits. Consumes a token if allowed.
+    #[inline]
     pub fn check(&self, agent_id: &str, tool_name: &str) -> bool {
         let key = bucket_key(agent_id, tool_name);
         let mut bucket = self.buckets.entry(key).or_insert_with(|| TokenBucket {
@@ -74,8 +75,12 @@ impl RateLimiter {
 }
 
 /// Build a bucket key from agent + tool using ASCII unit separator.
+#[inline]
 fn bucket_key(agent_id: &str, tool_name: &str) -> String {
-    format!("{agent_id}\x1f{tool_name}")
+    use std::fmt::Write;
+    let mut key = String::with_capacity(agent_id.len() + 1 + tool_name.len());
+    let _ = write!(key, "{agent_id}\x1f{tool_name}");
+    key
 }
 
 #[cfg(test)]
@@ -150,6 +155,22 @@ mod tests {
             }
         }
         assert_eq!(count, 59); // 60 - 1 (initial) = 59 remaining
+    }
+
+    #[test]
+    fn set_rate_before_any_check() {
+        let limiter = RateLimiter::new();
+        // set_rate on an agent that has no buckets yet — should be a no-op
+        limiter.set_rate("nobody", 5);
+        // First check should create a bucket with the DEFAULT rate, not 5
+        // because set_rate only modifies existing buckets
+        let mut count = 0;
+        for _ in 0..60 {
+            if limiter.check("nobody", "tool") {
+                count += 1;
+            }
+        }
+        assert_eq!(count, 60);
     }
 
     #[test]

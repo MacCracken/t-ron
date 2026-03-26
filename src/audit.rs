@@ -38,6 +38,7 @@ impl Default for AuditLogger {
 }
 
 impl AuditLogger {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             events: RwLock::new(VecDeque::new()),
@@ -83,7 +84,10 @@ impl AuditLogger {
             if let Verdict::Deny { code, .. } = verdict {
                 details["deny_code"] = serde_json::Value::String(code.as_str().to_owned());
             }
-            let mut chain = self.chain.lock().expect("chain lock poisoned");
+            let mut chain = self
+                .chain
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             chain.append_with_agent(severity, "t-ron", action, details, &call.agent_id);
         }
 
@@ -130,20 +134,31 @@ impl AuditLogger {
 
     /// Verify the libro audit chain integrity.
     pub fn verify_chain(&self) -> libro::Result<()> {
-        let chain = self.chain.lock().expect("chain lock poisoned");
+        let chain = self
+            .chain
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         chain.verify()
     }
 
     /// Get a structured review/summary of the audit chain.
+    #[must_use]
     pub fn chain_review(&self) -> libro::ChainReview {
-        let chain = self.chain.lock().expect("chain lock poisoned");
+        let chain = self
+            .chain
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         chain.review()
     }
 
     /// Number of entries in the libro chain (may differ from ring buffer
     /// if ring buffer has evicted old entries).
+    #[must_use]
     pub fn chain_len(&self) -> usize {
-        self.chain.lock().expect("chain lock poisoned").len()
+        self.chain
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .len()
     }
 }
 

@@ -13,6 +13,7 @@ pub struct ToolCall {
 
 /// Security verdict for a tool call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum Verdict {
     Allow,
     Deny { reason: String, code: DenyCode },
@@ -20,10 +21,14 @@ pub enum Verdict {
 }
 
 impl Verdict {
+    #[inline]
+    #[must_use]
     pub fn is_allowed(&self) -> bool {
         matches!(self, Self::Allow | Self::Flag { .. })
     }
 
+    #[inline]
+    #[must_use]
     pub fn is_denied(&self) -> bool {
         matches!(self, Self::Deny { .. })
     }
@@ -31,6 +36,7 @@ impl Verdict {
 
 /// High-level verdict kind (for audit storage without carrying payload).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum VerdictKind {
     Allow,
     Deny,
@@ -38,6 +44,8 @@ pub enum VerdictKind {
 }
 
 impl Verdict {
+    #[inline]
+    #[must_use]
     pub fn kind(&self) -> VerdictKind {
         match self {
             Self::Allow => VerdictKind::Allow,
@@ -49,6 +57,7 @@ impl Verdict {
 
 /// Reason code for denial.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum DenyCode {
     Unauthorized,
     RateLimited,
@@ -60,6 +69,8 @@ pub enum DenyCode {
 
 impl DenyCode {
     /// Stable label for JSON-RPC error messages and audit details.
+    #[inline]
+    #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Unauthorized => "unauthorized",

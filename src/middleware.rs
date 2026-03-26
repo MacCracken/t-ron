@@ -24,6 +24,7 @@ pub struct SecurityGate {
 
 impl SecurityGate {
     /// Create a new security gate.
+    #[must_use]
     pub fn new(tron: TRon, dispatcher: Dispatcher) -> Self {
         Self {
             tron,
@@ -32,16 +33,19 @@ impl SecurityGate {
     }
 
     /// Access the inner dispatcher (e.g. for registering handlers).
+    #[must_use]
     pub fn dispatcher_mut(&mut self) -> &mut Dispatcher {
         &mut self.inner
     }
 
     /// Access the inner dispatcher immutably.
+    #[must_use]
     pub fn dispatcher(&self) -> &Dispatcher {
         &self.inner
     }
 
     /// Access the t-ron security monitor.
+    #[must_use]
     pub fn tron(&self) -> &TRon {
         &self.tron
     }

@@ -36,6 +36,7 @@ impl PatternAnalyzer {
     }
 
     /// Check for anomalous patterns. Returns description if anomaly detected.
+    #[must_use]
     pub fn check_anomaly(&self, agent_id: &str) -> Option<String> {
         let history = self.history.get(agent_id)?;
 

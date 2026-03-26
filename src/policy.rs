@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::RwLock;
 
+#[non_exhaustive]
 pub enum PolicyResult {
     Allow,
     Deny(String),
@@ -60,13 +61,22 @@ impl PolicyEngine {
     pub fn load_toml(&self, toml_str: &str) -> Result<(), TRonError> {
         let config: PolicyConfig =
             toml::from_str(toml_str).map_err(|e| TRonError::PolicyConfig(e.to_string()))?;
-        *self.config.write().expect("policy lock poisoned") = config;
+        let mut guard = self
+            .config
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *guard = config;
+        tracing::info!("policy reloaded");
         Ok(())
     }
 
     /// Check if an agent is allowed to call a tool.
+    #[must_use]
     pub fn check(&self, agent_id: &str, tool_name: &str) -> PolicyResult {
-        let config = self.config.read().expect("policy lock poisoned");
+        let config = self
+            .config
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
 
         let policy = match config.agent.get(agent_id) {
             Some(p) => p,
@@ -95,7 +105,10 @@ impl PolicyEngine {
 
     /// Grant an agent access to tools matching a pattern.
     pub fn grant(&self, agent_id: &str, pattern: &str) {
-        let mut config = self.config.write().expect("policy lock poisoned");
+        let mut config = self
+            .config
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let policy = config
             .agent
             .entry(agent_id.to_string())
@@ -108,7 +121,10 @@ impl PolicyEngine {
 
     /// Revoke an agent's access to tools matching a pattern.
     pub fn revoke(&self, agent_id: &str, pattern: &str) {
-        let mut config = self.config.write().expect("policy lock poisoned");
+        let mut config = self
+            .config
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let policy = config
             .agent
             .entry(agent_id.to_string())
@@ -121,6 +137,7 @@ impl PolicyEngine {
 }
 
 /// Simple glob matching: "tarang_*" matches "tarang_probe".
+#[inline]
 fn matches_glob(pattern: &str, name: &str) -> bool {
     if pattern == "*" {
         return true;

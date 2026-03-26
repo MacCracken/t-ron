@@ -42,11 +42,13 @@ impl TRonQuery {
     }
 
     /// Structured review/summary of the audit chain.
+    #[must_use]
     pub fn chain_review(&self) -> libro::ChainReview {
         self.audit.chain_review()
     }
 
     /// Number of entries in the libro chain.
+    #[must_use]
     pub fn chain_len(&self) -> usize {
         self.audit.chain_len()
     }

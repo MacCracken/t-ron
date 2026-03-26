@@ -26,14 +26,15 @@ static PATH_TRAVERSAL: LazyLock<Regex> =
 const MAX_SCAN_DEPTH: usize = 64;
 
 /// Scan a JSON value for injection patterns. Returns threat description if found.
-pub fn scan(params: &serde_json::Value) -> Option<String> {
+#[must_use]
+pub fn scan(params: &serde_json::Value) -> Option<&'static str> {
     let mut result = None;
     walk(params, &mut result, 0);
     result
 }
 
 /// Recursively walk JSON, scanning only string leaves.
-fn walk(value: &serde_json::Value, result: &mut Option<String>, depth: usize) {
+fn walk(value: &serde_json::Value, result: &mut Option<&'static str>, depth: usize) {
     if result.is_some() {
         return; // Short-circuit once a threat is found.
     }
@@ -58,18 +59,19 @@ fn walk(value: &serde_json::Value, result: &mut Option<String>, depth: usize) {
     }
 }
 
-fn scan_text(text: &str) -> Option<String> {
+#[inline]
+fn scan_text(text: &str) -> Option<&'static str> {
     if SQL_INJECTION.is_match(text) {
-        return Some("SQL injection pattern".to_string());
+        return Some("SQL injection pattern");
     }
     if SHELL_INJECTION.is_match(text) {
-        return Some("shell injection pattern".to_string());
+        return Some("shell injection pattern");
     }
     if TEMPLATE_INJECTION.is_match(text) {
-        return Some("template injection pattern".to_string());
+        return Some("template injection pattern");
     }
     if PATH_TRAVERSAL.is_match(text) {
-        return Some("path traversal pattern".to_string());
+        return Some("path traversal pattern");
     }
     None
 }
@@ -202,6 +204,28 @@ mod tests {
     fn detect_jinja2_self_access() {
         let params = serde_json::json!({"tpl": "{{self.__class__.__mro__}}"});
         assert!(scan(&params).unwrap().contains("template"));
+    }
+
+    #[test]
+    fn deep_nesting_aborts_at_limit() {
+        // Build 70-level deep JSON — exceeds MAX_SCAN_DEPTH (64)
+        let mut val = serde_json::json!("hello; rm -rf /");
+        for _ in 0..70 {
+            val = serde_json::json!({"nested": val});
+        }
+        // The injection is deeper than 64 levels, so scanner should NOT find it
+        assert!(scan(&val).is_none());
+    }
+
+    #[test]
+    fn deep_nesting_within_limit_detected() {
+        // Build 60-level deep JSON — within MAX_SCAN_DEPTH (64)
+        let mut val = serde_json::json!("hello; rm -rf /");
+        for _ in 0..60 {
+            val = serde_json::json!({"nested": val});
+        }
+        // The injection is within 64 levels, scanner should find it
+        assert!(scan(&val).is_some());
     }
 
     #[test]
