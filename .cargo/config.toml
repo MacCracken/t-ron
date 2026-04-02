@@ -1,0 +1,9 @@
+# Local development overrides.
+# Patches the crates.io "sigil" (unicode library) to the AGNOS sigil crate
+# for local builds. This file is excluded from publish via .gitignore.
+#
+# When AGNOS sigil is published to crates.io under a different name,
+# update Cargo.toml accordingly and remove this patch.
+
+[patch.crates-io]
+sigil = { git = "https://github.com/MacCracken/sigil.git", tag = "1.0.0" }
