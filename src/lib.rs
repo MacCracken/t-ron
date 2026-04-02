@@ -39,6 +39,10 @@ pub mod signal;
 #[cfg(feature = "signing")]
 pub mod signing;
 
+/// LLM-assisted prompt injection detection via hoosh.
+#[cfg(feature = "llm")]
+pub mod llm_scan;
+
 mod error;
 pub use error::TRonError;
 

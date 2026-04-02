@@ -18,6 +18,7 @@ default = []
 signal = ["tokio/signal"]
 signing = ["dep:sigil", "dep:ed25519-dalek"]
 export = ["dep:chacha20poly1305"]
+llm = ["dep:hoosh"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -35,6 +36,7 @@ libro = "0.25"
 sigil = { version = "1", path = "../sigil", optional = true }
 ed25519-dalek = { version = "2", features = ["rand_core"], optional = true }
 chacha20poly1305 = { version = "0.10", optional = true }
+hoosh = { version = "1.1", path = "../hoosh", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["async_tokio"] }
