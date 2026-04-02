@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 /// Severity classification for safety rules and violations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum SafetySeverity {
     Critical,
     High,
@@ -48,6 +49,7 @@ impl fmt::Display for SafetySeverity {
 
 /// How a safety policy is enforced when a rule is triggered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum SafetyEnforcement {
     /// Hard-block the action.
     Block,
@@ -63,6 +65,7 @@ pub enum SafetyEnforcement {
 
 /// The kind of constraint a safety rule expresses.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum SafetyRuleType {
     /// Cap a resource such as CPU, memory, disk, or network.
     ResourceLimit { resource: String, max_value: u64 },
@@ -129,6 +132,7 @@ pub struct SafetyPolicy {
 
 /// Category of action an agent is attempting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum ActionType {
     FileAccess,
     ProcessSpawn,
@@ -166,6 +170,7 @@ pub struct SafetyAction {
 
 /// Result of a safety check.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum SafetyVerdict {
     Allowed,
     Blocked { reason: String, rule_id: String },

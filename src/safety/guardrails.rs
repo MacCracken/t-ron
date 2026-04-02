@@ -8,6 +8,7 @@ use tracing::warn;
 
 /// State of a per-agent circuit breaker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub enum CircuitState {
     /// Normal operation — all actions allowed.
     Closed,
@@ -25,7 +26,6 @@ pub struct SafetyCircuitBreaker {
     pub threshold: usize,
     /// Cooldown before transitioning from Open to HalfOpen.
     pub cooldown_secs: u64,
-    failure_count: usize,
     last_failure: Option<Instant>,
     window_secs: u64,
     /// Timestamps of recent failures for sliding-window counting.
@@ -35,12 +35,12 @@ pub struct SafetyCircuitBreaker {
 impl SafetyCircuitBreaker {
     /// Create a breaker that opens after `threshold` violations within
     /// `window_secs` seconds, and cools down after `cooldown_secs`.
+    #[must_use]
     pub fn new(threshold: usize, window_secs: u64, cooldown_secs: u64) -> Self {
         Self {
             state: CircuitState::Closed,
             threshold,
             cooldown_secs,
-            failure_count: 0,
             last_failure: None,
             window_secs,
             failure_timestamps: Vec::new(),
@@ -52,7 +52,6 @@ impl SafetyCircuitBreaker {
         let now = Instant::now();
         self.failure_timestamps.push(now);
         self.last_failure = Some(now);
-        self.failure_count += 1;
 
         // Count failures within the window
         let cutoff = now - std::time::Duration::from_secs(self.window_secs);
@@ -78,13 +77,12 @@ impl SafetyCircuitBreaker {
     ///   or Open on the next violation via `record_violation`).
     pub fn check_allowed(&mut self) -> bool {
         // If Open and cooldown has elapsed, transition to HalfOpen first.
-        if self.state == CircuitState::Open {
-            if let Some(last) = self.last_failure {
-                if last.elapsed() >= std::time::Duration::from_secs(self.cooldown_secs) {
-                    info!("Circuit breaker transitioning to HalfOpen");
-                    self.state = CircuitState::HalfOpen;
-                }
-            }
+        if self.state == CircuitState::Open
+            && let Some(last) = self.last_failure
+            && last.elapsed() >= std::time::Duration::from_secs(self.cooldown_secs)
+        {
+            info!("Circuit breaker transitioning to HalfOpen");
+            self.state = CircuitState::HalfOpen;
         }
 
         match self.state {
@@ -95,7 +93,6 @@ impl SafetyCircuitBreaker {
                 info!("Circuit breaker test action allowed, transitioning to Closed");
                 self.state = CircuitState::Closed;
                 self.failure_timestamps.clear();
-                self.failure_count = 0;
                 true
             }
         }
@@ -105,7 +102,6 @@ impl SafetyCircuitBreaker {
     pub fn reset(&mut self) {
         info!("Circuit breaker force-reset to Closed");
         self.state = CircuitState::Closed;
-        self.failure_count = 0;
         self.failure_timestamps.clear();
         self.last_failure = None;
     }

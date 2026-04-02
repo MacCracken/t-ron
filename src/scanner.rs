@@ -229,6 +229,28 @@ mod tests {
     }
 
     #[test]
+    fn detect_encoded_double_traversal() {
+        // Double-encoded traversal should still be caught by case-insensitive %2e%2e
+        let params = serde_json::json!({"path": "%2E%2e/%2e%2E/sensitive"});
+        assert!(scan(&params).unwrap().contains("path traversal"));
+    }
+
+    #[test]
+    fn detect_sql_with_comments() {
+        // SQL injection with comment-based obfuscation
+        let params = serde_json::json!({"q": "1; DROP TABLE users"});
+        assert!(scan(&params).is_some());
+    }
+
+    #[test]
+    fn large_clean_payload_passes() {
+        // Ensure scanner handles large clean payloads without false positives
+        let big_text = "a".repeat(100_000);
+        let params = serde_json::json!({"data": big_text});
+        assert!(scan(&params).is_none());
+    }
+
+    #[test]
     fn short_circuit_on_first_threat() {
         // Both SQL and shell patterns present — should return whichever walks first
         let params = serde_json::json!({

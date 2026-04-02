@@ -13,7 +13,7 @@ pub mod types;
 // Re-export the full public API so existing consumers are unaffected.
 pub use guardrails::{CircuitState, SafetyCircuitBreaker};
 pub use injection::{InjectionResult, PromptInjectionDetector};
-pub use policy::{default_policies, SafetyEngine};
+pub use policy::{SafetyEngine, default_policies};
 pub use types::{
     ActionType, SafetyAction, SafetyEnforcement, SafetyPolicy, SafetyRule, SafetyRuleType,
     SafetySeverity, SafetyVerdict, SafetyViolation,

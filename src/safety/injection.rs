@@ -33,6 +33,7 @@ pub struct PromptInjectionDetector {
 
 impl PromptInjectionDetector {
     /// Build a detector with the default set of heuristics.
+    #[must_use]
     pub fn new() -> Self {
         let patterns: Vec<PatternMatcher> = vec![
             (
@@ -143,6 +144,7 @@ impl PromptInjectionDetector {
     }
 
     /// Check a string for prompt-injection patterns.
+    #[must_use]
     pub fn check_input(&self, input: &str) -> InjectionResult {
         // Normalize: strip zero-width/invisible characters before matching
         let normalized = Self::normalize_input(input);

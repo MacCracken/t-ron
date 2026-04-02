@@ -24,6 +24,7 @@ pub struct SafetyEngine {
 
 impl SafetyEngine {
     /// Create a new engine pre-loaded with the given policies.
+    #[must_use]
     pub fn new(policies: Vec<SafetyPolicy>) -> Self {
         info!(policy_count = policies.len(), "SafetyEngine initialised");
         Self {
@@ -53,11 +54,13 @@ impl SafetyEngine {
     }
 
     /// Look up a policy by ID.
+    #[must_use]
     pub fn get_policy(&self, policy_id: &str) -> Option<&SafetyPolicy> {
         self.policies.iter().find(|p| p.policy_id == policy_id)
     }
 
     /// Return all enabled policies.
+    #[must_use]
     pub fn active_policies(&self) -> Vec<&SafetyPolicy> {
         self.policies.iter().filter(|p| p.enabled).collect()
     }
@@ -67,20 +70,21 @@ impl SafetyEngine {
     /// Evaluate an action against all active policies. Policies are checked in
     /// descending priority order; the first non-Allowed verdict wins.
     pub fn check_action(&mut self, agent_id: &str, action: &SafetyAction) -> SafetyVerdict {
-        // Clone the policy list so we don't hold an immutable borrow on self
-        // while mutating rate_buckets inside evaluate_rule.
-        let mut sorted: Vec<SafetyPolicy> = self
+        // Sort indices by descending priority to avoid cloning the policy Vec.
+        let mut indices: Vec<usize> = self
             .policies
             .iter()
-            .filter(|p| p.enabled)
-            .cloned()
+            .enumerate()
+            .filter(|(_, p)| p.enabled)
+            .map(|(i, _)| i)
             .collect();
-        sorted.sort_by(|a, b| b.priority.cmp(&a.priority));
+        indices.sort_by(|a, b| self.policies[*b].priority.cmp(&self.policies[*a].priority));
 
         // Collect warnings separately so they don't shadow blocks.
         let mut warning: Option<SafetyVerdict> = None;
 
-        for policy in &sorted {
+        for idx in &indices {
+            let policy = &self.policies[*idx];
             for rule in &policy.rules {
                 if let Some(verdict) = evaluate_rule(agent_id, action, rule, &mut self.rate_buckets)
                 {
@@ -206,6 +210,7 @@ impl SafetyEngine {
     }
 
     /// All violations for a given agent.
+    #[must_use]
     pub fn violations_for_agent(&self, agent_id: &str) -> Vec<SafetyViolation> {
         self.violations
             .iter()
@@ -217,6 +222,7 @@ impl SafetyEngine {
     /// Safety score for an agent: 1.0 (clean) to 0.0 (dangerous). Each
     /// violation subtracts a severity-weighted penalty. The score is clamped
     /// to [0.0, 1.0].
+    #[must_use]
     pub fn agent_safety_score(&self, agent_id: &str) -> f64 {
         let penalty: f64 = self
             .violations_for_agent(agent_id)
@@ -336,18 +342,17 @@ pub(super) fn evaluate_rule(
             resource,
             max_value,
         } => {
-            if let Some(val_str) = action.parameters.get(resource) {
-                if let Ok(val) = val_str.parse::<u64>() {
-                    if val > *max_value {
-                        return Some(SafetyVerdict::Blocked {
-                            reason: format!(
-                                "Resource {} exceeds limit: {} > {}",
-                                resource, val, max_value
-                            ),
-                            rule_id: rule.rule_id.clone(),
-                        });
-                    }
-                }
+            if let Some(val_str) = action.parameters.get(resource)
+                && let Ok(val) = val_str.parse::<u64>()
+                && val > *max_value
+            {
+                return Some(SafetyVerdict::Blocked {
+                    reason: format!(
+                        "Resource {} exceeds limit: {} > {}",
+                        resource, val, max_value
+                    ),
+                    rule_id: rule.rule_id.clone(),
+                });
             }
         }
 
@@ -377,6 +382,7 @@ pub(super) fn evaluate_rule(
 // ---------------------------------------------------------------------------
 
 /// Build a sensible set of default safety policies for AGNOS.
+#[must_use]
 pub fn default_policies() -> Vec<SafetyPolicy> {
     use super::types::{SafetyEnforcement, SafetyRule, SafetyRuleType, SafetySeverity};
 
