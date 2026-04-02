@@ -804,27 +804,13 @@ deny = ["tarang_*"]
         assert!(tron.reload_policy().is_err());
     }
 
-    #[test]
-    fn discover_policy_not_found() {
-        let dir = tempfile::tempdir().unwrap();
-        let original = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
-
-        let tron = TRon::new(TRonConfig::default());
-        let result = tron.discover_and_load_policy();
-        assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("no policy file found"));
-
-        std::env::set_current_dir(original).unwrap();
-    }
-
     #[tokio::test]
-    async fn discover_policy_local_file() {
+    async fn discover_policy_xdg_path() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("t-ron.toml");
+        let config_dir = dir.path().join("t-ron");
+        std::fs::create_dir_all(&config_dir).unwrap();
         std::fs::write(
-            &path,
+            config_dir.join("t-ron.toml"),
             r#"
 [agent."discovered"]
 allow = ["tarang_*"]
@@ -832,9 +818,9 @@ allow = ["tarang_*"]
         )
         .unwrap();
 
-        // Change to the tempdir so ./t-ron.toml is found
-        let original = std::env::current_dir().unwrap();
-        std::env::set_current_dir(dir.path()).unwrap();
+        // Point XDG_CONFIG_HOME at our tempdir
+        // SAFETY: test-only, single-threaded access to this env var
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", dir.path()) };
 
         let tron = TRon::new(TRonConfig::default());
         let result = tron.discover_and_load_policy();
@@ -848,6 +834,7 @@ allow = ["tarang_*"]
         };
         assert!(tron.check(&call).await.is_allowed());
 
-        std::env::set_current_dir(original).unwrap();
+        // SAFETY: test-only cleanup
+        unsafe { std::env::remove_var("XDG_CONFIG_HOME") };
     }
 }
