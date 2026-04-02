@@ -16,6 +16,7 @@
 //! ```
 
 pub mod audit;
+pub mod correlation;
 pub mod gate;
 pub mod middleware;
 pub mod pattern;
@@ -30,6 +31,14 @@ pub mod tools;
 /// Absorbed from agent-runtime's safety module.
 pub mod safety;
 
+/// SIGHUP-based policy hot-reload (Unix only).
+#[cfg(all(unix, feature = "signal"))]
+pub mod signal;
+
+/// Policy signature verification using sigil.
+#[cfg(feature = "signing")]
+pub mod signing;
+
 mod error;
 pub use error::TRonError;
 
@@ -41,6 +50,7 @@ pub struct TRon {
     policy: Arc<policy::PolicyEngine>,
     rate_limiter: Arc<rate::RateLimiter>,
     pattern: Arc<pattern::PatternAnalyzer>,
+    correlation: Arc<correlation::CorrelationDetector>,
     audit: Arc<audit::AuditLogger>,
     config: TRonConfig,
     /// Stored policy file path for reload support.
@@ -60,6 +70,8 @@ pub struct TRonConfig {
     pub scan_payloads: bool,
     /// Enable pattern analysis.
     pub analyze_patterns: bool,
+    /// Enable cross-agent correlation detection.
+    pub enable_correlation: bool,
 }
 
 /// Default action for unmatched requests.
@@ -79,6 +91,7 @@ impl Default for TRonConfig {
             max_param_size_bytes: 65536,
             scan_payloads: true,
             analyze_patterns: true,
+            enable_correlation: false,
         }
     }
 }
@@ -91,6 +104,7 @@ impl TRon {
             policy: Arc::new(policy::PolicyEngine::new()),
             rate_limiter: Arc::new(rate::RateLimiter::new()),
             pattern: Arc::new(pattern::PatternAnalyzer::new()),
+            correlation: Arc::new(correlation::CorrelationDetector::default()),
             audit: Arc::new(audit::AuditLogger::new()),
             config,
             policy_path: std::sync::Mutex::new(None),
@@ -186,6 +200,19 @@ impl TRon {
             }
         }
 
+        // 6. Cross-agent correlation
+        if self.config.enable_correlation
+            && let Some(alert) =
+                self.correlation
+                    .record_and_check(&call.agent_id, &call.tool_name, call.timestamp)
+        {
+            let verdict = gate::Verdict::Flag {
+                reason: format!("correlation alert: {alert}"),
+            };
+            self.audit.log(call, &verdict).await;
+            return verdict;
+        }
+
         // All checks passed
         let verdict = gate::Verdict::Allow;
         self.audit.log(call, &verdict).await;
@@ -243,6 +270,71 @@ impl TRon {
                 self.rate_limiter.set_rate(agent_id, rl.calls_per_minute);
             }
         }
+    }
+
+    /// Verify a policy file's signature and load it.
+    ///
+    /// Uses the provided [`signing::PolicyVerifier`] to check the Ed25519
+    /// signature before loading the TOML content. The policy file path is
+    /// stored for subsequent `reload_policy()` calls.
+    #[cfg(feature = "signing")]
+    pub fn verify_and_load_policy(
+        &self,
+        path: impl Into<PathBuf>,
+        verifier: &signing::PolicyVerifier,
+    ) -> Result<(), TRonError> {
+        let path = path.into();
+        let content = verifier.verify_and_read(&path)?;
+        self.load_policy(&content)?;
+        *self.policy_path.lock().unwrap_or_else(|p| p.into_inner()) = Some(path);
+        Ok(())
+    }
+
+    /// Discover and load a policy file from standard paths.
+    ///
+    /// Searches in order:
+    /// 1. `/etc/agnos/t-ron.toml`
+    /// 2. `$XDG_CONFIG_HOME/t-ron/t-ron.toml` (or `~/.config/t-ron/t-ron.toml`)
+    /// 3. `./t-ron.toml`
+    ///
+    /// Returns the path that was loaded on success.
+    pub fn discover_and_load_policy(&self) -> Result<PathBuf, TRonError> {
+        let mut tried = Vec::new();
+
+        // 1. System path
+        #[cfg(unix)]
+        {
+            let sys = PathBuf::from("/etc/agnos/t-ron.toml");
+            if sys.is_file() {
+                return self.load_policy_file(&sys).map(|()| sys);
+            }
+            tried.push(sys);
+        }
+
+        // 2. XDG / user config path
+        let xdg = std::env::var("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|_| std::env::var("HOME").map(|h| PathBuf::from(h).join(".config")));
+        if let Ok(config_dir) = xdg {
+            let user = config_dir.join("t-ron").join("t-ron.toml");
+            if user.is_file() {
+                return self.load_policy_file(&user).map(|()| user);
+            }
+            tried.push(user);
+        }
+
+        // 3. Current directory
+        let local = PathBuf::from("t-ron.toml");
+        if local.is_file() {
+            return self.load_policy_file(&local).map(|()| local);
+        }
+        tried.push(local);
+
+        let paths: Vec<String> = tried.iter().map(|p| p.display().to_string()).collect();
+        Err(TRonError::Policy(format!(
+            "no policy file found in standard paths: {}",
+            paths.join(", ")
+        )))
     }
 
     /// Get the query API (for T.Ron personality in SecureYeoman).
@@ -571,6 +663,7 @@ deny = ["tarang_delete"]
             default_unknown_tool: DefaultAction::Allow,
             scan_payloads: false,
             analyze_patterns: false,
+            enable_correlation: false,
         };
         let tron = TRon::new(config);
         let call = gate::ToolCall {
@@ -705,5 +798,52 @@ deny = ["tarang_*"]
     fn reload_without_file_errors() {
         let tron = TRon::new(TRonConfig::default());
         assert!(tron.reload_policy().is_err());
+    }
+
+    #[test]
+    fn discover_policy_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        let tron = TRon::new(TRonConfig::default());
+        let result = tron.discover_and_load_policy();
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("no policy file found"));
+
+        std::env::set_current_dir(original).unwrap();
+    }
+
+    #[tokio::test]
+    async fn discover_policy_local_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t-ron.toml");
+        std::fs::write(
+            &path,
+            r#"
+[agent."discovered"]
+allow = ["tarang_*"]
+"#,
+        )
+        .unwrap();
+
+        // Change to the tempdir so ./t-ron.toml is found
+        let original = std::env::current_dir().unwrap();
+        std::env::set_current_dir(dir.path()).unwrap();
+
+        let tron = TRon::new(TRonConfig::default());
+        let result = tron.discover_and_load_policy();
+        assert!(result.is_ok());
+
+        let call = gate::ToolCall {
+            agent_id: "discovered".to_string(),
+            tool_name: "tarang_probe".to_string(),
+            params: serde_json::json!({}),
+            timestamp: chrono::Utc::now(),
+        };
+        assert!(tron.check(&call).await.is_allowed());
+
+        std::env::set_current_dir(original).unwrap();
     }
 }

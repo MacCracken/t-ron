@@ -160,6 +160,63 @@ impl AuditLogger {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .len()
     }
+
+    /// Export the libro chain entries as JSON bytes.
+    pub fn export_json(&self) -> Result<Vec<u8>, crate::TRonError> {
+        let chain = self
+            .chain
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        serde_json::to_vec(chain.entries())
+            .map_err(|e| crate::TRonError::Export(format!("JSON serialization failed: {e}")))
+    }
+
+    /// Export the libro chain as encrypted JSON using ChaCha20-Poly1305 AEAD.
+    ///
+    /// The key must be exactly 32 bytes. Returns `nonce (12 bytes) || ciphertext`.
+    #[cfg(feature = "export")]
+    pub fn export_encrypted(&self, key: &[u8; 32]) -> Result<Vec<u8>, crate::TRonError> {
+        use chacha20poly1305::{
+            ChaCha20Poly1305, KeyInit,
+            aead::{Aead, AeadCore, OsRng},
+        };
+
+        let json = self.export_json()?;
+        let cipher = ChaCha20Poly1305::new(key.into());
+        let nonce = ChaCha20Poly1305::generate_nonce(&mut OsRng);
+        let ciphertext = cipher
+            .encrypt(&nonce, json.as_ref())
+            .map_err(|e| crate::TRonError::Export(format!("encryption failed: {e}")))?;
+
+        let mut output = Vec::with_capacity(12 + ciphertext.len());
+        output.extend_from_slice(&nonce);
+        output.extend_from_slice(&ciphertext);
+
+        tracing::info!(
+            entries = self.chain_len(),
+            encrypted_bytes = output.len(),
+            "audit chain exported (encrypted)"
+        );
+        Ok(output)
+    }
+
+    /// Decrypt an encrypted audit export. Returns the raw JSON bytes.
+    #[cfg(feature = "export")]
+    pub fn decrypt_export(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, crate::TRonError> {
+        use chacha20poly1305::{ChaCha20Poly1305, KeyInit, Nonce, aead::Aead};
+
+        if data.len() < 12 {
+            return Err(crate::TRonError::Export(
+                "encrypted data too short (need at least 12 bytes for nonce)".into(),
+            ));
+        }
+        let (nonce_bytes, ciphertext) = data.split_at(12);
+        let nonce = Nonce::from_slice(nonce_bytes);
+        let cipher = ChaCha20Poly1305::new(key.into());
+        cipher
+            .decrypt(nonce, ciphertext)
+            .map_err(|e| crate::TRonError::Export(format!("decryption failed: {e}")))
+    }
 }
 
 #[cfg(test)]
@@ -420,5 +477,81 @@ mod tests {
 
         let review = logger.chain_review();
         assert_eq!(review.entry_count, 1);
+    }
+
+    #[tokio::test]
+    async fn export_json_empty_chain() {
+        let logger = AuditLogger::new();
+        let json = logger.export_json().unwrap();
+        let parsed: Vec<serde_json::Value> = serde_json::from_slice(&json).unwrap();
+        assert!(parsed.is_empty());
+    }
+
+    #[tokio::test]
+    async fn export_json_with_entries() {
+        let logger = AuditLogger::new();
+        let call = ToolCall {
+            agent_id: "agent-1".to_string(),
+            tool_name: "tool".to_string(),
+            params: serde_json::json!({}),
+            timestamp: chrono::Utc::now(),
+        };
+        for _ in 0..5 {
+            logger.log(&call, &Verdict::Allow).await;
+        }
+        let json = logger.export_json().unwrap();
+        let parsed: Vec<serde_json::Value> = serde_json::from_slice(&json).unwrap();
+        assert_eq!(parsed.len(), 5);
+    }
+
+    #[cfg(feature = "export")]
+    #[tokio::test]
+    async fn export_encrypted_roundtrip() {
+        let logger = AuditLogger::new();
+        let call = ToolCall {
+            agent_id: "agent-1".to_string(),
+            tool_name: "tool".to_string(),
+            params: serde_json::json!({}),
+            timestamp: chrono::Utc::now(),
+        };
+        logger.log(&call, &Verdict::Allow).await;
+        logger
+            .log(
+                &call,
+                &Verdict::Deny {
+                    reason: "test".into(),
+                    code: DenyCode::Unauthorized,
+                },
+            )
+            .await;
+
+        let key = [42u8; 32];
+        let encrypted = logger.export_encrypted(&key).unwrap();
+        assert!(encrypted.len() > 12); // nonce + ciphertext
+
+        let decrypted = AuditLogger::decrypt_export(&key, &encrypted).unwrap();
+        let original_json = logger.export_json().unwrap();
+        assert_eq!(decrypted, original_json);
+    }
+
+    #[cfg(feature = "export")]
+    #[test]
+    fn decrypt_wrong_key_fails() {
+        // Manually construct some data that was "encrypted" with key A
+        // then try to decrypt with key B
+        let logger = AuditLogger::new();
+        let key_a = [1u8; 32];
+        let key_b = [2u8; 32];
+
+        let encrypted = logger.export_encrypted(&key_a).unwrap();
+        assert!(AuditLogger::decrypt_export(&key_b, &encrypted).is_err());
+    }
+
+    #[cfg(feature = "export")]
+    #[test]
+    fn decrypt_truncated_data_fails() {
+        let key = [0u8; 32];
+        // Less than 12 bytes (nonce size)
+        assert!(AuditLogger::decrypt_export(&key, &[0u8; 5]).is_err());
     }
 }

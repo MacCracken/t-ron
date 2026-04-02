@@ -1,16 +1,25 @@
 //! Pattern analyzer — anomaly detection on tool call sequences.
 
 use crate::gate::ToolCall;
+use chrono::Timelike;
 use dashmap::DashMap;
 use std::collections::VecDeque;
 
 /// Maximum call history retained per agent.
 const MAX_HISTORY: usize = 100;
 
+/// Minimum total calls before time-of-day anomaly detection activates.
+const MIN_HISTORY_FOR_TIME_ANOMALY: u32 = 50;
+
+/// Minimum fraction of total calls for an hour to be considered "active".
+const ACTIVE_HOUR_THRESHOLD: f64 = 0.02;
+
 /// Tracks call patterns per agent for anomaly detection.
 pub struct PatternAnalyzer {
     /// agent_id -> recent tool calls (ring buffer of last N)
     history: DashMap<String, VecDeque<String>>,
+    /// agent_id -> call count per hour-of-day (0..23)
+    hour_histograms: DashMap<String, [u32; 24]>,
 }
 
 impl Default for PatternAnalyzer {
@@ -23,6 +32,7 @@ impl PatternAnalyzer {
     pub fn new() -> Self {
         Self {
             history: DashMap::new(),
+            hour_histograms: DashMap::new(),
         }
     }
 
@@ -33,6 +43,14 @@ impl PatternAnalyzer {
         if entry.len() > MAX_HISTORY {
             entry.pop_front();
         }
+
+        // Update hour-of-day histogram
+        let hour = call.timestamp.hour() as usize;
+        let mut hist = self
+            .hour_histograms
+            .entry(call.agent_id.clone())
+            .or_insert([0u32; 24]);
+        hist[hour] = hist[hour].saturating_add(1);
     }
 
     /// Check for anomalous patterns. Returns description if anomaly detected.
@@ -62,6 +80,42 @@ impl PatternAnalyzer {
                     "privilege escalation: sensitive tool burst after benign calls".to_string(),
                 );
             }
+        }
+
+        // Check for off-hours activity
+        let current_hour = chrono::Utc::now().hour();
+        if let Some(anomaly) = self.check_time_anomaly(agent_id, current_hour) {
+            return Some(anomaly);
+        }
+
+        None
+    }
+
+    /// Check if a call at `current_hour` is outside the agent's established
+    /// activity pattern. Returns `None` until the agent has enough history.
+    #[must_use]
+    fn check_time_anomaly(&self, agent_id: &str, current_hour: u32) -> Option<String> {
+        let hist = self.hour_histograms.get(agent_id)?;
+        let total: u32 = hist.iter().sum();
+        if total < MIN_HISTORY_FOR_TIME_ANOMALY {
+            return None;
+        }
+
+        // Build the "active window": hours where calls >= ACTIVE_HOUR_THRESHOLD of total
+        let threshold = (total as f64 * ACTIVE_HOUR_THRESHOLD) as u32;
+        let active_hours: u32 = hist.iter().filter(|&&c| c >= threshold.max(1)).count() as u32;
+
+        // If agent is active in all 24 hours, no off-hours to detect
+        if active_hours >= 24 {
+            return None;
+        }
+
+        let hour_count = hist[current_hour as usize];
+        if hour_count < threshold.max(1) {
+            return Some(format!(
+                "off-hours activity: hour {} is outside established pattern ({} of {} active hours)",
+                current_hour, active_hours, 24
+            ));
         }
 
         None
@@ -198,6 +252,104 @@ mod tests {
         }
         let history = analyzer.history.get("agent-1").unwrap();
         assert_eq!(history.len(), MAX_HISTORY);
+    }
+
+    #[tokio::test]
+    async fn no_time_anomaly_new_agent() {
+        let analyzer = PatternAnalyzer::new();
+        // Only 10 calls — below MIN_HISTORY_FOR_TIME_ANOMALY threshold
+        for _ in 0..10 {
+            let call = ToolCall {
+                agent_id: "new-agent".to_string(),
+                tool_name: "tarang_probe".to_string(),
+                params: serde_json::json!({}),
+                timestamp: chrono::Utc::now(),
+            };
+            analyzer.record(&call);
+        }
+        // Should not flag — insufficient history
+        assert!(analyzer.check_time_anomaly("new-agent", 3).is_none());
+    }
+
+    #[tokio::test]
+    async fn no_time_anomaly_within_pattern() {
+        let analyzer = PatternAnalyzer::new();
+        // 60 calls all at hour 10
+        for _ in 0..60 {
+            let call = ToolCall {
+                agent_id: "agent-1".to_string(),
+                tool_name: "tarang_probe".to_string(),
+                params: serde_json::json!({}),
+                timestamp: chrono::TimeZone::with_ymd_and_hms(&chrono::Utc, 2026, 4, 1, 10, 0, 0)
+                    .unwrap(),
+            };
+            analyzer.record(&call);
+        }
+        // Checking at hour 10 — within pattern
+        assert!(analyzer.check_time_anomaly("agent-1", 10).is_none());
+    }
+
+    #[tokio::test]
+    async fn detect_time_anomaly_off_hours() {
+        let analyzer = PatternAnalyzer::new();
+        // 60 calls all during business hours (9-17)
+        for h in 9..17 {
+            for _ in 0..8 {
+                let call = ToolCall {
+                    agent_id: "agent-1".to_string(),
+                    tool_name: "tarang_probe".to_string(),
+                    params: serde_json::json!({}),
+                    timestamp: chrono::TimeZone::with_ymd_and_hms(
+                        &chrono::Utc,
+                        2026,
+                        4,
+                        1,
+                        h,
+                        0,
+                        0,
+                    )
+                    .unwrap(),
+                };
+                analyzer.record(&call);
+            }
+        }
+        // Checking at hour 3 — outside pattern
+        let anomaly = analyzer.check_time_anomaly("agent-1", 3);
+        assert!(anomaly.is_some());
+        assert!(anomaly.unwrap().contains("off-hours"));
+    }
+
+    #[tokio::test]
+    async fn time_anomaly_uniform_no_flag() {
+        let analyzer = PatternAnalyzer::new();
+        // 72 calls evenly across all 24 hours (3 per hour)
+        for h in 0..24 {
+            for _ in 0..3 {
+                let call = ToolCall {
+                    agent_id: "agent-1".to_string(),
+                    tool_name: "tarang_probe".to_string(),
+                    params: serde_json::json!({}),
+                    timestamp: chrono::TimeZone::with_ymd_and_hms(
+                        &chrono::Utc,
+                        2026,
+                        4,
+                        1,
+                        h,
+                        0,
+                        0,
+                    )
+                    .unwrap(),
+                };
+                analyzer.record(&call);
+            }
+        }
+        // Uniform distribution — no hour should flag
+        for h in 0..24 {
+            assert!(
+                analyzer.check_time_anomaly("agent-1", h).is_none(),
+                "hour {h} should not flag"
+            );
+        }
     }
 
     #[tokio::test]

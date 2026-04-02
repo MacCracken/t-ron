@@ -15,6 +15,12 @@ pub enum TRonError {
     #[error("scanner error: {0}")]
     Scanner(String),
 
+    #[error("signature error: {0}")]
+    Signature(String),
+
+    #[error("export error: {0}")]
+    Export(String),
+
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }

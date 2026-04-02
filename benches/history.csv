@@ -19,3 +19,13 @@ date,commit,bench_name,time_ns
 2026-04-02T04:42:10Z,766c7fa,audit_log,1626
 2026-04-02T04:42:10Z,766c7fa,risk_score,3257
 2026-04-02T04:42:10Z,766c7fa,pipeline_large_params,13828
+2026-04-02T05:17:08Z,bff8398,pipeline_allow,4558
+2026-04-02T05:17:08Z,bff8398,pipeline_deny_injection,3671
+2026-04-02T05:17:08Z,bff8398,scanner_clean,552
+2026-04-02T05:17:08Z,bff8398,scanner_injection,66
+2026-04-02T05:17:08Z,bff8398,policy_check_allow,42
+2026-04-02T05:17:08Z,bff8398,rate_limiter_check,119
+2026-04-02T05:17:08Z,bff8398,pattern_record,140
+2026-04-02T05:17:08Z,bff8398,audit_log,1908
+2026-04-02T05:17:08Z,bff8398,risk_score,3762
+2026-04-02T05:17:08Z,bff8398,pipeline_large_params,14942

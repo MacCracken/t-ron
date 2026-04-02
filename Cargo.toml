@@ -13,6 +13,12 @@ keywords = ["mcp", "security", "audit", "firewall", "agent"]
 categories = ["authentication", "web-programming"]
 exclude = [".claude/", ".github/", "docs/", "scripts/"]
 
+[features]
+default = []
+signal = ["tokio/signal"]
+signing = ["dep:sigil", "dep:ed25519-dalek"]
+export = ["dep:chacha20poly1305"]
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -26,6 +32,9 @@ dashmap = "6"
 regex = "1"
 bote = "0.90"
 libro = "0.25"
+sigil = { version = "1", path = "../sigil", optional = true }
+ed25519-dalek = { version = "2", features = ["rand_core"], optional = true }
+chacha20poly1305 = { version = "0.10", optional = true }
 
 [dev-dependencies]
 criterion = { version = "0.8", features = ["async_tokio"] }
