@@ -61,9 +61,7 @@ dependencies = [
 
 [[package]]
 name = "bote"
-version = "0.22.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "119a5d314ce7fdd501aa133eb00e5e9917a89922180162626b3031bb1363c2e3"
+version = "0.50.0"
 dependencies = [
  "serde",
  "serde_json",

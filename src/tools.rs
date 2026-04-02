@@ -15,38 +15,29 @@ use std::sync::Arc;
 /// Tool definitions for t-ron's MCP tools.
 pub fn tool_defs() -> Vec<ToolDef> {
     vec![
-        ToolDef {
-            name: "tron_status".into(),
-            description: "Get overall security status: total events, denials, and system health."
-                .into(),
-            input_schema: ToolSchema {
-                schema_type: "object".into(),
-                properties: HashMap::new(),
-                required: vec![],
-            },
-        },
-        ToolDef {
-            name: "tron_risk".into(),
-            description:
-                "Get risk score for an agent (0.0 = trusted, 1.0 = hostile). Requires agent_id."
-                    .into(),
-            input_schema: ToolSchema {
-                schema_type: "object".into(),
-                properties: HashMap::from([(
+        ToolDef::new(
+            "tron_status",
+            "Get overall security status: total events, denials, and system health.",
+            ToolSchema::new("object", HashMap::new(), vec![]),
+        ),
+        ToolDef::new(
+            "tron_risk",
+            "Get risk score for an agent (0.0 = trusted, 1.0 = hostile). Requires agent_id.",
+            ToolSchema::new(
+                "object",
+                HashMap::from([(
                     "agent_id".into(),
                     serde_json::json!({"type": "string", "description": "Agent to score"}),
                 )]),
-                required: vec!["agent_id".into()],
-            },
-        },
-        ToolDef {
-            name: "tron_audit".into(),
-            description:
-                "Get recent security events. Optional agent_id filter and limit (default 20)."
-                    .into(),
-            input_schema: ToolSchema {
-                schema_type: "object".into(),
-                properties: HashMap::from([
+                vec!["agent_id".into()],
+            ),
+        ),
+        ToolDef::new(
+            "tron_audit",
+            "Get recent security events. Optional agent_id filter and limit (default 20).",
+            ToolSchema::new(
+                "object",
+                HashMap::from([
                     (
                         "agent_id".into(),
                         serde_json::json!({"type": "string", "description": "Filter by agent"}),
@@ -56,21 +47,21 @@ pub fn tool_defs() -> Vec<ToolDef> {
                         serde_json::json!({"type": "integer", "description": "Max events to return", "default": 20}),
                     ),
                 ]),
-                required: vec![],
-            },
-        },
-        ToolDef {
-            name: "tron_policy".into(),
-            description: "Load or reload policy from a TOML string.".into(),
-            input_schema: ToolSchema {
-                schema_type: "object".into(),
-                properties: HashMap::from([(
+                vec![],
+            ),
+        ),
+        ToolDef::new(
+            "tron_policy",
+            "Load or reload policy from a TOML string.",
+            ToolSchema::new(
+                "object",
+                HashMap::from([(
                     "toml".into(),
                     serde_json::json!({"type": "string", "description": "Policy TOML content"}),
                 )]),
-                required: vec!["toml".into()],
-            },
-        },
+                vec!["toml".into()],
+            ),
+        ),
     ]
 }
 

@@ -26,6 +26,10 @@ pub mod scanner;
 pub mod score;
 pub mod tools;
 
+/// AI safety mechanisms — policy engine, injection detection, circuit breaker.
+/// Absorbed from agent-runtime's safety module.
+pub mod safety;
+
 mod error;
 pub use error::TRonError;
 

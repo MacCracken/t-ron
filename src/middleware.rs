@@ -173,15 +173,11 @@ mod tests {
     fn make_gate(config: TRonConfig) -> SecurityGate {
         let tron = TRon::new(config);
         let mut reg = ToolRegistry::new();
-        reg.register(ToolDef {
-            name: "echo".into(),
-            description: "Echo input".into(),
-            input_schema: ToolSchema {
-                schema_type: "object".into(),
-                properties: HashMap::new(),
-                required: vec![],
-            },
-        });
+        reg.register(ToolDef::new(
+            "echo",
+            "Echo input",
+            ToolSchema::new("object", HashMap::new(), vec![]),
+        ));
         let mut dispatcher = Dispatcher::new(reg);
         dispatcher.handle(
             "echo",
