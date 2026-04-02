@@ -22,17 +22,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ai-hwaccel"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6cd3d3539f780343ed071981ff2c7341466202a5f46831efa58e3a628714bc23"
-dependencies = [
- "serde",
- "serde_json",
- "tracing",
-]
-
-[[package]]
 name = "alloca"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -971,8 +960,9 @@ dependencies = [
 [[package]]
 name = "hoosh"
 version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "89cda9f9b325c30465bd2ce6f47ecccbdd23cf8b8ddfee0a33480384800f0b0e"
 dependencies = [
- "ai-hwaccel",
  "anyhow",
  "arc-swap",
  "async-stream",
@@ -2232,6 +2222,7 @@ checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 [[package]]
 name = "sigil"
 version = "1.0.0"
+source = "git+https://github.com/MacCracken/sigil.git?tag=1.0.0#613a4c1e9865df0f3aa06d3a5f065baa96c7f623"
 dependencies = [
  "chrono",
  "ed25519-dalek",
@@ -2345,7 +2336,7 @@ dependencies = [
 
 [[package]]
 name = "t-ron"
-version = "0.26.3"
+version = "0.90.0"
 dependencies = [
  "bote",
  "chacha20poly1305",
