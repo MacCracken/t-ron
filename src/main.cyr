@@ -13,9 +13,13 @@ include "lib/io.cyr"
 include "lib/args.cyr"
 include "lib/tagged.cyr"
 include "lib/assert.cyr"
+include "lib/fnptr.cyr"
+include "lib/hashmap.cyr"
+include "lib/regex.cyr"
 
 include "src/error.cyr"
 include "src/gate.cyr"
+include "src/policy.cyr"
 
 fn main() {
     alloc_init();

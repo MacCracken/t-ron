@@ -9,9 +9,13 @@ include "lib/syscalls.cyr"
 include "lib/io.cyr"
 include "lib/tagged.cyr"
 include "lib/assert.cyr"
+include "lib/fnptr.cyr"
+include "lib/hashmap.cyr"
+include "lib/regex.cyr"
 
 include "src/error.cyr"
 include "src/gate.cyr"
+include "src/policy.cyr"
 
 fn main() {
     alloc_init();
@@ -75,6 +79,68 @@ fn main() {
     assert_eq(streq(verdict_kind_as_str(VK_ALLOW), "allow"), 1, "vk allow");
     assert_eq(streq(verdict_kind_as_str(VK_DENY),  "deny"),  1, "vk deny");
     assert_eq(streq(verdict_kind_as_str(VK_FLAG),  "flag"),  1, "vk flag");
+
+    test_group("policy grant and check");
+    var eng = policy_engine_new();
+    policy_grant(eng, "agent-1", "tarang_*");
+    var k1, r1 = policy_check(eng, "agent-1", "tarang_probe");
+    assert_eq(k1, PR_ALLOW, "allow tarang_probe");
+    var k2, r2 = policy_check(eng, "agent-1", "rasa_edit");
+    assert_eq(k2, PR_UNKNOWN_TOOL, "unknown tool");
+    var k3, r3 = policy_check(eng, "nobody", "anything");
+    assert_eq(k3, PR_UNKNOWN_AGENT, "unknown agent");
+
+    test_group("policy deny wins over allow");
+    policy_grant(eng, "agent-2", "tarang_*");
+    policy_revoke(eng, "agent-2", "tarang_delete");
+    var k4, r4 = policy_check(eng, "agent-2", "tarang_probe");
+    assert_eq(k4, PR_ALLOW, "allowed probe");
+    var k5, r5 = policy_check(eng, "agent-2", "tarang_delete");
+    assert_eq(k5, PR_DENY, "deny wins");
+
+    test_group("policy glob star-all");
+    policy_grant(eng, "admin", "*");
+    var k6, r6 = policy_check(eng, "admin", "aegis_scan");
+    assert_eq(k6, PR_ALLOW, "admin allows aegis_scan");
+    var k7, r7 = policy_check(eng, "admin", "anything_else");
+    assert_eq(k7, PR_ALLOW, "admin allows anything_else");
+
+    test_group("policy TOML loader");
+    var eng2 = policy_engine_new();
+    var toml1 = "[agent.\"web\"]\nallow = [\"tarang_*\", \"rasa_*\"]\ndeny = [\"aegis_*\"]\n";
+    policy_load_toml(eng2, toml1);
+    var k8, r8 = policy_check(eng2, "web", "tarang_probe");
+    assert_eq(k8, PR_ALLOW, "toml allow tarang");
+    var k9, r9 = policy_check(eng2, "web", "rasa_edit");
+    assert_eq(k9, PR_ALLOW, "toml allow rasa");
+    var k10, r10 = policy_check(eng2, "web", "aegis_scan");
+    assert_eq(k10, PR_DENY, "toml deny aegis");
+    var k11, r11 = policy_check(eng2, "web", "other_tool");
+    assert_eq(k11, PR_UNKNOWN_TOOL, "toml unknown tool");
+
+    test_group("policy TOML rate limit");
+    var eng3 = policy_engine_new();
+    var toml2 = "[agent.\"limited\"]\nallow = [\"*\"]\n[agent.\"limited\".rate_limit]\ncalls_per_minute = 10\n[agent.\"unlimited\"]\nallow = [\"*\"]\n";
+    policy_load_toml(eng3, toml2);
+    var p1 = policy_get(eng3, "limited");
+    assert_eq(agent_policy_rate_cpm(p1), 10, "rate cpm = 10");
+    var p2 = policy_get(eng3, "unlimited");
+    assert_eq(agent_policy_rate_cpm(p2),  0, "rate cpm = 0 (unset)");
+
+    test_group("policy TOML reload replaces");
+    var eng4 = policy_engine_new();
+    policy_grant(eng4, "old-agent", "tarang_*");
+    policy_load_toml(eng4, "[agent.\"new-agent\"]\nallow = [\"*\"]\n");
+    var k12, r12 = policy_check(eng4, "old-agent", "anything");
+    assert_eq(k12, PR_UNKNOWN_AGENT, "reload drops old agent");
+    var k13, r13 = policy_check(eng4, "new-agent", "anything");
+    assert_eq(k13, PR_ALLOW, "reload loads new agent");
+
+    test_group("policy deny-only");
+    var eng5 = policy_engine_new();
+    policy_load_toml(eng5, "[agent.\"lockdown\"]\ndeny = [\"*\"]\n");
+    var k14, r14 = policy_check(eng5, "lockdown", "anything");
+    assert_eq(k14, PR_DENY, "deny-only policy");
 
     return assert_summary();
 }

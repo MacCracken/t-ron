@@ -1,0 +1,384 @@
+#  policy.cyr  --  per-agent tool policy with glob ACLs and TOML loader
+#
+#  Ported from rust-old/src/policy.rs.
+#
+#  Agents live in a hashmap keyed by null-terminated C string agent_id,
+#  each mapping to a heap-allocated AgentPolicy. Tool patterns are
+#  null-terminated C strings stored in plain i64 vecs. The Rust version
+#  uses a parking-lot RwLock; here the engine is single-owner (the
+#  calling TRon object is what gets protected if concurrency is needed
+#  via thread.cyr mutex at a higher layer).
+
+#  ============================================================
+#  PolicyResult  --  outcome of a policy check
+#  ============================================================
+#
+#  Returned as a multi-value (kind, reason). reason is a C-string ptr,
+#  0 if no reason (Allow / UnknownAgent / UnknownTool).
+
+enum PolicyResult {
+    PR_ALLOW         = 0;
+    PR_DENY          = 1;
+    PR_UNKNOWN_AGENT = 2;
+    PR_UNKNOWN_TOOL  = 3;
+}
+
+#  ============================================================
+#  AgentPolicy  --  allow/deny patterns + optional rate limit
+#  ============================================================
+#
+#  Layout (24 bytes):
+#    +0   allow     vec<cstring>   allow-list patterns
+#    +8   deny      vec<cstring>   deny-list patterns
+#    +16  rate_cpm  i64            calls per minute (0 = unlimited)
+
+fn agent_policy_new() {
+    var p = alloc(24);
+    store64(p,      vec_new());
+    store64(p + 8,  vec_new());
+    store64(p + 16, 0);
+    return p;
+}
+
+fn agent_policy_allow(p)     { return load64(p); }
+fn agent_policy_deny(p)      { return load64(p + 8); }
+fn agent_policy_rate_cpm(p)  { return load64(p + 16); }
+
+fn agent_policy_add_allow(p, pattern) {
+    vec_push(load64(p), pattern);
+    return 0;
+}
+
+fn agent_policy_add_deny(p, pattern) {
+    vec_push(load64(p + 8), pattern);
+    return 0;
+}
+
+fn agent_policy_set_rate(p, cpm) {
+    store64(p + 16, cpm);
+    return 0;
+}
+
+#  ============================================================
+#  PolicyEngine  --  the top-level registry
+#  ============================================================
+#
+#  Layout (8 bytes): just a hashmap pointer.
+
+fn policy_engine_new() {
+    var e = alloc(8);
+    store64(e, map_new());
+    return e;
+}
+
+fn policy_engine_agents(e) { return load64(e); }
+
+#  Drop all agents (used by load_toml before reparse).
+fn policy_engine_clear(e) {
+    store64(e, map_new());
+    return 0;
+}
+
+#  Look up an agent's policy, or create an empty one if missing.
+fn policy_get_or_create(e, agent_id) {
+    var m = load64(e);
+    if (map_has(m, agent_id) == 1) {
+        return map_get(m, agent_id);
+    }
+    var p = agent_policy_new();
+    map_set(m, agent_id, p);
+    return p;
+}
+
+#  Look up an agent's policy; returns 0 if agent is unknown.
+fn policy_get(e, agent_id) {
+    var m = load64(e);
+    if (map_has(m, agent_id) == 0) { return 0; }
+    return map_get(m, agent_id);
+}
+
+fn policy_grant(e, agent_id, pattern) {
+    var p = policy_get_or_create(e, agent_id);
+    agent_policy_add_allow(p, pattern);
+    return 0;
+}
+
+fn policy_revoke(e, agent_id, pattern) {
+    var p = policy_get_or_create(e, agent_id);
+    agent_policy_add_deny(p, pattern);
+    return 0;
+}
+
+#  Walk a C-string vec and return 1 if any pattern matches tool_name.
+fn _policy_any_matches(patterns, tool_name) {
+    var n = vec_len(patterns);
+    var i = 0;
+    while (i < n) {
+        var pat = vec_get(patterns, i);
+        if (glob_match(pat, tool_name) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+#  Check if agent_id may call tool_name.
+#
+#  Returns (kind, reason) where reason is a C-string ptr (0 for no reason).
+#  Deny reasons point at a freshly-allocated buffer the caller owns.
+fn policy_check(e, agent_id, tool_name) {
+    var p = policy_get(e, agent_id);
+    if (p == 0) { return (PR_UNKNOWN_AGENT, 0); }
+
+    #  Deny wins over allow — check deny list first.
+    if (_policy_any_matches(load64(p + 8), tool_name) == 1) {
+        var reason = _policy_format_deny(agent_id, tool_name);
+        return (PR_DENY, reason);
+    }
+
+    if (_policy_any_matches(load64(p), tool_name) == 1) {
+        return (PR_ALLOW, 0);
+    }
+
+    return (PR_UNKNOWN_TOOL, 0);
+}
+
+#  Build "tool '<tool>' denied by policy for agent '<agent>'".
+fn _policy_format_deny(agent_id, tool_name) {
+    var alen = strlen(agent_id);
+    var tlen = strlen(tool_name);
+    var buf  = alloc(alen + tlen + 48);
+    var off  = 0;
+    memcpy(buf + off, "tool '", 6); off = off + 6;
+    memcpy(buf + off, tool_name, tlen); off = off + tlen;
+    memcpy(buf + off, "' denied by policy for agent '", 30); off = off + 30;
+    memcpy(buf + off, agent_id, alen); off = off + alen;
+    memcpy(buf + off, "'", 1); off = off + 1;
+    store8(buf + off, 0);
+    return buf;
+}
+
+#  ============================================================
+#  TOML loader  --  custom parser for the t-ron policy DSL
+#  ============================================================
+#
+#  Grammar (only what t-ron policy files use):
+#    [agent."NAME"]
+#    allow = ["pat1", "pat2", ...]
+#    deny  = ["pat1", "pat2", ...]
+#
+#    [agent."NAME".rate_limit]
+#    calls_per_minute = N
+#
+#  Input is a null-terminated C string (the caller reads a file or
+#  passes a literal). We mutate nothing; we copy every pattern into
+#  its own null-terminated buffer so vecs survive the input buffer.
+
+fn _is_space(c) {
+    if (c == 32 || c == 9 || c == 10 || c == 13) { return 1; }
+    return 0;
+}
+
+fn _skip_ws(src, i, n) {
+    while (i < n) {
+        var c = load8(src + i);
+        if (_is_space(c) == 0) { return i; }
+        i = i + 1;
+    }
+    return i;
+}
+
+fn _skip_to_eol(src, i, n) {
+    while (i < n && load8(src + i) != 10) { i = i + 1; }
+    return i;
+}
+
+#  Copy src[start..end] into a fresh null-terminated buffer.
+fn _dup_cstr(src, start, end) {
+    var len = end - start;
+    var buf = alloc(len + 1);
+    memcpy(buf, src + start, len);
+    store8(buf + len, 0);
+    return buf;
+}
+
+#  Parse a double-quoted string starting at src[i] (which must point at ").
+#  Returns (new_i, cstr_ptr). No escape handling beyond skipping \X.
+fn _parse_qstring(src, i, n) {
+    i = i + 1;                #  skip opening "
+    var start = i;
+    while (i < n) {
+        var c = load8(src + i);
+        if (c == 34) { break; }
+        if (c == 92 && i + 1 < n) { i = i + 2; }
+        else { i = i + 1; }
+    }
+    var s = _dup_cstr(src, start, i);
+    if (i < n) { i = i + 1; }    #  skip closing "
+    return (i, s);
+}
+
+#  Parse a string array: ["a", "b", "c"].
+#  Appends each element (as cstring) into dst_vec. Returns new i.
+fn _parse_str_array(src, i, n, dst_vec) {
+    i = _skip_ws(src, i, n);
+    if (i >= n || load8(src + i) != 91) { return i; }    #  no [
+    i = i + 1;
+    while (i < n) {
+        i = _skip_ws(src, i, n);
+        if (i >= n) { return i; }
+        var c = load8(src + i);
+        if (c == 93) { return i + 1; }                   #  close ]
+        if (c == 44) { i = i + 1; }                      #  comma
+        elif (c == 34) {
+            var ni, s = _parse_qstring(src, i, n);
+            vec_push(dst_vec, s);
+            i = ni;
+        }
+        else { i = i + 1; }                              #  tolerate stray chars
+    }
+    return i;
+}
+
+#  Parse an integer (decimal, non-negative). Returns (new_i, value).
+fn _parse_int(src, i, n) {
+    var v = 0;
+    while (i < n) {
+        var c = load8(src + i);
+        if (c < 48 || c > 57) { break; }
+        v = v * 10 + (c - 48);
+        i = i + 1;
+    }
+    return (i, v);
+}
+
+#  Parse a section header `[...]` into a heap result record.
+#
+#  Layout of returned record (32 bytes):
+#    +0   new_i      i64
+#    +8   is_agent   i64   1 if [agent."..."], 0 otherwise
+#    +16  rate_flag  i64   1 if [agent."...".rate_limit], 0 otherwise
+#    +24  name       i64   cstring pointer (0 if not an agent section)
+fn _parse_section(src, i, n) {
+    i = i + 1;                #  skip [
+    i = _skip_ws(src, i, n);
+
+    #  Match literal "agent"
+    var header_start = i;
+    if (i + 5 > n) {
+        return _section_result(_skip_to_eol(src, i, n), 0, 0, 0);
+    }
+    if (load8(src + i)     != 97)  { return _section_result(_skip_to_eol(src, header_start, n), 0, 0, 0); }
+    if (load8(src + i + 1) != 103) { return _section_result(_skip_to_eol(src, header_start, n), 0, 0, 0); }
+    if (load8(src + i + 2) != 101) { return _section_result(_skip_to_eol(src, header_start, n), 0, 0, 0); }
+    if (load8(src + i + 3) != 110) { return _section_result(_skip_to_eol(src, header_start, n), 0, 0, 0); }
+    if (load8(src + i + 4) != 116) { return _section_result(_skip_to_eol(src, header_start, n), 0, 0, 0); }
+    i = i + 5;
+    i = _skip_ws(src, i, n);
+    if (i >= n || load8(src + i) != 46) {
+        return _section_result(_skip_to_eol(src, header_start, n), 0, 0, 0);
+    }
+    i = i + 1;                #  skip .
+    i = _skip_ws(src, i, n);
+    if (i >= n || load8(src + i) != 34) {
+        return _section_result(_skip_to_eol(src, header_start, n), 0, 0, 0);
+    }
+
+    var ni, name = _parse_qstring(src, i, n);
+    i = ni;
+    i = _skip_ws(src, i, n);
+
+    #  Optional .rate_limit suffix
+    var is_rate = 0;
+    if (i < n && load8(src + i) == 46) {
+        i = i + 1;
+        i = _skip_ws(src, i, n);
+        #  Expect literal "rate_limit" -- 10 bytes
+        if (i + 10 <= n
+            && load8(src + i)     == 114 && load8(src + i + 1) == 97
+            && load8(src + i + 2) == 116 && load8(src + i + 3) == 101
+            && load8(src + i + 4) == 95  && load8(src + i + 5) == 108
+            && load8(src + i + 6) == 105 && load8(src + i + 7) == 109
+            && load8(src + i + 8) == 105 && load8(src + i + 9) == 116) {
+            is_rate = 1;
+            i = i + 10;
+        }
+    }
+
+    return _section_result(_skip_to_eol(src, i, n), 1, is_rate, name);
+}
+
+fn _section_result(new_i, is_agent, rate_flag, name) {
+    var r = alloc(32);
+    store64(r,      new_i);
+    store64(r + 8,  is_agent);
+    store64(r + 16, rate_flag);
+    store64(r + 24, name);
+    return r;
+}
+
+#  Load policy from a TOML C-string. Replaces all existing agents.
+fn policy_load_toml(e, src) {
+    var n = strlen(src);
+    policy_engine_clear(e);
+
+    var cur_agent  = 0;        #  AgentPolicy ptr of current section
+    var in_rate    = 0;        #  1 if inside [...rate_limit]
+    var i = 0;
+
+    while (i < n) {
+        i = _skip_ws(src, i, n);
+        if (i >= n) { break; }
+        var c = load8(src + i);
+
+        #  Comment
+        if (c == 35) {
+            i = _skip_to_eol(src, i, n);
+        }
+        #  Section header
+        elif (c == 91) {
+            var sr = _parse_section(src, i, n);
+            i = load64(sr);
+            if (load64(sr + 8) == 1) {
+                cur_agent = policy_get_or_create(e, load64(sr + 24));
+                in_rate   = load64(sr + 16);
+            }
+            else {
+                cur_agent = 0;
+                in_rate   = 0;
+            }
+        }
+        #  key = value
+        elif (cur_agent != 0) {
+            #  read key until = or whitespace
+            var kstart = i;
+            while (i < n) {
+                var kc = load8(src + i);
+                if (kc == 61 || kc == 32 || kc == 9 || kc == 10) { break; }
+                i = i + 1;
+            }
+            var key = _dup_cstr(src, kstart, i);
+            i = _skip_ws(src, i, n);
+            if (i < n && load8(src + i) == 61) {
+                i = i + 1;
+                i = _skip_ws(src, i, n);
+
+                if (in_rate == 1 && streq(key, "calls_per_minute") == 1) {
+                    var ni, v = _parse_int(src, i, n);
+                    agent_policy_set_rate(cur_agent, v);
+                    i = ni;
+                }
+                elif (streq(key, "allow") == 1) {
+                    i = _parse_str_array(src, i, n, load64(cur_agent));
+                }
+                elif (streq(key, "deny") == 1) {
+                    i = _parse_str_array(src, i, n, load64(cur_agent + 8));
+                }
+                i = _skip_to_eol(src, i, n);
+            }
+        }
+        else {
+            i = _skip_to_eol(src, i, n);
+        }
+    }
+    return TRON_ERR_NONE;
+}
