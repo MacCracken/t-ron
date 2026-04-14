@@ -36,10 +36,10 @@ fn deny_code_as_str(code) {
 #  ============================================================
 #
 #  Layout (32 bytes):
-#    +0   agent_id   Str pointer
-#    +8   tool_name  Str pointer
-#    +16  params     Str pointer   (JSON text, parsed on demand)
-#    +24  timestamp  i64           (nanos since epoch, chrono)
+#    +0   agent_id   cstring pointer
+#    +8   tool_name  cstring pointer
+#    +16  params     cstring pointer  (null-terminated JSON text)
+#    +24  timestamp  i64              (nanos since epoch, chrono)
 
 fn tool_call_new(agent_id, tool_name, params, timestamp) {
     var c = alloc(32);

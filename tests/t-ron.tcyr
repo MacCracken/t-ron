@@ -24,6 +24,9 @@ include "src/scanner.cyr"
 include "src/pattern.cyr"
 include "src/audit.cyr"
 include "src/score.cyr"
+include "src/query.cyr"
+include "src/correlation.cyr"
+include "src/tron.cyr"
 
 fn test_errors() {
     test_group("error codes");
@@ -55,7 +58,7 @@ fn test_tool_call() {
     test_group("tool call");
     var agent = str_from("web-agent");
     var tool  = str_from("tarang_probe");
-    var params = str_from("{}");
+    var params = "{}";
     var call  = tool_call_new(agent, tool, params, 1234567890);
     assert_eq(tool_call_agent_id(call),  agent,      "tc agent");
     assert_eq(tool_call_tool_name(call), tool,       "tc tool");
@@ -300,7 +303,7 @@ fn test_scanner_json() {
 fn _mk_call(agent, tool, hour) {
     var base = 1775001600;                #  2026-04-01 00:00:00 UTC
     var ts_ns = (base + hour * 3600) * 1000000000;
-    return tool_call_new(agent, tool, str_from("{}"), ts_ns);
+    return tool_call_new(agent, tool, "{}", ts_ns);
 }
 
 fn test_pattern_normal() {
@@ -429,7 +432,7 @@ fn _mk_flag() {
 }
 
 fn _mk_audit_call(agent, tool) {
-    return tool_call_new(agent, tool, str_from("{}"), 0);
+    return tool_call_new(agent, tool, "{}", 0);
 }
 
 fn test_audit_log_and_query() {
@@ -541,6 +544,233 @@ fn test_risk_mixed() {
     return 0;
 }
 
+fn test_query_api() {
+    test_group("query initial state");
+    var a = audit_logger_new();
+    assert_eq(query_total_events(a),   0, "empty total");
+    assert_eq(query_total_denials(a),  0, "empty denies");
+    assert_eq(vec_len(query_recent_events(a, 10)), 0, "empty recent");
+
+    test_group("query after log");
+    var c = _mk_audit_call("agent-1", "tarang_probe");
+    for (var i = 0; i < 5; i = i + 1) { audit_log(a, c, verdict_allow()); }
+    assert_eq(query_total_events(a),  5, "5 events");
+    assert_eq(query_total_denials(a), 0, "0 denies");
+    assert_eq(vec_len(query_recent_events(a, 3)), 3, "limited to 3");
+
+    test_group("query risk and audit trail");
+    var b = audit_logger_new();
+    var cb = _mk_audit_call("bad", "tool");
+    for (var i = 0; i < 5; i = i + 1) { audit_log(b, cb, _mk_deny()); }
+    assert_eq(query_total_denials(b), 5, "5 denies");
+    assert_eq(query_agent_risk_score(b, "bad"),    SCORE_SCALE, "risk = 1000");
+    assert_eq(query_agent_risk_score(b, "nobody"), 0,           "nobody = 0");
+    assert_eq(vec_len(query_agent_audit(b, "bad", 100)), 5, "trail = 5");
+    return 0;
+}
+
+fn test_corr_no_alert_single_agent() {
+    test_group("corr no alert single agent");
+    var d = correlation_detector_new();
+    for (var i = 0; i < 10; i = i + 1) {
+        assert_eq(correlation_record_and_check(d, "agent-1", "tarang_probe", 1000), 0, "single agent clean");
+    }
+    return 0;
+}
+
+fn test_corr_detect() {
+    test_group("corr detect coordinated access");
+    var d = correlation_detector_new();
+    assert_eq(correlation_record_and_check(d, "agent-1", "aegis_scan", 1000), 0, "1st no alert");
+    assert_eq(correlation_record_and_check(d, "agent-2", "aegis_scan", 1000), 0, "2nd no alert");
+    var alert = correlation_record_and_check(d, "agent-3", "aegis_scan", 1000);
+    assert_eq((alert != 0), 1, "3rd triggers");
+    return 0;
+}
+
+fn test_corr_window() {
+    test_group("corr outside window");
+    var d = correlation_detector_with_config(10, 3);
+    correlation_record_and_check(d, "agent-1", "tool", 1000);
+    correlation_record_and_check(d, "agent-2", "tool", 1000);
+    #  Third agent 20s later -- first two are outside window (cutoff = 1020 - 10 = 1010).
+    assert_eq(correlation_record_and_check(d, "agent-3", "tool", 1020), 0, "outside window no alert");
+    return 0;
+}
+
+fn test_corr_threshold() {
+    test_group("corr configurable threshold");
+    var d = correlation_detector_with_config(60, 5);
+    assert_eq(correlation_record_and_check(d, "agent-0", "tool", 1000), 0, "1 no alert");
+    assert_eq(correlation_record_and_check(d, "agent-1", "tool", 1000), 0, "2 no alert");
+    assert_eq(correlation_record_and_check(d, "agent-2", "tool", 1000), 0, "3 no alert");
+    assert_eq(correlation_record_and_check(d, "agent-3", "tool", 1000), 0, "4 no alert");
+    var a = correlation_record_and_check(d, "agent-4", "tool", 1000);
+    assert_eq((a != 0), 1, "5 triggers");
+    return 0;
+}
+
+fn _permissive_config() {
+    var c = tron_config_default();
+    tron_config_set_default_unknown_agent(c, DA_ALLOW);
+    tron_config_set_default_unknown_tool(c,  DA_ALLOW);
+    return c;
+}
+
+fn _permissive_quiet() {
+    var c = _permissive_config();
+    tron_config_set_scan_payloads(c,    0);
+    tron_config_set_analyze_patterns(c, 0);
+    return c;
+}
+
+fn _mk_call_now(agent, tool) {
+    return tool_call_new(agent, tool, "{}", clock_epoch_ns());
+}
+
+fn _mk_call_with_params(agent, tool, params) {
+    return tool_call_new(agent, tool, params, clock_epoch_ns());
+}
+
+fn test_tron_default_config() {
+    test_group("tron default config");
+    var c = tron_config_default();
+    assert_eq(tron_config_default_unknown_agent(c), DA_DENY,  "default agent=deny");
+    assert_eq(tron_config_max_param_size(c),        65536,    "default size=65536");
+    assert_eq(tron_config_scan_payloads(c),         1,        "scan_payloads=on");
+    return 0;
+}
+
+fn test_tron_deny_unknown_agent() {
+    test_group("tron deny unknown agent");
+    var t = tron_new(tron_config_default());
+    var v = tron_check(t, _mk_call_now("unknown-agent", "some_tool"));
+    assert_eq(verdict_is_denied(v), 1, "unknown agent denied");
+    return 0;
+}
+
+fn test_tron_deny_oversized_params() {
+    test_group("tron deny oversized params");
+    var c = _permissive_config();
+    tron_config_set_max_param_size(c, 10);
+    var t = tron_new(c);
+    var v = tron_check(t, _mk_call_with_params("agent", "tool",
+        "{\"data\": \"way more than 10 bytes of parameter data here\"}"));
+    assert_eq(verdict_is_denied(v), 1, "oversized denied");
+    assert_eq(verdict_code(v), DENY_PARAMETER_TOO_LARGE, "too-large code");
+    return 0;
+}
+
+fn test_tron_allow_known() {
+    test_group("tron allow known agent+tool");
+    var t = tron_new(tron_config_default());
+    tron_load_policy(t, "[agent.\"web-agent\"]\nallow = [\"tarang_*\"]\n");
+    var v = tron_check(t, _mk_call_now("web-agent", "tarang_probe"));
+    assert_eq(verdict_is_allowed(v), 1, "allowed");
+    assert_eq(verdict_is_denied(v),  0, "not denied");
+    return 0;
+}
+
+fn test_tron_flag_unknown_agent() {
+    test_group("tron flag unknown agent");
+    var c = tron_config_default();
+    tron_config_set_default_unknown_agent(c, DA_FLAG);
+    var t = tron_new(c);
+    var v = tron_check(t, _mk_call_now("mystery", "tool"));
+    assert_eq(verdict_kind(v),       VK_FLAG, "flag kind");
+    assert_eq(verdict_is_allowed(v), 1,       "flags pass");
+    return 0;
+}
+
+fn test_tron_deny_unknown_tool() {
+    test_group("tron deny unknown tool for known agent");
+    var t = tron_new(tron_config_default());
+    tron_load_policy(t, "[agent.\"limited\"]\nallow = [\"tarang_*\"]\n");
+    var v = tron_check(t, _mk_call_now("limited", "aegis_scan"));
+    assert_eq(verdict_is_denied(v), 1, "unknown tool denied");
+    return 0;
+}
+
+fn test_tron_deny_injection() {
+    test_group("tron deny injection via pipeline");
+    var t = tron_new(_permissive_config());
+    var v = tron_check(t, _mk_call_with_params("agent", "tool",
+        "{\"q\": \"1 UNION SELECT * FROM passwords\"}"));
+    assert_eq(verdict_is_denied(v), 1,                         "injection denied");
+    assert_eq(verdict_code(v),      DENY_INJECTION_DETECTED,   "injection code");
+    return 0;
+}
+
+fn test_tron_scan_disabled() {
+    test_group("tron scan disabled bypass");
+    var c = _permissive_config();
+    tron_config_set_scan_payloads(c, 0);
+    var t = tron_new(c);
+    var v = tron_check(t, _mk_call_with_params("agent", "tool",
+        "{\"q\": \"1 UNION SELECT * FROM passwords\"}"));
+    assert_eq(verdict_is_allowed(v), 1, "injection passes when scan off");
+    return 0;
+}
+
+fn test_tron_rate_limit_pipeline() {
+    test_group("tron rate limit through pipeline");
+    var t = tron_new(_permissive_quiet());
+    for (var i = 0; i < 60; i = i + 1) {
+        var v_ok = tron_check(t, _mk_call_now("agent", "tool"));
+        assert_eq(verdict_is_allowed(v_ok), 1, "within limit");
+    }
+    var v = tron_check(t, _mk_call_now("agent", "tool"));
+    assert_eq(verdict_is_denied(v), 1,                    "61st denied");
+    assert_eq(verdict_code(v),      DENY_RATE_LIMITED,    "rate-limit code");
+    return 0;
+}
+
+fn test_tron_policy_deny() {
+    test_group("tron policy deny through pipeline");
+    var t = tron_new(tron_config_default());
+    tron_load_policy(t, "[agent.\"restricted\"]\nallow = [\"tarang_*\"]\ndeny = [\"tarang_delete\"]\n");
+    var v = tron_check(t, _mk_call_now("restricted", "tarang_delete"));
+    assert_eq(verdict_is_denied(v), 1, "policy deny");
+    return 0;
+}
+
+fn test_tron_audit_every_verdict() {
+    test_group("tron audits every verdict");
+    var t = tron_new(_permissive_quiet());
+    tron_check(t, _mk_call_now("agent", "tool"));
+    tron_check(t, _mk_call_now("agent", "tool"));
+    assert_eq(query_total_events(tron_audit(t)), 2, "2 events logged");
+    return 0;
+}
+
+fn test_tron_rate_from_policy() {
+    test_group("tron rate from policy");
+    var t = tron_new(_permissive_quiet());
+    tron_load_policy(t,
+        "[agent.\"limited\"]\nallow = [\"*\"]\n[agent.\"limited\".rate_limit]\ncalls_per_minute = 5\n");
+    for (var i = 0; i < 5; i = i + 1) {
+        assert_eq(verdict_is_allowed(tron_check(t, _mk_call_now("limited", "tool"))), 1, "within 5");
+    }
+    var v = tron_check(t, _mk_call_now("limited", "tool"));
+    assert_eq(verdict_is_denied(v), 1,                 "6th denied");
+    assert_eq(verdict_code(v),      DENY_RATE_LIMITED, "rate code");
+    return 0;
+}
+
+fn test_corr_independent_tools() {
+    test_group("corr different tools independent");
+    var d = correlation_detector_new();
+    correlation_record_and_check(d, "agent-1", "tool_a", 1000);
+    correlation_record_and_check(d, "agent-2", "tool_a", 1000);
+    correlation_record_and_check(d, "agent-1", "tool_b", 1000);
+    correlation_record_and_check(d, "agent-2", "tool_b", 1000);
+    var a = correlation_record_and_check(d, "agent-3", "tool_a", 1000);
+    assert_eq((a != 0), 1, "tool_a triggers with 3rd");
+    var b = correlation_record_and_check(d, "agent-1", "tool_b", 1000);
+    assert_eq(b, 0, "tool_b still only 2 agents");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_errors();
@@ -573,6 +803,24 @@ fn main() {
     test_risk_unknown();
     test_risk_flags_half();
     test_risk_mixed();
+    test_query_api();
+    test_corr_no_alert_single_agent();
+    test_corr_detect();
+    test_corr_window();
+    test_corr_threshold();
+    test_corr_independent_tools();
+    test_tron_default_config();
+    test_tron_deny_unknown_agent();
+    test_tron_deny_oversized_params();
+    test_tron_allow_known();
+    test_tron_flag_unknown_agent();
+    test_tron_deny_unknown_tool();
+    test_tron_deny_injection();
+    test_tron_scan_disabled();
+    test_tron_rate_limit_pipeline();
+    test_tron_policy_deny();
+    test_tron_audit_every_verdict();
+    test_tron_rate_from_policy();
     return assert_summary();
 }
 

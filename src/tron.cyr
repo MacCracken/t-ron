@@ -1,0 +1,289 @@
+#  tron.cyr  --  top-level orchestration + check pipeline
+#
+#  Ported from rust-old/src/lib.rs (TRon, TRonConfig, DefaultAction,
+#  check(), load_policy, load_policy_file, discover_and_load_policy).
+#
+#  The Rust version relies on async/await for audit.log, dashmap for
+#  concurrent policy/rate state, and an RwLock for the policy path.
+#  Cyrius is single-threaded from this layer's perspective: the check
+#  pipeline runs synchronously, and any higher-level threading lives
+#  above this module (e.g. in the bote SecurityGate wrapper, when it
+#  ports).
+
+#  ============================================================
+#  DefaultAction  --  what to do for unknown agent / unknown tool
+#  ============================================================
+
+enum DefaultAction {
+    DA_ALLOW = 0;
+    DA_DENY  = 1;
+    DA_FLAG  = 2;
+}
+
+#  ============================================================
+#  TRonConfig  --  tunable behaviour (40 bytes)
+#  ============================================================
+#
+#  +0   default_unknown_agent   DefaultAction
+#  +8   default_unknown_tool    DefaultAction
+#  +16  max_param_size_bytes    i64
+#  +24  scan_payloads           0/1
+#  +32  analyze_patterns        0/1
+#  ... plus enable_correlation stored in byte 39 (packed into the same slot as size 40)
+#  Lay out as 48 bytes instead to keep each flag in its own slot for clarity.
+#
+#  Actual layout (48 bytes):
+#    +0   default_unknown_agent
+#    +8   default_unknown_tool
+#    +16  max_param_size_bytes
+#    +24  scan_payloads
+#    +32  analyze_patterns
+#    +40  enable_correlation
+
+fn tron_config_default() {
+    var c = alloc(48);
+    store64(c,      DA_DENY);
+    store64(c + 8,  DA_DENY);
+    store64(c + 16, 65536);
+    store64(c + 24, 1);
+    store64(c + 32, 1);
+    store64(c + 40, 0);
+    return c;
+}
+
+fn tron_config_default_unknown_agent(c) { return load64(c); }
+fn tron_config_default_unknown_tool(c)  { return load64(c + 8); }
+fn tron_config_max_param_size(c)        { return load64(c + 16); }
+fn tron_config_scan_payloads(c)         { return load64(c + 24); }
+fn tron_config_analyze_patterns(c)      { return load64(c + 32); }
+fn tron_config_enable_correlation(c)    { return load64(c + 40); }
+
+fn tron_config_set_default_unknown_agent(c, v) { store64(c,      v); return 0; }
+fn tron_config_set_default_unknown_tool(c, v)  { store64(c + 8,  v); return 0; }
+fn tron_config_set_max_param_size(c, v)        { store64(c + 16, v); return 0; }
+fn tron_config_set_scan_payloads(c, v)         { store64(c + 24, v); return 0; }
+fn tron_config_set_analyze_patterns(c, v)      { store64(c + 32, v); return 0; }
+fn tron_config_set_enable_correlation(c, v)    { store64(c + 40, v); return 0; }
+
+#  ============================================================
+#  TRon  --  top-level security monitor (56 bytes)
+#  ============================================================
+#
+#  +0   policy       PolicyEngine ptr
+#  +8   rate         RateLimiter ptr
+#  +16  pattern      PatternAnalyzer ptr
+#  +24  correlation  CorrelationDetector ptr
+#  +32  audit        AuditLogger ptr
+#  +40  config       TRonConfig ptr
+#  +48  policy_path  cstring or 0   -- stored path for reload
+
+fn tron_new(config) {
+    var t = alloc(56);
+    store64(t,      policy_engine_new());
+    store64(t + 8,  rate_limiter_new());
+    store64(t + 16, pattern_analyzer_new());
+    store64(t + 24, correlation_detector_new());
+    store64(t + 32, audit_logger_new());
+    store64(t + 40, config);
+    store64(t + 48, 0);
+    return t;
+}
+
+fn tron_policy(t)      { return load64(t); }
+fn tron_rate(t)        { return load64(t + 8); }
+fn tron_pattern(t)     { return load64(t + 16); }
+fn tron_correlation(t) { return load64(t + 24); }
+fn tron_audit(t)       { return load64(t + 32); }
+fn tron_config(t)      { return load64(t + 40); }
+fn tron_policy_path(t) { return load64(t + 48); }
+
+fn tron_set_policy_path(t, path) { store64(t + 48, path); return 0; }
+
+#  Access to the query API.
+fn tron_query(t) { return load64(t + 32); }
+
+#  ============================================================
+#  Helpers  --  map DefaultAction to a verdict
+#  ============================================================
+
+fn _tron_default_action_verdict(action, reason) {
+    if (action == DA_DENY) { return verdict_deny(reason, DENY_UNAUTHORIZED); }
+    if (action == DA_FLAG) { return verdict_flag(reason); }
+    return 0;                                #  DA_ALLOW: no verdict, pipeline continues
+}
+
+#  Apply rate limits from the currently loaded policy.
+fn _tron_apply_rate_limits(t) {
+    var policy = load64(t);
+    var agents_map = policy_engine_agents(policy);
+    var keys = map_keys(agents_map);
+    var n = vec_len(keys);
+    var i = 0;
+    while (i < n) {
+        var agent_id = vec_get(keys, i);
+        var p = map_get(agents_map, agent_id);
+        var cpm = agent_policy_rate_cpm(p);
+        if (cpm > 0) {
+            rate_limiter_set_rate(load64(t + 8), agent_id, cpm);
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+#  Load policy TOML into the engine and apply rate limits.
+fn tron_load_policy(t, toml_cstr) {
+    var rc = policy_load_toml(load64(t), toml_cstr);
+    if (rc != TRON_ERR_NONE) { return rc; }
+    _tron_apply_rate_limits(t);
+    return TRON_ERR_NONE;
+}
+
+#  ============================================================
+#  check()  --  the security pipeline
+#  ============================================================
+#
+#  Steps (mirrors Rust lib.rs::check):
+#    1. parameter size guard
+#    2. policy ACL
+#    3. rate limit
+#    4. payload scanner
+#    5. pattern anomaly detection
+#    6. cross-agent correlation
+#    7. audit every outcome, including Allow
+
+fn tron_check(t, call) {
+    var cfg = load64(t + 40);
+    var audit = load64(t + 32);
+    var agent_id  = tool_call_agent_id(call);
+    var tool_name = tool_call_tool_name(call);
+    var params    = tool_call_params(call);
+
+    #  1. Parameter size
+    var param_size = strlen(params);
+    if (param_size > tron_config_max_param_size(cfg)) {
+        var v_size = verdict_deny(
+            _tron_format_too_large(param_size, tron_config_max_param_size(cfg)),
+            DENY_PARAMETER_TOO_LARGE);
+        audit_log(audit, call, v_size);
+        return v_size;
+    }
+
+    #  2. Policy
+    var pk, preason = policy_check(load64(t), agent_id, tool_name);
+    if (pk == PR_DENY) {
+        var v_pol = verdict_deny(preason, DENY_UNAUTHORIZED);
+        audit_log(audit, call, v_pol);
+        return v_pol;
+    }
+    elif (pk == PR_UNKNOWN_AGENT) {
+        var v_ua = _tron_default_action_verdict(
+            tron_config_default_unknown_agent(cfg),
+            "unknown agent");
+        if (v_ua != 0) { audit_log(audit, call, v_ua); return v_ua; }
+    }
+    elif (pk == PR_UNKNOWN_TOOL) {
+        var v_ut = _tron_default_action_verdict(
+            tron_config_default_unknown_tool(cfg),
+            _tron_format_unknown_tool(tool_name, agent_id));
+        if (v_ut != 0) { audit_log(audit, call, v_ut); return v_ut; }
+    }
+
+    #  3. Rate limit
+    if (rate_limiter_check(load64(t + 8), agent_id, tool_name) == 0) {
+        var v_rl = verdict_deny("rate limit exceeded", DENY_RATE_LIMITED);
+        audit_log(audit, call, v_rl);
+        return v_rl;
+    }
+
+    #  4. Payload scanning
+    if (tron_config_scan_payloads(cfg) == 1) {
+        var threat = scanner_scan(params);
+        if (threat != 0) {
+            var v_sc = verdict_deny(_tron_format_injection(threat), DENY_INJECTION_DETECTED);
+            audit_log(audit, call, v_sc);
+            return v_sc;
+        }
+    }
+
+    #  5. Pattern analysis
+    if (tron_config_analyze_patterns(cfg) == 1) {
+        pattern_record(load64(t + 16), call);
+        var hour = _pat_hour_from_ns(tool_call_timestamp(call));
+        var anomaly = pattern_check_anomaly(load64(t + 16), agent_id, hour);
+        if (anomaly != 0) {
+            var v_pat = verdict_flag(_tron_format_anomaly(anomaly));
+            audit_log(audit, call, v_pat);
+            return v_pat;
+        }
+    }
+
+    #  6. Cross-agent correlation
+    if (tron_config_enable_correlation(cfg) == 1) {
+        var ts_secs = tool_call_timestamp(call) / 1000000000;
+        var alert = correlation_record_and_check(load64(t + 24), agent_id, tool_name, ts_secs);
+        if (alert != 0) {
+            var v_corr = verdict_flag(alert);
+            audit_log(audit, call, v_corr);
+            return v_corr;
+        }
+    }
+
+    #  All checks passed.
+    var v_ok = verdict_allow();
+    audit_log(audit, call, v_ok);
+    return v_ok;
+}
+
+#  ============================================================
+#  Reason formatters
+#  ============================================================
+
+fn _tron_format_too_large(actual, limit) {
+    var buf = alloc(96);
+    var off = 0;
+    memcpy(buf + off, "parameter size ", 15); off = off + 15;
+    var nb = alloc(24);
+    var nl = fmt_int_buf(actual, nb);
+    memcpy(buf + off, nb, nl); off = off + nl;
+    memcpy(buf + off, " exceeds limit ", 15); off = off + 15;
+    var lb = alloc(24);
+    var ll = fmt_int_buf(limit, lb);
+    memcpy(buf + off, lb, ll); off = off + ll;
+    store8(buf + off, 0);
+    return buf;
+}
+
+fn _tron_format_unknown_tool(tool, agent) {
+    var tl = strlen(tool);
+    var al = strlen(agent);
+    var buf = alloc(tl + al + 48);
+    var off = 0;
+    memcpy(buf + off, "tool '", 6); off = off + 6;
+    memcpy(buf + off, tool, tl); off = off + tl;
+    memcpy(buf + off, "' not in policy for agent '", 27); off = off + 27;
+    memcpy(buf + off, agent, al); off = off + al;
+    memcpy(buf + off, "'", 1); off = off + 1;
+    store8(buf + off, 0);
+    return buf;
+}
+
+fn _tron_format_injection(threat) {
+    var tl = strlen(threat);
+    var buf = alloc(tl + 32);
+    var off = 0;
+    memcpy(buf + off, "injection detected: ", 20); off = off + 20;
+    memcpy(buf + off, threat, tl); off = off + tl;
+    store8(buf + off, 0);
+    return buf;
+}
+
+fn _tron_format_anomaly(msg) {
+    var ml = strlen(msg);
+    var buf = alloc(ml + 24);
+    var off = 0;
+    memcpy(buf + off, "anomalous pattern: ", 19); off = off + 19;
+    memcpy(buf + off, msg, ml); off = off + ml;
+    store8(buf + off, 0);
+    return buf;
+}

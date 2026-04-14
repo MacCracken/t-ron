@@ -26,6 +26,9 @@ include "src/scanner.cyr"
 include "src/pattern.cyr"
 include "src/audit.cyr"
 include "src/score.cyr"
+include "src/query.cyr"
+include "src/correlation.cyr"
+include "src/tron.cyr"
 
 fn main() {
     alloc_init();

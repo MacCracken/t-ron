@@ -1,0 +1,127 @@
+#  correlation.cyr  --  cross-agent coordinated-access detector
+#
+#  Ported from rust-old/src/correlation.rs.
+#
+#  Flags when N distinct agents call the same tool within a time
+#  window. Per-tool state is a vec of (agent_id, timestamp_secs).
+#  Expired entries are pruned on each record.
+
+var CORR_DEFAULT_WINDOW_SECS = 60;
+var CORR_DEFAULT_THRESHOLD   = 3;
+
+#  ============================================================
+#  Call-record layout (16 bytes):
+#    +0  agent_id cstring
+#    +8  ts_secs  i64
+#  ============================================================
+
+fn _corr_rec_new(agent_id, ts_secs) {
+    var r = alloc(16);
+    store64(r,     agent_id);
+    store64(r + 8, ts_secs);
+    return r;
+}
+
+fn _corr_rec_agent(r) { return load64(r); }
+fn _corr_rec_ts(r)    { return load64(r + 8); }
+
+#  ============================================================
+#  CorrelationDetector (24 bytes):
+#    +0   recent_calls  hashmap<tool_name cstring, vec<record ptr>>
+#    +8   window_secs   i64
+#    +16  threshold     i64
+#  ============================================================
+
+fn correlation_detector_new() {
+    return correlation_detector_with_config(CORR_DEFAULT_WINDOW_SECS, CORR_DEFAULT_THRESHOLD);
+}
+
+fn correlation_detector_with_config(window_secs, threshold) {
+    var d = alloc(24);
+    store64(d,      map_new());
+    store64(d + 8,  window_secs);
+    store64(d + 16, threshold);
+    return d;
+}
+
+fn correlation_window(d)    { return load64(d + 8); }
+fn correlation_threshold(d) { return load64(d + 16); }
+
+#  Record a call and return a reason cstring if the distinct-agent
+#  threshold is met for this tool within the time window, else 0.
+fn correlation_record_and_check(d, agent_id, tool_name, ts_secs) {
+    var m = load64(d);
+    var window = load64(d + 8);
+    var threshold = load64(d + 16);
+    var cutoff = ts_secs - window;
+
+    var bucket = 0;
+    if (map_has(m, tool_name) == 1) {
+        bucket = map_get(m, tool_name);
+    }
+    else {
+        bucket = vec_new();
+        map_set(m, tool_name, bucket);
+    }
+
+    #  Prune expired entries (keep only ts >= cutoff).
+    var kept = vec_new();
+    var n = vec_len(bucket);
+    var i = 0;
+    while (i < n) {
+        var r = vec_get(bucket, i);
+        if (_corr_rec_ts(r) >= cutoff) { vec_push(kept, r); }
+        i = i + 1;
+    }
+    vec_push(kept, _corr_rec_new(agent_id, ts_secs));
+    map_set(m, tool_name, kept);
+
+    #  Count distinct agents in the pruned bucket (O(n^2) over small n).
+    var distinct = _corr_count_distinct_agents(kept);
+    if (distinct >= threshold) {
+        return _corr_format_alert(tool_name, distinct, window);
+    }
+    return 0;
+}
+
+fn _corr_count_distinct_agents(bucket) {
+    var n = vec_len(bucket);
+    var distinct = 0;
+    var i = 0;
+    while (i < n) {
+        var a = _corr_rec_agent(vec_get(bucket, i));
+        var seen = 0;
+        var j = 0;
+        while (j < i) {
+            if (streq(_corr_rec_agent(vec_get(bucket, j)), a) == 1) { seen = 1; j = i; }
+            else { j = j + 1; }
+        }
+        if (seen == 0) { distinct = distinct + 1; }
+        i = i + 1;
+    }
+    return distinct;
+}
+
+#  Build "coordinated access: N distinct agents called 'TOOL' within Ws".
+fn _corr_format_alert(tool_name, agent_count, window_secs) {
+    var tlen = strlen(tool_name);
+    var buf = alloc(tlen + 96);
+    var off = 0;
+    memcpy(buf + off, "coordinated access: ", 20); off = off + 20;
+
+    var nbuf = alloc(24);
+    var nlen = fmt_int_buf(agent_count, nbuf);
+    memcpy(buf + off, nbuf, nlen); off = off + nlen;
+
+    memcpy(buf + off, " distinct agents called '", 25); off = off + 25;
+    memcpy(buf + off, tool_name, tlen); off = off + tlen;
+    memcpy(buf + off, "' within ", 9); off = off + 9;
+
+    var wbuf = alloc(24);
+    var wlen = fmt_int_buf(window_secs, wbuf);
+    memcpy(buf + off, wbuf, wlen); off = off + wlen;
+
+    memcpy(buf + off, "s", 1); off = off + 1;
+    store8(buf + off, 0);
+    return buf;
+}

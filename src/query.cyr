@@ -1,0 +1,22 @@
+#  query.cyr  --  read-only query API for the T.Ron personality
+#
+#  Ported from rust-old/src/query.rs. Thin wrappers around the audit
+#  logger + risk scorer. Every function takes an AuditLogger pointer
+#  directly (the Rust version held an Arc; Cyrius uses a shared ptr).
+
+#  Recent events (newest first), capped at `limit`.
+fn query_recent_events(audit, limit) {
+    return audit_recent(audit, limit);
+}
+
+#  Risk score for an agent, returned as integer basis points (0..1000).
+fn query_agent_risk_score(audit, agent_id) {
+    return risk_score(audit, agent_id);
+}
+
+fn query_total_events(audit)   { return audit_total_count(audit); }
+fn query_total_denials(audit)  { return audit_deny_count(audit); }
+
+fn query_agent_audit(audit, agent_id, limit) {
+    return audit_agent_events(audit, agent_id, limit);
+}
