@@ -1,7 +1,21 @@
-# t-ron — Cyrius port
-# Ported from 6611 lines of Rust
+# t-ron — MCP security monitor (Cyrius port)
+#
+# Ported from 6611 lines of Rust. See docs/development/port-plan.md for
+# the module map and staging order.
 
-# Stdlib auto-included via cyrius.toml
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/alloc.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/syscalls.cyr"
+include "lib/io.cyr"
+include "lib/args.cyr"
+include "lib/tagged.cyr"
+include "lib/assert.cyr"
+
+include "src/error.cyr"
+include "src/gate.cyr"
 
 fn main() {
     alloc_init();
@@ -10,4 +24,4 @@ fn main() {
 }
 
 var r = main();
-syscall(SYS_EXIT, r);
+syscall(60, r);

@@ -1,10 +1,81 @@
-# t-ron test suite
+# t-ron test suite — covers the modules ported so far.
+
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/alloc.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/syscalls.cyr"
+include "lib/io.cyr"
+include "lib/tagged.cyr"
+include "lib/assert.cyr"
+
+include "src/error.cyr"
+include "src/gate.cyr"
 
 fn main() {
     alloc_init();
-    test_group("smoke");
-    assert(1, "true is true");
-    assert_eq(1 + 1, 2, "math works");
+
+    test_group("error codes");
+    assert_eq(TRON_ERR_NONE,   0, "err_none=0");
+    assert_eq(TRON_ERR_POLICY, 1, "err_policy=1");
+    assert_eq(TRON_ERR_IO,     7, "err_io=7");
+    assert_eq(streq(tron_error_label(TRON_ERR_POLICY), "policy"),    1, "label policy");
+    assert_eq(streq(tron_error_label(TRON_ERR_EXPORT), "export"),    1, "label export");
+    assert_eq(streq(tron_error_label(999),             "none"),      1, "label unknown");
+
+    var e = tron_error_new(TRON_ERR_AUDIT, "chain broken");
+    assert_eq(tron_error_code(e), TRON_ERR_AUDIT, "error code");
+    assert_eq(streq(tron_error_msg(e), "chain broken"), 1, "error msg");
+
+    test_group("deny codes");
+    assert_eq(streq(deny_code_as_str(DENY_UNAUTHORIZED),        "unauthorized"),        1, "dc unauthorized");
+    assert_eq(streq(deny_code_as_str(DENY_RATE_LIMITED),        "rate_limited"),        1, "dc rate_limited");
+    assert_eq(streq(deny_code_as_str(DENY_INJECTION_DETECTED),  "injection_detected"),  1, "dc injection");
+    assert_eq(streq(deny_code_as_str(DENY_TOOL_DISABLED),       "tool_disabled"),       1, "dc tool_disabled");
+    assert_eq(streq(deny_code_as_str(DENY_ANOMALY_DETECTED),    "anomaly_detected"),    1, "dc anomaly");
+    assert_eq(streq(deny_code_as_str(DENY_PARAMETER_TOO_LARGE), "parameter_too_large"), 1, "dc oversized");
+    assert_eq(streq(deny_code_as_str(999),                      "unknown"),             1, "dc unknown");
+
+    test_group("tool call");
+    var agent = str_from("web-agent");
+    var tool  = str_from("tarang_probe");
+    var params = str_from("{}");
+    var call  = tool_call_new(agent, tool, params, 1234567890);
+    assert_eq(tool_call_agent_id(call),  agent,      "tc agent");
+    assert_eq(tool_call_tool_name(call), tool,       "tc tool");
+    assert_eq(tool_call_params(call),    params,     "tc params");
+    assert_eq(tool_call_timestamp(call), 1234567890, "tc ts");
+
+    test_group("verdict allow");
+    var va = verdict_allow();
+    assert_eq(verdict_kind(va),       VK_ALLOW, "allow kind");
+    assert_eq(verdict_reason(va),     0,        "allow no reason");
+    assert_eq(verdict_is_allowed(va), 1,        "allow allowed");
+    assert_eq(verdict_is_denied(va),  0,        "allow not denied");
+
+    test_group("verdict deny");
+    var reason = str_from("unknown agent");
+    var vd = verdict_deny(reason, DENY_UNAUTHORIZED);
+    assert_eq(verdict_kind(vd),       VK_DENY,           "deny kind");
+    assert_eq(verdict_reason(vd),     reason,            "deny reason");
+    assert_eq(verdict_code(vd),       DENY_UNAUTHORIZED, "deny code");
+    assert_eq(verdict_is_allowed(vd), 0,                 "deny not allowed");
+    assert_eq(verdict_is_denied(vd),  1,                 "deny denied");
+
+    test_group("verdict flag");
+    var freason = str_from("anomalous pattern");
+    var vf = verdict_flag(freason);
+    assert_eq(verdict_kind(vf),       VK_FLAG,  "flag kind");
+    assert_eq(verdict_reason(vf),     freason,  "flag reason");
+    assert_eq(verdict_is_allowed(vf), 1,        "flag allowed (passes)");
+    assert_eq(verdict_is_denied(vf),  0,        "flag not denied");
+
+    test_group("verdict kind labels");
+    assert_eq(streq(verdict_kind_as_str(VK_ALLOW), "allow"), 1, "vk allow");
+    assert_eq(streq(verdict_kind_as_str(VK_DENY),  "deny"),  1, "vk deny");
+    assert_eq(streq(verdict_kind_as_str(VK_FLAG),  "flag"),  1, "vk flag");
+
     return assert_summary();
 }
 

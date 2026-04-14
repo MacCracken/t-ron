@@ -1,0 +1,127 @@
+#  gate.cyr  --  core types for tool call checking
+#
+#  Ported from rust-old/src/gate.rs.
+#
+#  Three types: ToolCall (the request), Verdict (tagged union of outcomes),
+#  DenyCode (enum of denial reasons). The Rust version uses serde; here
+#  each struct is a flat heap record with field accessors, and JSON
+#  serialization lives alongside in serialize helpers.
+
+#  ============================================================
+#  DenyCode  --  enum of denial reasons
+#  ============================================================
+
+enum DenyCode {
+    DENY_UNAUTHORIZED        = 0;
+    DENY_RATE_LIMITED        = 1;
+    DENY_INJECTION_DETECTED  = 2;
+    DENY_TOOL_DISABLED       = 3;
+    DENY_ANOMALY_DETECTED    = 4;
+    DENY_PARAMETER_TOO_LARGE = 5;
+}
+
+#  Stable label for JSON-RPC error messages and audit details.
+fn deny_code_as_str(code) {
+    if (code == DENY_UNAUTHORIZED)        { return "unauthorized"; }
+    if (code == DENY_RATE_LIMITED)        { return "rate_limited"; }
+    if (code == DENY_INJECTION_DETECTED)  { return "injection_detected"; }
+    if (code == DENY_TOOL_DISABLED)       { return "tool_disabled"; }
+    if (code == DENY_ANOMALY_DETECTED)    { return "anomaly_detected"; }
+    if (code == DENY_PARAMETER_TOO_LARGE) { return "parameter_too_large"; }
+    return "unknown";
+}
+
+#  ============================================================
+#  ToolCall  --  a tool call awaiting a verdict
+#  ============================================================
+#
+#  Layout (32 bytes):
+#    +0   agent_id   Str pointer
+#    +8   tool_name  Str pointer
+#    +16  params     Str pointer   (JSON text, parsed on demand)
+#    +24  timestamp  i64           (nanos since epoch, chrono)
+
+fn tool_call_new(agent_id, tool_name, params, timestamp) {
+    var c = alloc(32);
+    store64(c,      agent_id);
+    store64(c + 8,  tool_name);
+    store64(c + 16, params);
+    store64(c + 24, timestamp);
+    return c;
+}
+
+fn tool_call_agent_id(c)  { return load64(c); }
+fn tool_call_tool_name(c) { return load64(c + 8); }
+fn tool_call_params(c)    { return load64(c + 16); }
+fn tool_call_timestamp(c) { return load64(c + 24); }
+
+#  ============================================================
+#  VerdictKind  --  coarse outcome for audit storage
+#  ============================================================
+
+enum VerdictKind {
+    VK_ALLOW = 0;
+    VK_DENY  = 1;
+    VK_FLAG  = 2;
+}
+
+fn verdict_kind_as_str(k) {
+    if (k == VK_ALLOW) { return "allow"; }
+    if (k == VK_DENY)  { return "deny"; }
+    if (k == VK_FLAG)  { return "flag"; }
+    return "unknown";
+}
+
+#  ============================================================
+#  Verdict  --  tagged union: Allow | Deny{reason,code} | Flag{reason}
+#  ============================================================
+#
+#  Layout (32 bytes):
+#    +0   kind    i64      VerdictKind
+#    +8   reason  i64      Str pointer (0 for Allow)
+#    +16  code    i64      DenyCode (only meaningful for Deny; 0 otherwise)
+#    +24  _rsv    i64      reserved for future fields
+
+fn verdict_allow() {
+    var v = alloc(32);
+    store64(v,      VK_ALLOW);
+    store64(v + 8,  0);
+    store64(v + 16, 0);
+    store64(v + 24, 0);
+    return v;
+}
+
+fn verdict_deny(reason, code) {
+    var v = alloc(32);
+    store64(v,      VK_DENY);
+    store64(v + 8,  reason);
+    store64(v + 16, code);
+    store64(v + 24, 0);
+    return v;
+}
+
+fn verdict_flag(reason) {
+    var v = alloc(32);
+    store64(v,      VK_FLAG);
+    store64(v + 8,  reason);
+    store64(v + 16, 0);
+    store64(v + 24, 0);
+    return v;
+}
+
+fn verdict_kind(v)   { return load64(v); }
+fn verdict_reason(v) { return load64(v + 8); }
+fn verdict_code(v)   { return load64(v + 16); }
+
+#  Flags are allowed (they pass through, just recorded).
+fn verdict_is_allowed(v) {
+    var k = load64(v);
+    if (k == VK_ALLOW) { return 1; }
+    if (k == VK_FLAG)  { return 1; }
+    return 0;
+}
+
+fn verdict_is_denied(v) {
+    if (load64(v) == VK_DENY) { return 1; }
+    return 0;
+}

@@ -1,0 +1,55 @@
+#  error.cyr  --  t-ron error codes + error struct
+#
+#  Ported from rust-old/src/error.rs (TRonError enum).
+#
+#  Rust enum variants map to TRON_ERR_* integer codes. Error objects
+#  are heap-allocated pairs of {code, message} so callers can carry a
+#  reason string alongside the code without a fallible format step.
+#
+#  Layout (16 bytes):
+#    +0  code     i64   TRON_ERR_* constant
+#    +8  message  i64   C-string pointer (static or alloc'd)
+
+enum TRonErr {
+    TRON_ERR_NONE         = 0;
+    TRON_ERR_POLICY       = 1;
+    TRON_ERR_POLICY_CONFIG = 2;
+    TRON_ERR_AUDIT        = 3;
+    TRON_ERR_SCANNER      = 4;
+    TRON_ERR_SIGNATURE    = 5;
+    TRON_ERR_EXPORT       = 6;
+    TRON_ERR_IO           = 7;
+}
+
+fn tron_error_new(code, msg) {
+    var e = alloc(16);
+    store64(e, code);
+    store64(e + 8, msg);
+    return e;
+}
+
+fn tron_error_code(e) { return load64(e); }
+fn tron_error_msg(e)  { return load64(e + 8); }
+
+#  Stable label for each code (used by audit details and log lines).
+fn tron_error_label(code) {
+    if (code == TRON_ERR_POLICY)        { return "policy"; }
+    if (code == TRON_ERR_POLICY_CONFIG) { return "policy_config"; }
+    if (code == TRON_ERR_AUDIT)         { return "audit"; }
+    if (code == TRON_ERR_SCANNER)       { return "scanner"; }
+    if (code == TRON_ERR_SIGNATURE)     { return "signature"; }
+    if (code == TRON_ERR_EXPORT)        { return "export"; }
+    if (code == TRON_ERR_IO)            { return "io"; }
+    return "none";
+}
+
+#  Print an error as "<label>: <message>" to stderr.
+fn tron_error_print(e) {
+    var lbl = tron_error_label(load64(e));
+    syscall(1, 2, lbl, strlen(lbl));
+    syscall(1, 2, ": ", 2);
+    var m = load64(e + 8);
+    if (m != 0) { syscall(1, 2, m, strlen(m)); }
+    syscall(1, 2, "\n", 1);
+    return 0;
+}
