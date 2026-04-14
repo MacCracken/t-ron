@@ -21,6 +21,7 @@ include "src/gate.cyr"
 include "src/policy.cyr"
 include "src/rate.cyr"
 include "src/scanner.cyr"
+include "src/pattern.cyr"
 
 fn test_errors() {
     test_group("error codes");
@@ -293,6 +294,130 @@ fn test_scanner_json() {
     return 0;
 }
 
+#  Build a ToolCall fixture whose timestamp is `hour:00:00 UTC on 2026-04-01`.
+fn _mk_call(agent, tool, hour) {
+    var base = 1775001600;                #  2026-04-01 00:00:00 UTC
+    var ts_ns = (base + hour * 3600) * 1000000000;
+    return tool_call_new(agent, tool, str_from("{}"), ts_ns);
+}
+
+fn test_pattern_normal() {
+    test_group("pattern no anomaly normal usage");
+    var pa = pattern_analyzer_new();
+    for (var i = 0; i < 10; i = i + 1) {
+        pattern_record(pa, _mk_call("agent-1", "tarang_probe", 10));
+    }
+    assert_eq(pattern_check_anomaly(pa, "agent-1", 10), 0, "no anomaly");
+    assert_eq(pattern_check_anomaly(pa, "nobody",   10), 0, "unknown agent clean");
+    return 0;
+}
+
+fn test_pattern_enumeration() {
+    test_group("pattern tool enumeration");
+    var pa = pattern_analyzer_new();
+    for (var i = 0; i < 20; i = i + 1) {
+        var name = alloc(16);
+        memcpy(name, "tool_", 5);
+        var len = fmt_int_buf(i, name + 5);
+        store8(name + 5 + len, 0);
+        pattern_record(pa, _mk_call("agent-1", name, 10));
+    }
+    var msg = pattern_check_anomaly(pa, "agent-1", 10);
+    assert_eq((msg != 0), 1, "enumeration flagged");
+
+    test_group("pattern enumeration boundary");
+    var pa2 = pattern_analyzer_new();
+    for (var i = 0; i < 14; i = i + 1) {
+        var name = alloc(16);
+        memcpy(name, "tool_", 5);
+        var len = fmt_int_buf(i, name + 5);
+        store8(name + 5 + len, 0);
+        pattern_record(pa2, _mk_call("agent-1", name, 10));
+    }
+    for (var i = 0; i < 6; i = i + 1) {
+        pattern_record(pa2, _mk_call("agent-1", "tool_0", 10));
+    }
+    assert_eq(pattern_check_anomaly(pa2, "agent-1", 10), 0, "14 distinct not flagged");
+    return 0;
+}
+
+fn test_pattern_escalation() {
+    test_group("pattern privilege escalation");
+    var pa = pattern_analyzer_new();
+    pattern_record(pa, _mk_call("agent-1", "tarang_probe",     10));
+    pattern_record(pa, _mk_call("agent-1", "rasa_edit",        10));
+    pattern_record(pa, _mk_call("agent-1", "aegis_scan",       10));
+    pattern_record(pa, _mk_call("agent-1", "phylax_alert",     10));
+    pattern_record(pa, _mk_call("agent-1", "aegis_quarantine", 10));
+    var msg = pattern_check_anomaly(pa, "agent-1", 10);
+    assert_eq((msg != 0), 1, "escalation flagged");
+
+    test_group("pattern pure sensitive no escalation");
+    var pa2 = pattern_analyzer_new();
+    pattern_record(pa2, _mk_call("admin", "aegis_scan",        10));
+    pattern_record(pa2, _mk_call("admin", "aegis_quarantine",  10));
+    pattern_record(pa2, _mk_call("admin", "phylax_alert",      10));
+    pattern_record(pa2, _mk_call("admin", "aegis_report",      10));
+    pattern_record(pa2, _mk_call("admin", "phylax_sweep",      10));
+    assert_eq(pattern_check_anomaly(pa2, "admin", 10), 0, "all-sensitive no flag");
+    return 0;
+}
+
+fn test_pattern_ring_buffer() {
+    test_group("pattern ring buffer overflow");
+    var pa = pattern_analyzer_new();
+    for (var i = 0; i < 110; i = i + 1) {
+        pattern_record(pa, _mk_call("agent-1", "tarang_probe", 10));
+    }
+    var hist = map_get(pattern_history(pa), "agent-1");
+    assert_eq(vec_len(hist), PAT_MAX_HISTORY, "history capped at 100");
+    return 0;
+}
+
+fn test_pattern_time_anomaly() {
+    test_group("pattern time anomaly insufficient history");
+    var pa = pattern_analyzer_new();
+    for (var i = 0; i < 10; i = i + 1) {
+        pattern_record(pa, _mk_call("new-agent", "tarang_probe", 10));
+    }
+    assert_eq(pattern_check_anomaly(pa, "new-agent", 3), 0, "no flag below 50 calls");
+
+    test_group("pattern time anomaly within pattern");
+    var pa2 = pattern_analyzer_new();
+    for (var i = 0; i < 60; i = i + 1) {
+        pattern_record(pa2, _mk_call("agent-1", "tarang_probe", 10));
+    }
+    assert_eq(pattern_check_anomaly(pa2, "agent-1", 10), 0, "no flag in pattern hour");
+
+    test_group("pattern time anomaly off hours");
+    var pa3 = pattern_analyzer_new();
+    for (var h = 9; h < 17; h = h + 1) {
+        for (var i = 0; i < 8; i = i + 1) {
+            pattern_record(pa3, _mk_call("agent-1", "tarang_probe", h));
+        }
+    }
+    var msg = pattern_check_anomaly(pa3, "agent-1", 3);
+    assert_eq((msg != 0), 1, "hour 3 flagged as off-hours");
+    return 0;
+}
+
+fn test_pattern_isolation() {
+    test_group("pattern separate agent histories");
+    var pa = pattern_analyzer_new();
+    for (var i = 0; i < 20; i = i + 1) {
+        var name = alloc(16);
+        memcpy(name, "tool_", 5);
+        var len = fmt_int_buf(i, name + 5);
+        store8(name + 5 + len, 0);
+        pattern_record(pa, _mk_call("agent-a", name, 10));
+    }
+    pattern_record(pa, _mk_call("agent-b", "tarang_probe", 10));
+    var msg_a = pattern_check_anomaly(pa, "agent-a", 10);
+    assert_eq((msg_a != 0), 1, "agent-a flagged");
+    assert_eq(pattern_check_anomaly(pa, "agent-b", 10), 0, "agent-b clean");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_errors();
@@ -309,6 +434,12 @@ fn main() {
     test_scanner_path();
     test_scanner_clean();
     test_scanner_json();
+    test_pattern_normal();
+    test_pattern_enumeration();
+    test_pattern_escalation();
+    test_pattern_ring_buffer();
+    test_pattern_time_anomaly();
+    test_pattern_isolation();
     return assert_summary();
 }
 

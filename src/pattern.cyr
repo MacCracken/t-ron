@@ -1,0 +1,217 @@
+#  pattern.cyr  --  anomaly detection on tool call sequences
+#
+#  Ported from rust-old/src/pattern.rs.
+#
+#  Per-agent state:
+#    * history     -- ring buffer of the last 100 tool names (cstring)
+#    * hour_hist   -- 24-element count array indexed by hour-of-day UTC
+#
+#  Detectors:
+#    1. Tool enumeration     -- 15+ distinct tools in the last 20 calls
+#    2. Privilege escalation -- 3+ of last 5 calls target sensitive tools
+#                               AND at least one benign call mixed in
+#    3. Off-hours activity   -- current hour below 2% of total calls once
+#                               >= 50 calls observed, and agent is not
+#                               already active in all 24 hours
+
+var PAT_MAX_HISTORY              = 100;
+var PAT_MIN_HISTORY_FOR_TIME     = 50;
+var PAT_ACTIVE_HOUR_NUMERATOR    = 2;        #  threshold = total * 2 / 100
+var PAT_ACTIVE_HOUR_DENOMINATOR  = 100;
+
+#  ============================================================
+#  PatternAnalyzer  --  two hashmaps of per-agent state
+#  ============================================================
+#
+#  Layout (16 bytes):
+#    +0   history     hashmap<cstring, vec<cstring>>
+#    +8   hour_hist   hashmap<cstring, i64 ptr to 24 counters>
+
+fn pattern_analyzer_new() {
+    var pa = alloc(16);
+    store64(pa,     map_new());
+    store64(pa + 8, map_new());
+    return pa;
+}
+
+fn pattern_history(pa)  { return load64(pa); }
+fn pattern_hourhist(pa) { return load64(pa + 8); }
+
+#  Fetch-or-create the ring-buffer vec for this agent.
+fn _pat_get_history(pa, agent_id) {
+    var h = load64(pa);
+    if (map_has(h, agent_id) == 1) { return map_get(h, agent_id); }
+    var v = vec_new();
+    map_set(h, agent_id, v);
+    return v;
+}
+
+#  Fetch-or-create the 24-slot histogram for this agent.
+fn _pat_get_histogram(pa, agent_id) {
+    var h = load64(pa + 8);
+    if (map_has(h, agent_id) == 1) { return map_get(h, agent_id); }
+    var hist = alloc(192);
+    memset(hist, 0, 192);
+    map_set(h, agent_id, hist);
+    return hist;
+}
+
+#  Extract UTC hour (0..23) from nanosecond wall timestamp.
+fn _pat_hour_from_ns(ns) {
+    var secs = ns / 1000000000;
+    var d = epoch_to_date(secs);
+    return load64(d + 24);
+}
+
+#  Record a tool call. `call` is a ToolCall pointer (see gate.cyr).
+fn pattern_record(pa, call) {
+    var agent = tool_call_agent_id(call);
+    var tool  = tool_call_tool_name(call);
+
+    var hist = _pat_get_history(pa, agent);
+    vec_push(hist, tool);
+    while (vec_len(hist) > PAT_MAX_HISTORY) { vec_remove(hist, 0); }
+
+    var hh = _pat_get_histogram(pa, agent);
+    var hour = _pat_hour_from_ns(tool_call_timestamp(call));
+    var slot = hh + hour * 8;
+    store64(slot, load64(slot) + 1);
+    return 0;
+}
+
+#  ============================================================
+#  Detector 1: tool enumeration
+#  ============================================================
+
+#  Count distinct cstring values in a vec slice [start..end).
+fn _pat_count_distinct(hist, start, end) {
+    var distinct = 0;
+    var i = start;
+    while (i < end) {
+        var ti = vec_get(hist, i);
+        var seen = 0;
+        var j = start;
+        while (j < i) {
+            if (streq(vec_get(hist, j), ti) == 1) { seen = 1; j = i; }
+            else { j = j + 1; }
+        }
+        if (seen == 0) { distinct = distinct + 1; }
+        i = i + 1;
+    }
+    return distinct;
+}
+
+fn _pat_check_enumeration(hist) {
+    var n = vec_len(hist);
+    if (n < 20) { return 0; }
+    var distinct = _pat_count_distinct(hist, n - 20, n);
+    if (distinct >= 15) { return 1; }
+    return 0;
+}
+
+#  ============================================================
+#  Detector 2: privilege escalation (sensitive burst)
+#  ============================================================
+
+var _pat_sensitive = 0;
+var _pat_sensitive_n = 4;
+
+fn _pat_init_sensitive() {
+    if (_pat_sensitive != 0) { return 0; }
+    var a = alloc(_pat_sensitive_n * 8);
+    store64(a +  0, "aegis_");
+    store64(a +  8, "phylax_");
+    store64(a + 16, "ark_install");
+    store64(a + 24, "ark_remove");
+    _pat_sensitive = a;
+    return 0;
+}
+
+fn _pat_starts_with(s, prefix) {
+    var pn = strlen(prefix);
+    if (strlen(s) < pn) { return 0; }
+    return memeq(s, prefix, pn);
+}
+
+fn _pat_is_sensitive(tool_name) {
+    _pat_init_sensitive();
+    var i = 0;
+    while (i < _pat_sensitive_n) {
+        if (_pat_starts_with(tool_name, load64(_pat_sensitive + i * 8)) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _pat_check_escalation(hist) {
+    var n = vec_len(hist);
+    if (n < 5) { return 0; }
+    var start = n - 5;
+    var sensitive = 0;
+    var i = start;
+    while (i < n) {
+        if (_pat_is_sensitive(vec_get(hist, i)) == 1) { sensitive = sensitive + 1; }
+        i = i + 1;
+    }
+    #  3+ of last 5 sensitive AND at least one non-sensitive (mixed).
+    if (sensitive >= 3 && sensitive < 5) { return 1; }
+    return 0;
+}
+
+#  ============================================================
+#  Detector 3: off-hours activity
+#  ============================================================
+#
+#  threshold = max(1, total * 2 / 100). If the current hour's count is
+#  below threshold, AND the agent has fewer than 24 active hours, flag.
+
+fn _pat_check_time(hist_24, current_hour) {
+    var total = 0;
+    var i = 0;
+    while (i < 24) {
+        total = total + load64(hist_24 + i * 8);
+        i = i + 1;
+    }
+    if (total < PAT_MIN_HISTORY_FOR_TIME) { return 0; }
+
+    var threshold = (total * PAT_ACTIVE_HOUR_NUMERATOR) / PAT_ACTIVE_HOUR_DENOMINATOR;
+    if (threshold < 1) { threshold = 1; }
+
+    var active = 0;
+    i = 0;
+    while (i < 24) {
+        if (load64(hist_24 + i * 8) >= threshold) { active = active + 1; }
+        i = i + 1;
+    }
+    if (active >= 24) { return 0; }                #  active everywhere -- no off-hours
+
+    if (load64(hist_24 + current_hour * 8) < threshold) { return 1; }
+    return 0;
+}
+
+#  ============================================================
+#  Public surface
+#  ============================================================
+
+#  Check for anomalies. Returns a description cstring, or 0 if clean.
+#  `current_hour` is a 0..23 UTC hour for the time-of-day check.
+fn pattern_check_anomaly(pa, agent_id, current_hour) {
+    var h = load64(pa);
+    if (map_has(h, agent_id) == 0) { return 0; }
+    var hist = map_get(h, agent_id);
+
+    if (_pat_check_enumeration(hist) == 1) {
+        return "tool enumeration: 15+ distinct tools in last 20 calls";
+    }
+    if (_pat_check_escalation(hist) == 1) {
+        return "privilege escalation: sensitive tool burst after benign calls";
+    }
+
+    var hh = load64(pa + 8);
+    if (map_has(hh, agent_id) == 1) {
+        if (_pat_check_time(map_get(hh, agent_id), current_hour) == 1) {
+            return "off-hours activity: current hour outside established pattern";
+        }
+    }
+    return 0;
+}
