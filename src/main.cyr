@@ -62,6 +62,7 @@ include "src/llm_scan.cyr"
 include "src/signing.cyr"
 include "src/signal.cyr"
 include "src/crypto_chacha20.cyr"
+include "src/safety.cyr"
 
 fn main() {
     alloc_init();

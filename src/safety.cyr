@@ -1,0 +1,1068 @@
+#  safety.cyr  --  AI safety mechanisms for agent actions
+#
+#  Ported from rust-old/src/safety/{types,injection,guardrails,policy}.rs.
+#  Enforces safety constraints on AGENT behavior: policy-based action
+#  filtering, prompt-injection detection, output validation, rate
+#  limiting, and a per-agent circuit breaker. Complements the t-ron
+#  MCP gate (which focuses on tool-call parameters); safety is about
+#  higher-level action semantics.
+#
+#  Rust API surface:
+#    * types       -> ActionType, SafetySeverity, SafetyEnforcement,
+#                     SafetyRuleType, SafetyRule, SafetyPolicy,
+#                     SafetyVerdict, SafetyViolation, SafetyAction
+#    * injection   -> PromptInjectionDetector, InjectionResult
+#    * guardrails  -> SafetyCircuitBreaker, CircuitState
+#    * policy      -> SafetyEngine, default_policies
+#
+#  Confidence / score values use basis points 0..=1000 (same convention
+#  as the rest of the t-ron port).
+
+#  ============================================================
+#  SafetySeverity  --  enum with weight in basis points
+#  ============================================================
+
+enum SafetySeverity {
+    SS_CRITICAL = 0;
+    SS_HIGH     = 1;
+    SS_MEDIUM   = 2;
+    SS_LOW      = 3;
+}
+
+fn safety_sev_weight_bp(sev) {
+    if (sev == SS_CRITICAL) { return 1000; }
+    if (sev == SS_HIGH)     { return 700; }
+    if (sev == SS_MEDIUM)   { return 400; }
+    if (sev == SS_LOW)      { return 100; }
+    return 0;
+}
+
+fn safety_sev_label(sev) {
+    if (sev == SS_CRITICAL) { return "CRITICAL"; }
+    if (sev == SS_HIGH)     { return "HIGH"; }
+    if (sev == SS_MEDIUM)   { return "MEDIUM"; }
+    if (sev == SS_LOW)      { return "LOW"; }
+    return "UNKNOWN";
+}
+
+#  ============================================================
+#  SafetyEnforcement  --  what the engine does on rule trigger
+#  ============================================================
+
+enum SafetyEnforcement {
+    SE_BLOCK      = 0;
+    SE_WARN       = 1;
+    SE_AUDIT_ONLY = 2;
+}
+
+#  ============================================================
+#  ActionType  --  category of what the agent is trying to do
+#  ============================================================
+
+enum ActionType {
+    AT_FILE_ACCESS          = 0;
+    AT_PROCESS_SPAWN        = 1;
+    AT_NETWORK_REQUEST      = 2;
+    AT_SYSTEM_COMMAND       = 3;
+    AT_DATA_OUTPUT          = 4;
+    AT_PRIVILEGE_ESCALATION = 5;
+}
+
+#  ============================================================
+#  SafetyRuleType  --  tagged kinds, payload in extra fields
+#  ============================================================
+
+enum SafetyRuleType {
+    SRT_RESOURCE_LIMIT     = 0;
+    SRT_FORBIDDEN_ACTION   = 1;
+    SRT_REQUIRE_APPROVAL   = 2;
+    SRT_RATE_LIMIT         = 3;
+    SRT_CONTENT_FILTER     = 4;
+    SRT_SCOPE_RESTRICTION  = 5;
+    SRT_ESCALATION_REQUIRED = 6;
+    SRT_OUTPUT_VALIDATION  = 7;
+}
+
+#  ============================================================
+#  SafetyRule layout (56 bytes)
+#  ============================================================
+#
+#  +0   rule_id       cstring
+#  +8   description   cstring
+#  +16  severity      i64 (SafetySeverity)
+#  +24  rule_type     i64 (SafetyRuleType)
+#  +32  str_param     cstring | 0      (pattern / action_pattern / resource)
+#  +40  int_param     i64              (max_value / max_per_minute / max_length)
+#  +48  vec_param     vec<cstring> | 0 (forbidden_patterns / allowed / denied)
+#
+#  ScopeRestriction uses two vecs; we store `allowed` at +48 and
+#  `denied` at a second slot inside the struct — bump size to 72 bytes.
+
+fn safety_rule_new(rule_id, description, severity, rule_type) {
+    var r = alloc(72);
+    store64(r,      rule_id);
+    store64(r + 8,  description);
+    store64(r + 16, severity);
+    store64(r + 24, rule_type);
+    store64(r + 32, 0);
+    store64(r + 40, 0);
+    store64(r + 48, 0);
+    store64(r + 56, 0);
+    store64(r + 64, 0);
+    return r;
+}
+
+fn safety_rule_id(r)          { return load64(r); }
+fn safety_rule_description(r) { return load64(r + 8); }
+fn safety_rule_severity(r)    { return load64(r + 16); }
+fn safety_rule_type(r)        { return load64(r + 24); }
+fn safety_rule_str(r)         { return load64(r + 32); }
+fn safety_rule_int(r)         { return load64(r + 40); }
+fn safety_rule_vec(r)         { return load64(r + 48); }
+fn safety_rule_vec2(r)        { return load64(r + 56); }
+fn safety_rule_str2(r)        { return load64(r + 64); }
+
+fn safety_rule_set_str(r, s)     { store64(r + 32, s); return r; }
+fn safety_rule_set_int(r, i)     { store64(r + 40, i); return r; }
+fn safety_rule_set_vec(r, v)     { store64(r + 48, v); return r; }
+fn safety_rule_set_vec2(r, v)    { store64(r + 56, v); return r; }
+fn safety_rule_set_str2(r, s)    { store64(r + 64, s); return r; }
+
+#  ============================================================
+#  SafetyPolicy layout (40 bytes)
+#  ============================================================
+#
+#  +0   policy_id     cstring
+#  +8   name          cstring
+#  +16  rules         vec<SafetyRule ptr>
+#  +24  enforcement   i64 (SafetyEnforcement)
+#  +32  priority      i64 (1..=10)
+#  +40  enabled       i64 (0/1)
+
+fn safety_policy_new(policy_id, name, enforcement, priority) {
+    var p = alloc(48);
+    store64(p,      policy_id);
+    store64(p + 8,  name);
+    store64(p + 16, vec_new());
+    store64(p + 24, enforcement);
+    store64(p + 32, priority);
+    store64(p + 40, 1);
+    return p;
+}
+
+fn safety_policy_id(p)          { return load64(p); }
+fn safety_policy_name(p)        { return load64(p + 8); }
+fn safety_policy_rules(p)       { return load64(p + 16); }
+fn safety_policy_enforcement(p) { return load64(p + 24); }
+fn safety_policy_priority(p)    { return load64(p + 32); }
+fn safety_policy_enabled(p)     { return load64(p + 40); }
+
+fn safety_policy_add_rule(p, r) {
+    vec_push(load64(p + 16), r);
+    return p;
+}
+
+fn safety_policy_set_enabled(p, v) { store64(p + 40, v); return p; }
+
+#  ============================================================
+#  SafetyAction layout (24 bytes)
+#  ============================================================
+#
+#  +0   action_type   i64 (ActionType)
+#  +8   target        cstring
+#  +16  parameters    hashmap<cstring, cstring> | 0
+
+fn safety_action_new(action_type, target) {
+    var a = alloc(24);
+    store64(a,      action_type);
+    store64(a + 8,  target);
+    store64(a + 16, 0);
+    return a;
+}
+
+fn safety_action_type(a)   { return load64(a); }
+fn safety_action_target(a) { return load64(a + 8); }
+fn safety_action_params(a) { return load64(a + 16); }
+
+fn safety_action_set_param(a, key, value) {
+    var m = load64(a + 16);
+    if (m == 0) { m = map_new(); store64(a + 16, m); }
+    map_set(m, key, value);
+    return a;
+}
+
+fn safety_action_get_param(a, key) {
+    var m = load64(a + 16);
+    if (m == 0) { return 0; }
+    if (map_has(m, key) == 0) { return 0; }
+    return map_get(m, key);
+}
+
+#  ============================================================
+#  SafetyVerdict  --  outcome of a safety check (tagged)
+#  ============================================================
+#
+#  Tag encoding (i64):
+#    0 = Allowed
+#    1 = Blocked         { reason, rule_id }
+#    2 = RequiresApproval{ reason, rule_id }
+#    3 = RateLimited     { retry_after_secs }
+#    4 = Warning         { message }
+#
+#  Layout (32 bytes):
+#    +0   tag
+#    +8   field1 (reason cstring / message cstring / retry_after i64)
+#    +16  field2 (rule_id cstring)
+#    +24  _rsv
+
+enum SafetyVerdictTag {
+    SV_ALLOWED           = 0;
+    SV_BLOCKED           = 1;
+    SV_REQUIRES_APPROVAL = 2;
+    SV_RATE_LIMITED      = 3;
+    SV_WARNING           = 4;
+}
+
+fn safety_verdict_allowed() {
+    var v = alloc(32);
+    store64(v, SV_ALLOWED);
+    store64(v + 8, 0); store64(v + 16, 0); store64(v + 24, 0);
+    return v;
+}
+
+fn safety_verdict_blocked(reason, rule_id) {
+    var v = alloc(32);
+    store64(v,      SV_BLOCKED);
+    store64(v + 8,  reason);
+    store64(v + 16, rule_id);
+    store64(v + 24, 0);
+    return v;
+}
+
+fn safety_verdict_requires_approval(reason, rule_id) {
+    var v = alloc(32);
+    store64(v,      SV_REQUIRES_APPROVAL);
+    store64(v + 8,  reason);
+    store64(v + 16, rule_id);
+    store64(v + 24, 0);
+    return v;
+}
+
+fn safety_verdict_rate_limited(retry_after_secs) {
+    var v = alloc(32);
+    store64(v,      SV_RATE_LIMITED);
+    store64(v + 8,  retry_after_secs);
+    store64(v + 16, 0);
+    store64(v + 24, 0);
+    return v;
+}
+
+fn safety_verdict_warning(message) {
+    var v = alloc(32);
+    store64(v,      SV_WARNING);
+    store64(v + 8,  message);
+    store64(v + 16, 0);
+    store64(v + 24, 0);
+    return v;
+}
+
+fn safety_verdict_tag(v)     { return load64(v); }
+fn safety_verdict_reason(v)  { return load64(v + 8); }
+fn safety_verdict_rule_id(v) { return load64(v + 16); }
+
+fn safety_verdict_is_allowed(v) {
+    if (load64(v) == SV_ALLOWED) { return 1; }
+    return 0;
+}
+
+fn safety_verdict_is_blocked(v) {
+    if (load64(v) == SV_BLOCKED) { return 1; }
+    return 0;
+}
+
+#  ============================================================
+#  SafetyViolation layout (40 bytes)
+#  ============================================================
+
+fn safety_violation_new(violation_id, agent_id, timestamp_ns, rule_id, action_attempted, verdict, severity) {
+    var v = alloc(56);
+    store64(v,      violation_id);
+    store64(v + 8,  agent_id);
+    store64(v + 16, timestamp_ns);
+    store64(v + 24, rule_id);
+    store64(v + 32, action_attempted);
+    store64(v + 40, verdict);
+    store64(v + 48, severity);
+    return v;
+}
+
+fn safety_violation_id(v)        { return load64(v); }
+fn safety_violation_agent_id(v)  { return load64(v + 8); }
+fn safety_violation_timestamp(v) { return load64(v + 16); }
+fn safety_violation_rule_id(v)   { return load64(v + 24); }
+fn safety_violation_action(v)    { return load64(v + 32); }
+fn safety_violation_verdict(v)   { return load64(v + 40); }
+fn safety_violation_severity(v)  { return load64(v + 48); }
+
+#  ============================================================
+#  PromptInjectionDetector  --  heuristic substring checks
+#  ============================================================
+#
+#  Normalizes input by stripping zero-width / directional-override
+#  Unicode characters before matching. Result carries a basis-point
+#  confidence (0..=1000) and a cstring-list of matched pattern labels.
+
+var SAFETY_INJ_MAX_PATTERNS = 6;
+
+#  InjectionResult layout (24 bytes):
+#    +0   safe            i64 (0/1)
+#    +8   confidence_bp   i64 (0..=1000)
+#    +16  detected        vec<cstring>
+
+fn injection_result_new(safe, confidence_bp, detected) {
+    var r = alloc(24);
+    store64(r,      safe);
+    store64(r + 8,  confidence_bp);
+    store64(r + 16, detected);
+    return r;
+}
+
+fn injection_result_safe(r)       { return load64(r); }
+fn injection_result_confidence(r) { return load64(r + 8); }
+fn injection_result_patterns(r)   { return load64(r + 16); }
+
+#  Normalize: strip null bytes and non-ASCII so zero-width Unicode
+#  (U+200B..U+202E, U+2060..U+2064, U+FEFF, U+FE00..U+FE0F) all drop
+#  out via byte-level filtering. In UTF-8 those codepoints encode as
+#  sequences starting 0xE2 0x80 0x8B+ (3 bytes) or 0xEF 0xBB 0xBF (BOM)
+#  -- rejecting the leading byte drops the whole escape.
+fn injection_normalize(input) {
+    var n = strlen(input);
+    var out = alloc(n + 1);
+    var j = 0;
+    var i = 0;
+    while (i < n) {
+        var c = load8(input + i) & 0xFF;
+        if (c == 0)                  { i = i + 1; }                     #  null
+        elif (c == 0xE2 && i + 2 < n) {                                  #  U+200x..U+206x (3-byte UTF-8)
+            var c2 = load8(input + i + 1) & 0xFF;
+            var c3 = load8(input + i + 2) & 0xFF;
+            if ((c2 == 0x80 && c3 >= 0x8B && c3 <= 0xAE)
+             || (c2 == 0x81 && c3 >= 0xA0 && c3 <= 0xA4)) {
+                i = i + 3;
+            } else {
+                store8(out + j, c); j = j + 1; i = i + 1;
+            }
+        }
+        elif (c == 0xEF && i + 2 < n) {                                  #  U+FExx (BOM + variation selectors)
+            var v2 = load8(input + i + 1) & 0xFF;
+            var v3 = load8(input + i + 2) & 0xFF;
+            if ((v2 == 0xBB && v3 == 0xBF) || (v2 == 0xB8 && v3 >= 0x80 && v3 <= 0x8F)) {
+                i = i + 3;
+            } else {
+                store8(out + j, c); j = j + 1; i = i + 1;
+            }
+        }
+        else {
+            store8(out + j, c); j = j + 1; i = i + 1;
+        }
+    }
+    store8(out + j, 0);
+    return out;
+}
+
+#  Case-insensitive substring search — returns 1 if needle present.
+fn _safety_ci_has(hay, needle) {
+    var hn = strlen(hay);
+    var nn = strlen(needle);
+    if (nn == 0) { return 1; }
+    if (nn > hn) { return 0; }
+    var last = hn - nn;
+    var i = 0;
+    while (i <= last) {
+        if (_sc_ci_memeq(hay, i, needle, nn) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+#  Check for "ignore_previous_instructions" family.
+fn _safety_check_ignore_previous(s) {
+    if (_safety_ci_has(s, "ignore previous instructions") == 1) { return 1; }
+    if (_safety_ci_has(s, "ignore all previous")           == 1) { return 1; }
+    if (_safety_ci_has(s, "disregard previous")            == 1) { return 1; }
+    if (_safety_ci_has(s, "forget previous instructions")  == 1) { return 1; }
+    if (_safety_ci_has(s, "ignore your instructions")      == 1) { return 1; }
+    return 0;
+}
+
+fn _safety_check_system_leak(s) {
+    if (_safety_ci_has(s, "system prompt:")              == 1) { return 1; }
+    if (_safety_ci_has(s, "system message:")             == 1) { return 1; }
+    if (_safety_ci_has(s, "reveal your system prompt")   == 1) { return 1; }
+    if (_safety_ci_has(s, "show me your instructions")   == 1) { return 1; }
+    if (_safety_ci_has(s, "print your system prompt")    == 1) { return 1; }
+    return 0;
+}
+
+fn _safety_check_role_confusion(s) {
+    if (_safety_ci_has(s, "you are now")      == 1) { return 1; }
+    if (_safety_ci_has(s, "act as a")         == 1) { return 1; }
+    if (_safety_ci_has(s, "pretend you are")  == 1) { return 1; }
+    if (_safety_ci_has(s, "roleplay as")      == 1) { return 1; }
+    if (_safety_ci_has(s, "switch to role")   == 1) { return 1; }
+    return 0;
+}
+
+#  Special-character ratio: >40% non-alnum/whitespace/.,?
+fn _safety_check_special_ratio(s) {
+    var n = strlen(s);
+    if (n < 20) { return 0; }
+    var special = 0;
+    var i = 0;
+    while (i < n) {
+        var c = load8(s + i) & 0xFF;
+        var alnum = 0;
+        if (c >= 48 && c <= 57)  { alnum = 1; }
+        if (c >= 65 && c <= 90)  { alnum = 1; }
+        if (c >= 97 && c <= 122) { alnum = 1; }
+        var ws = 0;
+        if (c == 32 || c == 9 || c == 10 || c == 13) { ws = 1; }
+        if (alnum == 0 && ws == 0 && c != 46 && c != 44) { special = special + 1; }
+        i = i + 1;
+    }
+    #  ratio > 0.4 -> special * 10 > n * 4
+    if (special * 10 > n * 4) { return 1; }
+    return 0;
+}
+
+#  Base64 payload heuristic: >85% base64 chars + has `=`
+fn _safety_check_base64(s) {
+    var n = strlen(s);
+    if (n < 40) { return 0; }
+    var b64 = 0;
+    var has_eq = 0;
+    var i = 0;
+    while (i < n) {
+        var c = load8(s + i) & 0xFF;
+        var is64 = 0;
+        if (c >= 48 && c <= 57)  { is64 = 1; }                 #  0-9
+        if (c >= 65 && c <= 90)  { is64 = 1; }                 #  A-Z
+        if (c >= 97 && c <= 122) { is64 = 1; }                 #  a-z
+        if (c == 43 || c == 47 || c == 61)  { is64 = 1; }      #  +  /  =
+        if (c == 61) { has_eq = 1; }
+        if (is64 == 1) { b64 = b64 + 1; }
+        i = i + 1;
+    }
+    #  ratio > 0.85 -> b64 * 100 > n * 85
+    if (has_eq == 1 && b64 * 100 > n * 85) { return 1; }
+    return 0;
+}
+
+fn _safety_check_delimiter(s) {
+    if (_safety_ci_has(s, "```system") == 1) { return 1; }
+    if (_safety_ci_has(s, "---system") == 1) { return 1; }
+    if (_safety_ci_has(s, "[system]")  == 1) { return 1; }
+    return 0;
+}
+
+#  Run all six patterns; return InjectionResult ptr.
+fn injection_detector_check(input) {
+    var norm = injection_normalize(input);
+    var patterns = vec_new();
+
+    if (_safety_check_ignore_previous(norm) == 1) { vec_push(patterns, "ignore_previous_instructions"); }
+    if (_safety_check_system_leak(norm)     == 1) { vec_push(patterns, "system_prompt_leak"); }
+    if (_safety_check_role_confusion(norm)  == 1) { vec_push(patterns, "role_confusion"); }
+    if (_safety_check_special_ratio(norm)   == 1) { vec_push(patterns, "excessive_special_chars"); }
+    if (_safety_check_base64(norm)          == 1) { vec_push(patterns, "base64_payload"); }
+    if (_safety_check_delimiter(norm)       == 1) { vec_push(patterns, "delimiter_injection"); }
+
+    var count = vec_len(patterns);
+    var safe = 0;
+    var conf_bp = 0;
+    if (count == 0) {
+        safe = 1;
+    } else {
+        #  (count * 0.25) clamped to 1.0 -> basis points: count * 250, max 1000
+        conf_bp = count * 250;
+        if (conf_bp > 1000) { conf_bp = 1000; }
+    }
+    return injection_result_new(safe, conf_bp, patterns);
+}
+
+#  ============================================================
+#  SafetyCircuitBreaker  --  per-agent state machine
+#  ============================================================
+#
+#  Layout (48 bytes):
+#    +0   state              i64 (CircuitState)
+#    +8   threshold          i64 (violations to trip)
+#    +16  cooldown_ns        i64 (open -> half_open cooldown)
+#    +24  window_ns          i64 (sliding failure window)
+#    +32  last_failure_ns    i64 (0 = none)
+#    +40  failures           vec<i64 ns timestamps>
+
+enum CircuitState {
+    CS_CLOSED    = 0;
+    CS_OPEN      = 1;
+    CS_HALF_OPEN = 2;
+}
+
+fn circuit_breaker_new(threshold, window_secs, cooldown_secs) {
+    var b = alloc(48);
+    store64(b,      CS_CLOSED);
+    store64(b + 8,  threshold);
+    store64(b + 16, cooldown_secs * 1000000000);
+    store64(b + 24, window_secs * 1000000000);
+    store64(b + 32, 0);
+    store64(b + 40, vec_new());
+    return b;
+}
+
+fn circuit_breaker_state(b)      { return load64(b); }
+fn circuit_breaker_threshold(b)  { return load64(b + 8); }
+
+#  Record a violation; may transition Closed -> Open.
+fn circuit_breaker_record_violation(b) {
+    var now = clock_now_ns();
+    var failures = load64(b + 40);
+    vec_push(failures, now);
+    store64(b + 32, now);
+
+    #  Prune entries older than the window.
+    var cutoff = now - load64(b + 24);
+    var kept = vec_new();
+    var n = vec_len(failures);
+    var i = 0;
+    while (i < n) {
+        var t = vec_get(failures, i);
+        if (t >= cutoff) { vec_push(kept, t); }
+        i = i + 1;
+    }
+    store64(b + 40, kept);
+
+    if (vec_len(kept) >= load64(b + 8)) {
+        store64(b, CS_OPEN);
+    }
+    return 0;
+}
+
+#  Return 1 if the agent is allowed to proceed, 0 if blocked.
+fn circuit_breaker_check_allowed(b) {
+    if (load64(b) == CS_OPEN) {
+        var last = load64(b + 32);
+        var elapsed = clock_now_ns() - last;
+        if (elapsed >= load64(b + 16)) {
+            store64(b, CS_HALF_OPEN);
+        }
+    }
+    var state = load64(b);
+    if (state == CS_CLOSED)    { return 1; }
+    if (state == CS_OPEN)      { return 0; }
+    if (state == CS_HALF_OPEN) {
+        #  One test call; success closes the breaker.
+        store64(b, CS_CLOSED);
+        store64(b + 40, vec_new());
+        return 1;
+    }
+    return 0;
+}
+
+fn circuit_breaker_reset(b) {
+    store64(b,      CS_CLOSED);
+    store64(b + 32, 0);
+    store64(b + 40, vec_new());
+    return 0;
+}
+
+#  ============================================================
+#  SafetyEngine  --  top-level policy evaluator + violation log
+#  ============================================================
+#
+#  Layout (24 bytes):
+#    +0   policies       vec<SafetyPolicy ptr>
+#    +8   violations     vec<SafetyViolation ptr>
+#    +16  rate_buckets   hashmap<"agent::pattern", vec<i64 timestamps>>
+
+fn safety_engine_new() {
+    var e = alloc(24);
+    store64(e,      vec_new());
+    store64(e + 8,  vec_new());
+    store64(e + 16, map_new());
+    return e;
+}
+
+fn safety_engine_policies(e)   { return load64(e); }
+fn safety_engine_violations(e) { return load64(e + 8); }
+
+fn safety_engine_add_policy(e, policy) {
+    vec_push(load64(e), policy);
+    return 0;
+}
+
+fn safety_engine_remove_policy(e, policy_id) {
+    var ps = load64(e);
+    var n = vec_len(ps);
+    var kept = vec_new();
+    var i = 0;
+    var removed = 0;
+    while (i < n) {
+        var p = vec_get(ps, i);
+        if (streq(safety_policy_id(p), policy_id) == 1) { removed = 1; }
+        else { vec_push(kept, p); }
+        i = i + 1;
+    }
+    store64(e, kept);
+    return removed;
+}
+
+fn safety_engine_get_policy(e, policy_id) {
+    var ps = load64(e);
+    var n = vec_len(ps);
+    var i = 0;
+    while (i < n) {
+        var p = vec_get(ps, i);
+        if (streq(safety_policy_id(p), policy_id) == 1) { return p; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+#  Check if an action's target contains `pat` (case-insensitive).
+fn _safety_target_matches(action, pat) {
+    return _safety_ci_has(safety_action_target(action), pat);
+}
+
+#  Build bucket key "agent::pattern" as a cstring.
+fn _safety_rate_key(agent_id, pattern) {
+    var alen = strlen(agent_id);
+    var plen = strlen(pattern);
+    var buf = alloc(alen + 2 + plen + 1);
+    memcpy(buf, agent_id, alen);
+    store8(buf + alen, 0x3a); store8(buf + alen + 1, 0x3a);
+    memcpy(buf + alen + 2, pattern, plen);
+    store8(buf + alen + 2 + plen, 0);
+    return buf;
+}
+
+#  Count hits within the last 60 seconds for (agent, pattern); returns count.
+fn _safety_rate_record(e, agent_id, pattern) {
+    var m = load64(e + 16);
+    var key = _safety_rate_key(agent_id, pattern);
+    var bucket = 0;
+    if (map_has(m, key) == 1) { bucket = map_get(m, key); }
+    else { bucket = vec_new(); map_set(m, key, bucket); }
+
+    var now = clock_now_ns();
+    var cutoff = now - 60000000000;
+    var kept = vec_new();
+    var n = vec_len(bucket);
+    var i = 0;
+    while (i < n) {
+        var t = vec_get(bucket, i);
+        if (t >= cutoff) { vec_push(kept, t); }
+        i = i + 1;
+    }
+    vec_push(kept, now);
+    map_set(m, key, kept);
+    return vec_len(kept);
+}
+
+#  Evaluate a single rule against an action; returns verdict ptr or 0 if
+#  the rule did not trigger.
+fn safety_evaluate_rule(e, agent_id, action, rule) {
+    var rt = safety_rule_type(rule);
+
+    if (rt == SRT_FORBIDDEN_ACTION) {
+        if (_safety_target_matches(action, safety_rule_str(rule)) == 1) {
+            var reason = _safety_concat("Forbidden action pattern matched: ", safety_rule_str(rule));
+            return safety_verdict_blocked(reason, safety_rule_id(rule));
+        }
+        return 0;
+    }
+
+    if (rt == SRT_REQUIRE_APPROVAL) {
+        if (_safety_target_matches(action, safety_rule_str(rule)) == 1) {
+            var reason = _safety_concat("Action requires human approval: ", safety_rule_str(rule));
+            return safety_verdict_requires_approval(reason, safety_rule_id(rule));
+        }
+        return 0;
+    }
+
+    if (rt == SRT_RATE_LIMIT) {
+        if (_safety_target_matches(action, safety_rule_str(rule)) == 1) {
+            var count = _safety_rate_record(e, agent_id, safety_rule_str(rule));
+            if (count > safety_rule_int(rule)) {
+                return safety_verdict_rate_limited(60);
+            }
+        }
+        return 0;
+    }
+
+    if (rt == SRT_SCOPE_RESTRICTION) {
+        if (safety_action_type(action) == AT_FILE_ACCESS) {
+            var denied = safety_rule_vec2(rule);
+            if (denied != 0) {
+                var dn = vec_len(denied);
+                var i = 0;
+                while (i < dn) {
+                    var dp = vec_get(denied, i);
+                    if (_starts_with_cstr(safety_action_target(action), dp) == 1) {
+                        var reason = _safety_concat("Path denied by scope restriction: ", dp);
+                        return safety_verdict_blocked(reason, safety_rule_id(rule));
+                    }
+                    i = i + 1;
+                }
+            }
+            var allowed = safety_rule_vec(rule);
+            if (allowed != 0 && vec_len(allowed) > 0) {
+                var an = vec_len(allowed);
+                var j = 0;
+                var ok = 0;
+                while (j < an) {
+                    if (_starts_with_cstr(safety_action_target(action), vec_get(allowed, j)) == 1) {
+                        ok = 1; j = an;
+                    } else {
+                        j = j + 1;
+                    }
+                }
+                if (ok == 0) {
+                    return safety_verdict_blocked("Path not in allowed scope", safety_rule_id(rule));
+                }
+            }
+        }
+        return 0;
+    }
+
+    if (rt == SRT_ESCALATION_REQUIRED) {
+        if (safety_action_type(action) == AT_PRIVILEGE_ESCALATION) {
+            var from_p = safety_action_get_param(action, "from_level");
+            var to_p   = safety_action_get_param(action, "to_level");
+            if (from_p != 0 && to_p != 0
+             && streq(from_p, safety_rule_str(rule))  == 1
+             && streq(to_p,   safety_rule_str2(rule)) == 1) {
+                var reason = _safety_format_escalation(safety_rule_str(rule), safety_rule_str2(rule));
+                return safety_verdict_requires_approval(reason, safety_rule_id(rule));
+            }
+        }
+        return 0;
+    }
+
+    if (rt == SRT_RESOURCE_LIMIT) {
+        var resource = safety_rule_str(rule);
+        var val_s = safety_action_get_param(action, resource);
+        if (val_s != 0) {
+            var val = atoi(val_s);
+            if (val > safety_rule_int(rule)) {
+                var reason = _safety_format_resource(resource, val, safety_rule_int(rule));
+                return safety_verdict_blocked(reason, safety_rule_id(rule));
+            }
+        }
+        return 0;
+    }
+
+    if (rt == SRT_CONTENT_FILTER) {
+        var pats = safety_rule_vec(rule);
+        if (pats != 0) {
+            var cn = vec_len(pats);
+            var k = 0;
+            while (k < cn) {
+                var pat = vec_get(pats, k);
+                if (_safety_target_matches(action, pat) == 1) {
+                    var reason = _safety_concat("Content filter matched: ", pat);
+                    return safety_verdict_blocked(reason, safety_rule_id(rule));
+                }
+                k = k + 1;
+            }
+        }
+        return 0;
+    }
+
+    #  OUTPUT_VALIDATION is handled by safety_engine_check_output.
+    return 0;
+}
+
+#  Evaluate an action against all active policies, highest priority first.
+fn safety_engine_check_action(e, agent_id, action) {
+    var ps = load64(e);
+    var n = vec_len(ps);
+    var order = alloc(n * 8);
+    var i = 0;
+    while (i < n) { store64(order + i * 8, i); i = i + 1; }
+    #  Simple insertion sort by descending priority.
+    i = 1;
+    while (i < n) {
+        var key = load64(order + i * 8);
+        var kprio = safety_policy_priority(vec_get(ps, key));
+        var j = i - 1;
+        var done = 0;
+        while (j >= 0 && done == 0) {
+            var idx = load64(order + j * 8);
+            if (safety_policy_priority(vec_get(ps, idx)) < kprio) {
+                store64(order + (j + 1) * 8, idx);
+                j = j - 1;
+            } else {
+                done = 1;
+            }
+        }
+        store64(order + (j + 1) * 8, key);
+        i = i + 1;
+    }
+
+    var warning = 0;
+    var o = 0;
+    while (o < n) {
+        var pi = load64(order + o * 8);
+        var policy = vec_get(ps, pi);
+        if (safety_policy_enabled(policy) == 1) {
+            var rules = safety_policy_rules(policy);
+            var rn = vec_len(rules);
+            var r = 0;
+            while (r < rn) {
+                var rule = vec_get(rules, r);
+                var verdict = safety_evaluate_rule(e, agent_id, action, rule);
+                if (verdict != 0) {
+                    var enf = safety_policy_enforcement(policy);
+                    if (enf == SE_BLOCK) { return verdict; }
+                    if (enf == SE_WARN && warning == 0) {
+                        var msg = _safety_format_warn(safety_rule_id(rule), safety_rule_description(rule));
+                        warning = safety_verdict_warning(msg);
+                    }
+                }
+                r = r + 1;
+            }
+        }
+        o = o + 1;
+    }
+    if (warning != 0) { return warning; }
+    return safety_verdict_allowed();
+}
+
+#  Check output (text) against content-filter + output-validation rules.
+fn safety_engine_check_output(e, agent_id, output) {
+    var ps = load64(e);
+    var n = vec_len(ps);
+    var warning = 0;
+    var olen = strlen(output);
+    var o = 0;
+    while (o < n) {
+        var policy = vec_get(ps, o);
+        if (safety_policy_enabled(policy) == 1) {
+            var rules = safety_policy_rules(policy);
+            var rn = vec_len(rules);
+            var r = 0;
+            while (r < rn) {
+                var rule = vec_get(rules, r);
+                var rt = safety_rule_type(rule);
+                var triggered = 0;
+                if (rt == SRT_CONTENT_FILTER) {
+                    var pats = safety_rule_vec(rule);
+                    if (pats != 0) {
+                        var cn = vec_len(pats);
+                        var k = 0;
+                        while (k < cn) {
+                            if (_safety_ci_has(output, vec_get(pats, k)) == 1) { triggered = 1; k = cn; }
+                            else { k = k + 1; }
+                        }
+                    }
+                }
+                elif (rt == SRT_OUTPUT_VALIDATION) {
+                    if (olen > safety_rule_int(rule)) { triggered = 1; }
+                }
+                if (triggered == 1) {
+                    var enf = safety_policy_enforcement(policy);
+                    var reason = _safety_concat("Output violates rule: ", safety_rule_description(rule));
+                    if (enf == SE_BLOCK) {
+                        return safety_verdict_blocked(reason, safety_rule_id(rule));
+                    }
+                    if (enf == SE_WARN && warning == 0) {
+                        var msg = _safety_format_warn(safety_rule_id(rule), safety_rule_description(rule));
+                        warning = safety_verdict_warning(msg);
+                    }
+                }
+                r = r + 1;
+            }
+        }
+        o = o + 1;
+    }
+    if (warning != 0) { return warning; }
+    return safety_verdict_allowed();
+}
+
+fn safety_engine_record_violation(e, v) {
+    vec_push(load64(e + 8), v);
+    return 0;
+}
+
+fn safety_engine_violations_for_agent(e, agent_id) {
+    var out = vec_new();
+    var vs = load64(e + 8);
+    var n = vec_len(vs);
+    var i = 0;
+    while (i < n) {
+        var v = vec_get(vs, i);
+        if (streq(safety_violation_agent_id(v), agent_id) == 1) { vec_push(out, v); }
+        i = i + 1;
+    }
+    return out;
+}
+
+#  Agent safety score in basis points (1000 = clean, 0 = dangerous).
+#  Each violation subtracts (severity_weight_bp / 10).
+fn safety_engine_agent_score_bp(e, agent_id) {
+    var vs = safety_engine_violations_for_agent(e, agent_id);
+    var n = vec_len(vs);
+    var penalty = 0;
+    var i = 0;
+    while (i < n) {
+        penalty = penalty + safety_sev_weight_bp(safety_violation_severity(vec_get(vs, i))) / 10;
+        i = i + 1;
+    }
+    var score = 1000 - penalty;
+    if (score < 0) { score = 0; }
+    if (score > 1000) { score = 1000; }
+    return score;
+}
+
+#  ============================================================
+#  String helpers
+#  ============================================================
+
+fn _starts_with_cstr(s, prefix) {
+    var pn = strlen(prefix);
+    if (strlen(s) < pn) { return 0; }
+    return memeq(s, prefix, pn);
+}
+
+fn _safety_concat(prefix, suffix) {
+    var pn = strlen(prefix);
+    var sn = strlen(suffix);
+    var buf = alloc(pn + sn + 1);
+    memcpy(buf, prefix, pn);
+    memcpy(buf + pn, suffix, sn);
+    store8(buf + pn + sn, 0);
+    return buf;
+}
+
+fn _safety_format_warn(rule_id, description) {
+    var idn = strlen(rule_id);
+    var dn  = strlen(description);
+    var buf = alloc(idn + dn + 32);
+    var off = 0;
+    memcpy(buf + off, "Rule ", 5); off = off + 5;
+    memcpy(buf + off, rule_id, idn); off = off + idn;
+    memcpy(buf + off, " triggered (warn): ", 19); off = off + 19;
+    memcpy(buf + off, description, dn); off = off + dn;
+    store8(buf + off, 0);
+    return buf;
+}
+
+fn _safety_format_escalation(from_level, to_level) {
+    var fn_ = strlen(from_level);
+    var tn  = strlen(to_level);
+    var buf = alloc(fn_ + tn + 64);
+    var off = 0;
+    memcpy(buf + off, "Privilege escalation from ", 26); off = off + 26;
+    memcpy(buf + off, from_level, fn_); off = off + fn_;
+    memcpy(buf + off, " to ", 4); off = off + 4;
+    memcpy(buf + off, to_level, tn); off = off + tn;
+    memcpy(buf + off, " requires approval", 18); off = off + 18;
+    store8(buf + off, 0);
+    return buf;
+}
+
+fn _safety_format_resource(resource, val, max_val) {
+    var rn = strlen(resource);
+    var buf = alloc(rn + 96);
+    var off = 0;
+    memcpy(buf + off, "Resource ", 9); off = off + 9;
+    memcpy(buf + off, resource, rn); off = off + rn;
+    memcpy(buf + off, " exceeds limit: ", 16); off = off + 16;
+    var nb = alloc(24); var nl = fmt_int_buf(val, nb);
+    memcpy(buf + off, nb, nl); off = off + nl;
+    memcpy(buf + off, " > ", 3); off = off + 3;
+    var mb = alloc(24); var ml = fmt_int_buf(max_val, mb);
+    memcpy(buf + off, mb, ml); off = off + ml;
+    store8(buf + off, 0);
+    return buf;
+}
+
+#  ============================================================
+#  Default policies for AGNOS
+#  ============================================================
+
+fn _safety_mk_forbidden_rule(rule_id, description, pattern, severity) {
+    var r = safety_rule_new(rule_id, description, severity, SRT_FORBIDDEN_ACTION);
+    safety_rule_set_str(r, pattern);
+    return r;
+}
+
+fn _safety_mk_rate_rule(rule_id, description, pattern, max_per_minute, severity) {
+    var r = safety_rule_new(rule_id, description, severity, SRT_RATE_LIMIT);
+    safety_rule_set_str(r, pattern);
+    safety_rule_set_int(r, max_per_minute);
+    return r;
+}
+
+fn _safety_mk_content_rule(rule_id, description, patterns, severity) {
+    var r = safety_rule_new(rule_id, description, severity, SRT_CONTENT_FILTER);
+    safety_rule_set_vec(r, patterns);
+    return r;
+}
+
+fn _safety_mk_scope_rule(rule_id, description, allowed_paths, denied_paths, severity) {
+    var r = safety_rule_new(rule_id, description, severity, SRT_SCOPE_RESTRICTION);
+    safety_rule_set_vec(r, allowed_paths);
+    safety_rule_set_vec2(r, denied_paths);
+    return r;
+}
+
+fn _safety_mk_escalation_rule(rule_id, description, from_level, to_level, severity) {
+    var r = safety_rule_new(rule_id, description, severity, SRT_ESCALATION_REQUIRED);
+    safety_rule_set_str(r, from_level);
+    safety_rule_set_str2(r, to_level);
+    return r;
+}
+
+#  Build a sensible set of default AGNOS safety policies. Returns a
+#  vec<SafetyPolicy ptr>.
+fn safety_default_policies() {
+    var out = vec_new();
+
+    var p1 = safety_policy_new("default-forbidden", "Default Forbidden Actions", SE_BLOCK, 10);
+    safety_policy_add_rule(p1, _safety_mk_forbidden_rule("forbid-rm-rf",    "Block recursive root deletion", "rm -rf /",       SS_CRITICAL));
+    safety_policy_add_rule(p1, _safety_mk_forbidden_rule("forbid-mkfs",     "Block filesystem formatting",   "mkfs",           SS_CRITICAL));
+    safety_policy_add_rule(p1, _safety_mk_forbidden_rule("forbid-dd-zero",  "Block disk zeroing",            "dd if=/dev/zero",SS_CRITICAL));
+    vec_push(out, p1);
+
+    var p2 = safety_policy_new("default-escalation", "Default Privilege Escalation", SE_BLOCK, 9);
+    safety_policy_add_rule(p2, _safety_mk_escalation_rule("escalation-user-root",
+        "Require approval for user-to-root escalation", "user", "root", SS_HIGH));
+    vec_push(out, p2);
+
+    var p3 = safety_policy_new("default-rate-limit", "Default Rate Limits", SE_BLOCK, 7);
+    safety_policy_add_rule(p3, _safety_mk_rate_rule("rate-system-cmd",
+        "Limit system commands to 60 per minute", "system", 60, SS_MEDIUM));
+    vec_push(out, p3);
+
+    var content_pats = vec_new();
+    vec_push(content_pats, "DROP TABLE");
+    vec_push(content_pats, "DELETE FROM");
+    vec_push(content_pats, "FORMAT C:");
+    vec_push(content_pats, ":(){ :|:& };:");
+    var p4 = safety_policy_new("default-content-filter", "Default Content Filter", SE_BLOCK, 8);
+    safety_policy_add_rule(p4, _safety_mk_content_rule("content-harmful",
+        "Block common harmful output patterns", content_pats, SS_HIGH));
+    vec_push(out, p4);
+
+    var denied = vec_new();
+    vec_push(denied, "/etc/shadow");
+    vec_push(denied, "/etc/passwd");
+    var p5 = safety_policy_new("default-scope", "Default Scope Restrictions", SE_BLOCK, 10);
+    safety_policy_add_rule(p5, _safety_mk_scope_rule("scope-sensitive-files",
+        "Deny write access to sensitive system files", vec_new(), denied, SS_CRITICAL));
+    vec_push(out, p5);
+
+    return out;
+}

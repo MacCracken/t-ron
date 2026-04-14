@@ -6,6 +6,14 @@ All notable changes to t-ron are documented here. This project follows
 ## [1.0.0] — 2026-04-14
 
 ### Added (post-audit)
+- `src/safety.cyr` — full AI safety submodule (800 LOC, ported from `rust-old/src/safety/`):
+  - Types: `SafetySeverity`, `SafetyEnforcement`, `ActionType`, `SafetyRuleType`, `SafetyRule`, `SafetyPolicy`, `SafetyAction`, `SafetyVerdict` (tagged), `SafetyViolation`
+  - `PromptInjectionDetector` with 6 heuristic patterns (ignore-previous, system-leak, role-confusion, excessive-special-chars, base64-payload, delimiter-injection) and Unicode zero-width / directional-override normalization
+  - `SafetyCircuitBreaker` with sliding-window failure counting and Closed → Open → HalfOpen state machine
+  - `SafetyEngine` with priority-ordered policy evaluation, rate-limit buckets, output-content filtering, and per-agent basis-point safety score
+  - `safety_default_policies()` — AGNOS default kit: forbidden actions, privilege escalation, rate limits, content filter, scope restrictions (5 policies, 8 rules)
+- `tests/t-ron-safety.tcyr` — 21-test suite covering severity weights, verdict tags, all 6 injection patterns, circuit-breaker state transitions, policy CRUD, and each rule-type trigger path. **48 assertions, 0 failures.**
+
 - `src/llm_scan.cyr` — optional LLM-assisted prompt injection detection targeting hoosh's HTTP `/infer` endpoint. Self-contained (uses stdlib `net.cyr`), basis-point confidence threshold, markdown-wrapped JSON tolerance, escape-aware body builder. 9 parser tests.
 - `src/signing.cyr` — Ed25519 policy signature verification via sigil. `PolicyVerifier` holds trusted public keys; detached `.sig` files alongside the policy; `tron_verify_and_load_policy` gates the existing load path. 6 tests cover valid roundtrip, tampered content, wrong key, missing sig, empty keyring, and end-to-end pipeline integration.
 - `src/signal.cyr` — SIGHUP policy hot-reload via non-blocking `signalfd`. Consumer-polled API (`sighup_init` / `sighup_drain_and_reload` / `sighup_close`) so t-ron integrates into any event loop. `tron_load_policy_file` + `tron_reload_policy` round out the file-backed policy path. Live SIGHUP-delivery test confirms roundtrip.

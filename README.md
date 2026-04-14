@@ -141,10 +141,10 @@ Cyrius 4.5.0, x86_64, 2026-04-14 (see `bench-history.csv` for full history):
 ## Roadmap
 
 ### Pending
-- [ ] `safety/` — AI guardrails submodule (5 modules, ~1 500 LOC from rust-old)
 - [ ] description-hash pinning in bote registry (audit follow-up F1)
 
 ### Recently landed
+- `src/safety.cyr` — AI safety submodule: severity/enforcement enums, 6-pattern prompt injection detector (with Unicode zero-width normalization), per-agent circuit breaker (closed/open/half-open sliding window), policy engine with 7 rule types (ForbiddenAction, RequireApproval, RateLimit, ContentFilter, ScopeRestriction, EscalationRequired, ResourceLimit, OutputValidation), 5 default AGNOS policies
 - `src/signal.cyr` — SIGHUP hot-reload via signalfd (non-blocking, consumer-polled). `tron_load_policy_file` + `tron_reload_policy` plumbing.
 - `src/crypto_chacha20.cyr` — RFC 7539 ChaCha20 stream cipher, verified against the standard test vector
 - `audit_export_json` + `audit_export_encrypted` / `audit_decrypt_export` — operational JSON dump and ChaCha20 + Ed25519 AEAD envelope (Ed25519 replaces Poly1305 to reuse sigil's constant-time impl)
