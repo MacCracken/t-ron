@@ -1,0 +1,217 @@
+#  tools.cyr  --  t-ron's MCP tool definitions and handlers
+#
+#  Ported from rust-old/src/tools.rs. Four tools for the T.Ron personality
+#  in SecureYeoman to query security state:
+#
+#    tron_status   overall security summary
+#    tron_risk     per-agent risk score
+#    tron_audit    recent audit events
+#    tron_policy   reload policy from a TOML string
+#
+#  Bote handlers have the signature `fn(args_cstr) -> result_cstr` — a single
+#  function pointer with one JSON-literal input. Because there's no captured
+#  state on the handler, the TRon instance is kept in a module-level global
+#  that `tools_bind(tron)` installs before the dispatcher is invoked.
+
+var _tools_tron = 0;
+
+fn tools_bind(tron) {
+    _tools_tron = tron;
+    return 0;
+}
+
+#  ============================================================
+#  Tool definitions for registry
+#  ============================================================
+#
+#  Returns a vec of ToolDef pointers that callers register alongside
+#  their application tools in a `ToolRegistry` before constructing the
+#  bote Dispatcher.
+
+fn tron_tool_defs() {
+    var defs = vec_new();
+    vec_push(defs, _tron_status_def());
+    vec_push(defs, _tron_risk_def());
+    vec_push(defs, _tron_audit_def());
+    vec_push(defs, _tron_policy_def());
+    return defs;
+}
+
+fn _tron_status_def() {
+    return tool_def_new(
+        "tron_status",
+        "Get overall security status: total events, denials, and system health.",
+        schema_new(str_from("object"), vec_new(), vec_new()));
+}
+
+fn _tron_risk_def() {
+    var props = vec_new();
+    vec_push(props, schema_prop_new(
+        str_from("agent_id"),
+        str_from("{\"type\":\"string\",\"description\":\"Agent to score\"}")));
+    var required = vec_new();
+    vec_push(required, str_from("agent_id"));
+    return tool_def_new(
+        "tron_risk",
+        "Get risk score for an agent (0.0 = trusted, 1.0 = hostile). Requires agent_id.",
+        schema_new(str_from("object"), props, required));
+}
+
+fn _tron_audit_def() {
+    var props = vec_new();
+    vec_push(props, schema_prop_new(
+        str_from("agent_id"),
+        str_from("{\"type\":\"string\",\"description\":\"Filter by agent\"}")));
+    vec_push(props, schema_prop_new(
+        str_from("limit"),
+        str_from("{\"type\":\"integer\",\"description\":\"Max events to return\",\"default\":20}")));
+    return tool_def_new(
+        "tron_audit",
+        "Get recent security events. Optional agent_id filter and limit (default 20).",
+        schema_new(str_from("object"), props, vec_new()));
+}
+
+fn _tron_policy_def() {
+    var props = vec_new();
+    vec_push(props, schema_prop_new(
+        str_from("toml"),
+        str_from("{\"type\":\"string\",\"description\":\"Policy TOML content\"}")));
+    var required = vec_new();
+    vec_push(required, str_from("toml"));
+    return tool_def_new(
+        "tron_policy",
+        "Load or reload policy from a TOML string.",
+        schema_new(str_from("object"), props, required));
+}
+
+#  ============================================================
+#  Bote-shaped result helper: wrap a text payload as MCP content[]
+#  ============================================================
+#
+#  Returns {"content":[{"type":"text","text":"<escaped-json-or-text>"}]}.
+#  For an error response, also set "isError":true.
+
+fn _tron_result_text(text, is_error) {
+    var tl = strlen(text);
+    var buf = alloc(tl + 96);
+    var off = 0;
+    memcpy(buf + off, "{\"content\":[{\"type\":\"text\",\"text\":", 34); off = off + 34;
+    memcpy(buf + off, text, tl); off = off + tl;
+    memcpy(buf + off, "}]", 2); off = off + 2;
+    if (is_error == 1) {
+        memcpy(buf + off, ",\"isError\":true", 15); off = off + 15;
+    }
+    memcpy(buf + off, "}", 1); off = off + 1;
+    store8(buf + off, 0);
+    return buf;
+}
+
+#  ============================================================
+#  Handlers
+#  ============================================================
+
+fn tron_status_handler(args) {
+    var audit = tron_audit(_tools_tron);
+    var total   = query_total_events(audit);
+    var denials = query_total_denials(audit);
+
+    #  Build "{\"total_events\":N,\"total_denials\":M,...}"
+    var buf = alloc(256);
+    var off = 0;
+    memcpy(buf + off, "\"{\\\"total_events\\\":", 19); off = off + 19;
+    var nb = alloc(24);
+    var nl = fmt_int_buf(total, nb);
+    memcpy(buf + off, nb, nl); off = off + nl;
+    memcpy(buf + off, ",\\\"total_denials\\\":", 19); off = off + 19;
+    var db = alloc(24);
+    var dl = fmt_int_buf(denials, db);
+    memcpy(buf + off, db, dl); off = off + dl;
+    memcpy(buf + off, ",\\\"status\\\":\\\"", 14); off = off + 14;
+    if (denials == 0) { memcpy(buf + off, "clean", 5); off = off + 5; }
+    else              { memcpy(buf + off, "active", 6); off = off + 6; }
+    memcpy(buf + off, "\\\"}\"", 4); off = off + 4;
+    store8(buf + off, 0);
+    return _tron_result_text(buf, 0);
+}
+
+fn tron_risk_handler(args) {
+    var audit = tron_audit(_tools_tron);
+    var agent_id = jsonx_get_str(args, "agent_id");
+    if (agent_id == 0) { agent_id = ""; }
+    var score_bp = query_agent_risk_score(audit, agent_id);
+
+    var buf = alloc(256);
+    var off = 0;
+    memcpy(buf + off, "\"{\\\"agent_id\\\":\\\"", 17); off = off + 17;
+    memcpy(buf + off, agent_id, strlen(agent_id)); off = off + strlen(agent_id);
+    memcpy(buf + off, "\\\",\\\"risk_score_bp\\\":", 21); off = off + 21;
+    var nb = alloc(24);
+    var nl = fmt_int_buf(score_bp, nb);
+    memcpy(buf + off, nb, nl); off = off + nl;
+    memcpy(buf + off, ",\\\"risk_level\\\":\\\"", 18); off = off + 18;
+    var level = _tron_risk_level(score_bp);
+    memcpy(buf + off, level, strlen(level)); off = off + strlen(level);
+    memcpy(buf + off, "\\\"}\"", 4); off = off + 4;
+    store8(buf + off, 0);
+    return _tron_result_text(buf, 0);
+}
+
+fn _tron_risk_level(score_bp) {
+    if (score_bp >= 800) { return "critical"; }
+    if (score_bp >= 500) { return "high"; }
+    if (score_bp >= 200) { return "medium"; }
+    return "low";
+}
+
+fn tron_audit_handler(args) {
+    #  `limit` defaults to 20, capped at 1000 as in Rust.
+    var limit = 20;
+    var limit_raw = jsonx_get_raw(args, "limit");
+    if (limit_raw != 0) { limit = atoi(limit_raw); }
+    if (limit < 1)      { limit = 1; }
+    if (limit > 1000)   { limit = 1000; }
+
+    var audit = tron_audit(_tools_tron);
+    var agent_id = jsonx_get_str(args, "agent_id");
+    var events = 0;
+    if (agent_id != 0) { events = query_agent_audit(audit, agent_id, limit); }
+    else               { events = query_recent_events(audit, limit); }
+
+    return _tron_result_text(_tron_events_to_json(events), 0);
+}
+
+#  Emit a JSON array of events: [{"agent_id":"...","tool_name":"...","verdict":"allow|deny|flag"},...]
+fn _tron_events_to_json(events) {
+    var n = vec_len(events);
+    var buf = alloc(n * 160 + 32);
+    var off = 0;
+    memcpy(buf + off, "\"[", 2); off = off + 2;
+    var i = 0;
+    while (i < n) {
+        if (i > 0) { memcpy(buf + off, ",", 1); off = off + 1; }
+        var e = vec_get(events, i);
+        var agent = security_event_agent_id(e);
+        var tool  = security_event_tool_name(e);
+        var kind  = verdict_kind_as_str(security_event_kind(e));
+        memcpy(buf + off, "{\\\"agent_id\\\":\\\"", 16); off = off + 16;
+        memcpy(buf + off, agent, strlen(agent));     off = off + strlen(agent);
+        memcpy(buf + off, "\\\",\\\"tool_name\\\":\\\"", 19); off = off + 19;
+        memcpy(buf + off, tool, strlen(tool));        off = off + strlen(tool);
+        memcpy(buf + off, "\\\",\\\"verdict\\\":\\\"", 17); off = off + 17;
+        memcpy(buf + off, kind, strlen(kind));        off = off + strlen(kind);
+        memcpy(buf + off, "\\\"}", 3);                 off = off + 3;
+        i = i + 1;
+    }
+    memcpy(buf + off, "]\"", 2); off = off + 2;
+    store8(buf + off, 0);
+    return buf;
+}
+
+fn tron_policy_handler(args) {
+    var toml_str = jsonx_get_str(args, "toml");
+    if (toml_str == 0) { return _tron_result_text("\"policy error: missing toml argument\"", 1); }
+    if (strlen(toml_str) == 0) { return _tron_result_text("\"policy error: empty toml argument\"", 1); }
+    var rc = tron_load_policy(_tools_tron, toml_str);
+    if (rc != TRON_ERR_NONE) { return _tron_result_text("\"policy error: parse failed\"", 1); }
+    return _tron_result_text("\"policy reloaded successfully\"", 0);
+}

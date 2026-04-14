@@ -15,6 +15,31 @@ include "lib/fnptr.cyr"
 include "lib/hashmap.cyr"
 include "lib/regex.cyr"
 include "lib/chrono.cyr"
+include "lib/freelist.cyr"
+include "lib/sakshi.cyr"
+include "lib/bigint.cyr"
+include "lib/json.cyr"
+include "lib/base64.cyr"
+include "lib/sigil.cyr"
+
+include "lib/libro_error.cyr"
+include "lib/libro_hasher.cyr"
+include "lib/libro_entry.cyr"
+include "lib/libro_verify.cyr"
+include "lib/libro_chain.cyr"
+include "lib/libro_query.cyr"
+include "lib/libro_retention.cyr"
+include "lib/libro_review.cyr"
+
+include "lib/bote_error.cyr"
+include "lib/bote_protocol.cyr"
+include "lib/bote_jsonx.cyr"
+include "lib/bote_codec.cyr"
+include "lib/bote_registry.cyr"
+include "lib/bote_events.cyr"
+include "lib/bote_audit.cyr"
+include "lib/bote_dispatch.cyr"
+include "lib/bote_schema.cyr"
 
 include "src/error.cyr"
 include "src/gate.cyr"
@@ -27,6 +52,8 @@ include "src/score.cyr"
 include "src/query.cyr"
 include "src/correlation.cyr"
 include "src/tron.cyr"
+include "src/tools.cyr"
+include "src/middleware.cyr"
 
 fn test_errors() {
     test_group("error codes");
@@ -532,6 +559,39 @@ fn test_risk_flags_half() {
     return 0;
 }
 
+fn test_chain_written_on_log() {
+    test_group("audit chain: one entry per log");
+    var a = audit_logger_new();
+    var c = _mk_audit_call("agent-1", "tarang_probe");
+    audit_log(a, c, verdict_allow());
+    audit_log(a, c, _mk_deny());
+    assert_eq(audit_chain_len(a),     2, "chain has 2 entries");
+    assert_eq(audit_verify_chain(a),  0, "chain verifies");
+    return 0;
+}
+
+fn test_chain_integrity_many_writes() {
+    test_group("audit chain: 50 writes verify");
+    var a = audit_logger_new();
+    var c = _mk_audit_call("agent-1", "tool");
+    for (var i = 0; i < 50; i = i + 1) { audit_log(a, c, verdict_allow()); }
+    assert_eq(audit_chain_len(a),    50, "50 entries");
+    assert_eq(audit_verify_chain(a),  0, "verify after 50");
+    return 0;
+}
+
+fn test_chain_review_counts() {
+    test_group("audit chain review");
+    var a = audit_logger_new();
+    var c = _mk_audit_call("web-agent", "tarang_probe");
+    audit_log(a, c, verdict_allow());
+    audit_log(a, c, _mk_deny());
+    audit_log(a, c, _mk_flag());
+    var r = audit_chain_review(a);
+    assert_eq(review_entry_count(r), 3, "review sees 3 entries");
+    return 0;
+}
+
 fn test_risk_mixed() {
     test_group("risk score mixed verdicts");
     var a = audit_logger_new();
@@ -607,6 +667,123 @@ fn test_corr_threshold() {
     assert_eq(correlation_record_and_check(d, "agent-3", "tool", 1000), 0, "4 no alert");
     var a = correlation_record_and_check(d, "agent-4", "tool", 1000);
     assert_eq((a != 0), 1, "5 triggers");
+    return 0;
+}
+
+fn _echo_handler(args) {
+    return args;
+}
+
+fn _make_gate(config) {
+    var tron = tron_new(config);
+    var reg = registry_new();
+    var defs = tron_tool_defs();
+    for (var i = 0; i < vec_len(defs); i = i + 1) {
+        registry_register(reg, vec_get(defs, i));
+    }
+    registry_register(reg, tool_def_new(
+        "echo",
+        "Echo input",
+        schema_new(str_from("object"), vec_new(), vec_new())));
+    var d = dispatcher_new(reg);
+    dispatcher_handle(d, "echo", &_echo_handler);
+    var g = security_gate_new(tron, d);
+    security_gate_register_tool_handlers(g);
+    return g;
+}
+
+fn _tool_call_req(tool_name, args_json) {
+    var r = req_new("1", "tools/call");
+    var p = alloc(256);
+    var off = 0;
+    memcpy(p + off, "{\"name\":\"", 9); off = off + 9;
+    memcpy(p + off, tool_name, strlen(tool_name)); off = off + strlen(tool_name);
+    memcpy(p + off, "\",\"arguments\":", 14); off = off + 14;
+    memcpy(p + off, args_json, strlen(args_json)); off = off + strlen(args_json);
+    memcpy(p + off, "}", 1); off = off + 1;
+    store8(p + off, 0);
+    return req_with_params(r, p);
+}
+
+fn test_gate_deny_unknown_agent() {
+    test_group("gate deny unknown agent");
+    var g = _make_gate(tron_config_default());
+    var req = _tool_call_req("echo", "{}");
+    var resp = security_gate_dispatch(g, req, "nobody");
+    var err = load64(resp + 24);
+    assert_eq((err != 0), 1, "error set");
+    return 0;
+}
+
+fn test_gate_allow_with_policy() {
+    test_group("gate allow by policy");
+    var g = _make_gate(tron_config_default());
+    tron_load_policy(security_gate_tron(g),
+        "[agent.\"web-agent\"]\nallow = [\"echo\"]\n");
+    var req = _tool_call_req("echo", "{}");
+    var resp = security_gate_dispatch(g, req, "web-agent");
+    var err = load64(resp + 24);
+    assert_eq(err, 0, "no error");
+    return 0;
+}
+
+fn test_gate_deny_by_policy() {
+    test_group("gate deny by policy");
+    var g = _make_gate(tron_config_default());
+    tron_load_policy(security_gate_tron(g),
+        "[agent.\"restricted\"]\nallow = [\"tarang_*\"]\ndeny = [\"echo\"]\n");
+    var req = _tool_call_req("echo", "{}");
+    var resp = security_gate_dispatch(g, req, "restricted");
+    var err = load64(resp + 24);
+    assert_eq((err != 0), 1, "deny produces error");
+    return 0;
+}
+
+fn test_gate_deny_injection() {
+    test_group("gate deny injection");
+    var cfg = _permissive_config();
+    var g = _make_gate(cfg);
+    var req = _tool_call_req("echo", "{\"q\":\"1 UNION SELECT * FROM passwords\"}");
+    var resp = security_gate_dispatch(g, req, "agent");
+    var err = load64(resp + 24);
+    assert_eq((err != 0), 1, "injection denied");
+    return 0;
+}
+
+fn test_gate_initialize_passes_through() {
+    test_group("gate non-tool passes through");
+    var g = _make_gate(tron_config_default());
+    var req = req_new("1", "initialize");
+    var resp = security_gate_dispatch(g, req, "nobody");
+    var err = load64(resp + 24);
+    assert_eq(err, 0, "initialize allowed");
+    return 0;
+}
+
+fn test_gate_missing_tool_name() {
+    test_group("gate missing tool name");
+    var g = _make_gate(_permissive_config());
+    var r = req_new("1", "tools/call");
+    req_with_params(r, "{\"arguments\":{}}");
+    var resp = security_gate_dispatch(g, r, "agent");
+    var err = load64(resp + 24);
+    assert_eq((err != 0), 1, "missing name denied");
+    return 0;
+}
+
+fn test_gate_audit_logged() {
+    test_group("gate audits every call");
+    var g = _make_gate(_permissive_quiet());
+    var req = _tool_call_req("echo", "{}");
+    security_gate_dispatch(g, req, "agent-1");
+    assert_eq(query_total_events(tron_audit(security_gate_tron(g))), 1, "1 event");
+    return 0;
+}
+
+fn test_tron_tool_defs() {
+    test_group("tron tool defs");
+    var defs = tron_tool_defs();
+    assert_eq(vec_len(defs), 4, "4 tool defs");
     return 0;
 }
 
@@ -803,6 +980,9 @@ fn main() {
     test_risk_unknown();
     test_risk_flags_half();
     test_risk_mixed();
+    test_chain_written_on_log();
+    test_chain_integrity_many_writes();
+    test_chain_review_counts();
     test_query_api();
     test_corr_no_alert_single_agent();
     test_corr_detect();
@@ -821,6 +1001,14 @@ fn main() {
     test_tron_policy_deny();
     test_tron_audit_every_verdict();
     test_tron_rate_from_policy();
+    test_tron_tool_defs();
+    test_gate_deny_unknown_agent();
+    test_gate_allow_with_policy();
+    test_gate_deny_by_policy();
+    test_gate_deny_injection();
+    test_gate_initialize_passes_through();
+    test_gate_missing_tool_name();
+    test_gate_audit_logged();
     return assert_summary();
 }
 

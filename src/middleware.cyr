@@ -1,0 +1,107 @@
+#  middleware.cyr  --  SecurityGate: wraps a bote Dispatcher
+#
+#  Ported from rust-old/src/middleware.rs.
+#
+#  Intercepts `tools/call` requests, runs t-ron's check pipeline, and
+#  returns a JSON-RPC error response if the call is denied. All other
+#  methods (initialize, tools/list, etc.) pass through unmodified.
+#
+#  The Rust version takes `agent_id` as a call parameter. Bote's
+#  dispatcher reads `caller_id` from `params.caller_id` when present,
+#  so this gate does the same: it extracts caller_id from the JSON-RPC
+#  params (falling back to "anonymous" when absent).
+
+#  JSON-RPC error code for security denials (server-defined range).
+var SECURITY_DENIED_CODE = 0 - 32001;
+
+#  ============================================================
+#  SecurityGate layout (16 bytes):
+#    +0  tron        TRon ptr
+#    +8  dispatcher  bote Dispatcher ptr
+#  ============================================================
+
+fn security_gate_new(tron, dispatcher) {
+    var g = alloc(16);
+    store64(g,     tron);
+    store64(g + 8, dispatcher);
+    return g;
+}
+
+fn security_gate_tron(g)       { return load64(g); }
+fn security_gate_dispatcher(g) { return load64(g + 8); }
+
+#  Register t-ron's tool handlers with the inner dispatcher. The caller is
+#  responsible for having registered the matching tool definitions (from
+#  tron_tool_defs()) on the ToolRegistry before constructing the
+#  dispatcher. Also binds the TRon instance to tools.cyr's module global.
+fn security_gate_register_tool_handlers(g) {
+    tools_bind(load64(g));
+    var d = load64(g + 8);
+    dispatcher_handle(d, "tron_status", &tron_status_handler);
+    dispatcher_handle(d, "tron_risk",   &tron_risk_handler);
+    dispatcher_handle(d, "tron_audit",  &tron_audit_handler);
+    dispatcher_handle(d, "tron_policy", &tron_policy_handler);
+    return 0;
+}
+
+#  ============================================================
+#  Dispatch with security checks
+#  ============================================================
+#
+#  Returns a JsonRpcResponse pointer (or 0 for a notification).
+#  For a denied tools/call, returns a response with error set.
+
+fn security_gate_dispatch(g, request, agent_id) {
+    if (streq(req_method(request), "tools/call") == 1) {
+        var denied = _sec_check_tool_call(g, request, agent_id);
+        if (denied != 0) { return denied; }
+    }
+    return dispatcher_dispatch(load64(g + 8), request);
+}
+
+#  ============================================================
+#  Tools/call path: build a ToolCall, run the pipeline, translate
+#  any deny into a JSON-RPC error response. Returns 0 if allowed.
+#  ============================================================
+
+fn _sec_check_tool_call(g, request, agent_id) {
+    var id     = req_id(request);
+    var params = req_params(request);
+
+    #  Extract tool name (required)
+    var tool_name = jsonx_get_str(params, "name");
+    if (tool_name == 0 || strlen(tool_name) == 0) {
+        return _sec_deny_response(id,
+            "missing or empty tool name in tools/call",
+            DENY_UNAUTHORIZED);
+    }
+
+    #  Arguments default to "{}" if absent.
+    var args = jsonx_get_raw(params, "arguments");
+    if (args == 0) { args = "{}"; }
+
+    var call = tool_call_new(agent_id, tool_name, args, clock_epoch_ns());
+    var v = tron_check(load64(g), call);
+    var k = verdict_kind(v);
+    if (k == VK_DENY) {
+        return _sec_deny_response(id, verdict_reason(v), verdict_code(v));
+    }
+    #  Allow and Flag both pass through to the inner dispatcher.
+    return 0;
+}
+
+#  Build "security: <reason> [<code>]" and wrap in a JSON-RPC error response.
+fn _sec_deny_response(id, reason, code) {
+    var rl = strlen(reason);
+    var code_str = deny_code_as_str(code);
+    var cl = strlen(code_str);
+    var buf = alloc(rl + cl + 32);
+    var off = 0;
+    memcpy(buf + off, "security: ", 10); off = off + 10;
+    memcpy(buf + off, reason, rl);       off = off + rl;
+    memcpy(buf + off, " [", 2);           off = off + 2;
+    memcpy(buf + off, code_str, cl);     off = off + cl;
+    memcpy(buf + off, "]", 1);            off = off + 1;
+    store8(buf + off, 0);
+    return resp_error(id, SECURITY_DENIED_CODE, buf);
+}

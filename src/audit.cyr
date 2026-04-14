@@ -1,11 +1,50 @@
-#  audit.cyr  --  operational audit logger (ring buffer tier)
+#  audit.cyr  --  dual-write audit logger
 #
-#  Ported from rust-old/src/audit.rs. This file covers the ring-buffer
-#  side only (fast operational queries for risk scoring + recent events).
-#  The libro cryptographic hash chain will be wired in a follow-up step
-#  once the [deps.libro] entry is added to cyrius.toml.
+#  Ported from rust-old/src/audit.rs. Every verdict is recorded both in
+#  the fast operational ring buffer (for risk scoring + recent-events
+#  queries) and in the libro cryptographic hash chain (for tamper-proof
+#  auditing).
 
 var AUDIT_MAX_EVENTS = 10000;
+
+#  Build a small JSON details blob for the libro entry. Keeping this
+#  inline keeps the logger infallible — the chain always gets a record.
+fn _audit_details(tool_name, reason, deny_code) {
+    var tl = strlen(tool_name);
+    var buf = alloc(tl + 256);
+    var off = 0;
+    memcpy(buf + off, "{\"tool_name\":\"", 14); off = off + 14;
+    memcpy(buf + off, tool_name, tl);           off = off + tl;
+    memcpy(buf + off, "\"", 1);                 off = off + 1;
+    if (reason != 0) {
+        var rl = strlen(reason);
+        memcpy(buf + off, ",\"reason\":\"", 11); off = off + 11;
+        memcpy(buf + off, reason, rl);          off = off + rl;
+        memcpy(buf + off, "\"", 1);             off = off + 1;
+    }
+    if (deny_code >= 0) {
+        var code_str = deny_code_as_str(deny_code);
+        var cl = strlen(code_str);
+        memcpy(buf + off, ",\"deny_code\":\"", 14); off = off + 14;
+        memcpy(buf + off, code_str, cl);           off = off + cl;
+        memcpy(buf + off, "\"", 1);                off = off + 1;
+    }
+    memcpy(buf + off, "}", 1); off = off + 1;
+    store8(buf + off, 0);
+    return str_from(buf);
+}
+
+fn _audit_severity_for(kind) {
+    if (kind == VK_DENY) { return SEV_SECURITY; }
+    if (kind == VK_FLAG) { return SEV_WARNING; }
+    return SEV_INFO;
+}
+
+fn _audit_action_for(kind) {
+    if (kind == VK_DENY) { return str_from("tool_call.deny"); }
+    if (kind == VK_FLAG) { return str_from("tool_call.flag"); }
+    return str_from("tool_call.allow");
+}
 
 #  ============================================================
 #  SecurityEvent  --  one logged verdict
@@ -47,21 +86,24 @@ fn security_event_kind(e)      { return load64(e + 32); }
 fn security_event_reason(e)    { return load64(e + 40); }
 
 #  ============================================================
-#  AuditLogger  --  ring-buffered event stream
+#  AuditLogger  --  ring buffer + libro cryptographic chain
 #  ============================================================
 #
-#  Layout (16 bytes):
-#    +0   events     vec<SecurityEvent>
-#    +8   next_id    i64       monotonic event id
+#  Layout (24 bytes):
+#    +0   events     vec<SecurityEvent>   operational ring buffer
+#    +8   next_id    i64                  monotonic event id
+#    +16  chain      libro AuditChain ptr tamper-proof chain
 
 fn audit_logger_new() {
-    var a = alloc(16);
-    store64(a,     vec_new());
-    store64(a + 8, 0);
+    var a = alloc(24);
+    store64(a,      vec_new());
+    store64(a + 8,  0);
+    store64(a + 16, chain_new());
     return a;
 }
 
 fn audit_events(a) { return load64(a); }
+fn audit_chain(a)  { return load64(a + 16); }
 
 fn _audit_next_id(a) {
     var id = load64(a + 8);
@@ -69,21 +111,51 @@ fn _audit_next_id(a) {
     return id;
 }
 
-#  Log a verdict. Extracts reason from the Verdict struct (0 for Allow).
+#  Log a verdict to both the ring buffer and the libro chain.
 fn audit_log(a, call, verdict) {
     var kind = verdict_kind(verdict);
-    var reason = verdict_reason(verdict);            #  0 for Allow, cstring otherwise
+    var reason = verdict_reason(verdict);
+    var deny_code = 0 - 1;
+    if (kind == VK_DENY) { deny_code = verdict_code(verdict); }
+
+    var agent_id  = tool_call_agent_id(call);
+    var tool_name = tool_call_tool_name(call);
+
     var e = security_event_new(
         _audit_next_id(a),
         clock_epoch_ns(),
-        tool_call_agent_id(call),
-        tool_call_tool_name(call),
+        agent_id,
+        tool_name,
         kind,
         reason);
     var events = load64(a);
     vec_push(events, e);
     while (vec_len(events) > AUDIT_MAX_EVENTS) { vec_remove(events, 0); }
+
+    var details = _audit_details(tool_name, reason, deny_code);
+    var chain = load64(a + 16);
+    var sev   = _audit_severity_for(kind);
+    var src_s = str_from("t-ron");
+    var act_s = _audit_action_for(kind);
+    var ag_s  = str_from(agent_id);
+    chain_append_with_agent(chain, sev, src_s, act_s, details, ag_s);
     return 0;
+}
+
+#  Verify the libro chain integrity. Returns 0 on success, libro error ptr on failure.
+fn audit_verify_chain(a) {
+    return chain_verify(load64(a + 16));
+}
+
+#  Number of entries in the libro chain (may differ from the ring buffer
+#  if rotation has pruned the operational view).
+fn audit_chain_len(a) {
+    return chain_len(load64(a + 16));
+}
+
+#  Structured review of the chain (via libro).
+fn audit_chain_review(a) {
+    return chain_review(load64(a + 16));
 }
 
 #  Total event count.

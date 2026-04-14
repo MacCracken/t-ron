@@ -11,4 +11,35 @@ entry = "src/main.cyr"
 output = "t-ron"
 
 [deps]
-stdlib = ["string", "fmt", "alloc", "vec", "str", "syscalls", "io", "args", "assert", "tagged", "hashmap", "regex", "fnptr", "chrono"]
+stdlib = ["string", "fmt", "alloc", "vec", "str", "syscalls", "io", "args", "assert", "tagged", "hashmap", "regex", "fnptr", "chrono", "freelist", "sakshi", "bigint", "json", "base64", "sigil"]
+
+[deps.libro]
+git = "https://github.com/MacCracken/libro"
+path = "../libro"
+tag = "1.0.3"
+modules = [
+    "src/error.cyr",
+    "src/hasher.cyr",
+    "src/entry.cyr",
+    "src/verify.cyr",
+    "src/chain.cyr",
+    "src/query.cyr",
+    "src/retention.cyr",
+    "src/review.cyr",
+]
+
+[deps.bote]
+git = "https://github.com/MacCracken/bote"
+path = "../bote"
+tag = "1.9.2"
+modules = [
+    "src/error.cyr",
+    "src/protocol.cyr",
+    "src/jsonx.cyr",
+    "src/codec.cyr",
+    "src/registry.cyr",
+    "src/events.cyr",
+    "src/audit.cyr",
+    "src/dispatch.cyr",
+    "src/schema.cyr",
+]
