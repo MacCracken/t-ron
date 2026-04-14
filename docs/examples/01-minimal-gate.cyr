@@ -1,0 +1,79 @@
+#  docs/examples/01-minimal-gate.cyr
+#
+#  Smallest usable t-ron pipeline: build a TRon, load a policy for
+#  one agent, run one allow check and one deny check.
+#
+#  cyrius build docs/examples/01-minimal-gate.cyr build/ex01 && ./build/ex01
+
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/alloc.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/syscalls.cyr"
+include "lib/io.cyr"
+include "lib/tagged.cyr"
+include "lib/assert.cyr"
+include "lib/fnptr.cyr"
+include "lib/hashmap.cyr"
+include "lib/regex.cyr"
+include "lib/chrono.cyr"
+include "lib/freelist.cyr"
+include "lib/sakshi.cyr"
+include "lib/bigint.cyr"
+include "lib/json.cyr"
+include "lib/base64.cyr"
+include "lib/sigil.cyr"
+
+include "lib/libro_error.cyr"
+include "lib/libro_hasher.cyr"
+include "lib/libro_entry.cyr"
+include "lib/libro_verify.cyr"
+include "lib/libro_chain.cyr"
+include "lib/libro_query.cyr"
+include "lib/libro_retention.cyr"
+include "lib/libro_review.cyr"
+
+include "src/error.cyr"
+include "src/gate.cyr"
+include "src/policy.cyr"
+include "src/rate.cyr"
+include "src/scanner.cyr"
+include "src/pattern.cyr"
+include "src/audit.cyr"
+include "src/score.cyr"
+include "src/query.cyr"
+include "src/correlation.cyr"
+include "src/tron.cyr"
+
+fn main() {
+    alloc_init();
+
+    var tron = tron_new(tron_config_default());
+    tron_load_policy(tron,
+        "[agent.\"web-agent\"]\nallow = [\"tarang_*\"]\n");
+
+    #  Allow path
+    var ok = tron_check(tron, tool_call_new(
+        "web-agent", "tarang_probe", "{}", clock_epoch_ns()));
+    if (verdict_is_allowed(ok) == 0) {
+        println("FAIL: expected allow");
+        return 1;
+    }
+    println("OK: web-agent tarang_probe -> allow");
+
+    #  Deny path (unknown agent with default-deny config)
+    var deny = tron_check(tron, tool_call_new(
+        "nobody", "tarang_probe", "{}", clock_epoch_ns()));
+    if (verdict_is_denied(deny) == 0) {
+        println("FAIL: expected deny");
+        return 1;
+    }
+    println("OK: unknown agent -> deny");
+
+    println("ex01 passed.");
+    return 0;
+}
+
+var r = main();
+syscall(60, r);
