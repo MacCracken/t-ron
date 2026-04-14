@@ -159,6 +159,21 @@ fn tron_check(t, call) {
     var tool_name = tool_call_tool_name(call);
     var params    = tool_call_params(call);
 
+    #  0. Reject unsafe identifiers before anything else — closes rate-limiter
+    #     bucket-key collisions (0x1f injection), policy glob bypass via newlines,
+    #     and overlong-UTF-8 normalization attacks. Fail-closed regardless of
+    #     default_unknown_agent: the caller sent a malformed call.
+    if (tron_is_safe_identifier(agent_id) == 0) {
+        var v_badid = verdict_deny("agent_id contains invalid characters", DENY_UNAUTHORIZED);
+        audit_log(audit, call, v_badid);
+        return v_badid;
+    }
+    if (tron_is_safe_identifier(tool_name) == 0) {
+        var v_badtool = verdict_deny("tool_name contains invalid characters", DENY_UNAUTHORIZED);
+        audit_log(audit, call, v_badtool);
+        return v_badtool;
+    }
+
     #  1. Parameter size
     var param_size = strlen(params);
     if (param_size > tron_config_max_param_size(cfg)) {

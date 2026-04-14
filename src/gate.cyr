@@ -55,6 +55,30 @@ fn tool_call_tool_name(c) { return load64(c + 8); }
 fn tool_call_params(c)    { return load64(c + 16); }
 fn tool_call_timestamp(c) { return load64(c + 24); }
 
+#  Reject identifiers (agent_id, tool_name) that contain control chars or
+#  non-ASCII bytes. This closes three CVE-class bypasses:
+#
+#   * rate-limiter key collision via the 0x1f unit separator
+#   * policy glob bypass via embedded newlines
+#   * canonicalization mismatches between bote parsers and libro hashers
+#
+#  Returns 1 if safe, 0 if suspicious. Caller SHOULD deny on 0.
+fn tron_is_safe_identifier(s) {
+    if (s == 0) { return 0; }
+    var n = strlen(s);
+    if (n == 0) { return 0; }
+    if (n > 256) { return 0; }             #  protect against pathological sizes
+    var i = 0;
+    while (i < n) {
+        var c = load8(s + i) & 0xFF;
+        if (c < 32)  { return 0; }          #  control chars (including 0x1f, 0x00, \n, \r, \t)
+        if (c == 127) { return 0; }         #  DEL
+        if (c > 126) { return 0; }          #  non-ASCII (prevents overlong-UTF-8 bypass)
+        i = i + 1;
+    }
+    return 1;
+}
+
 #  ============================================================
 #  VerdictKind  --  coarse outcome for audit storage
 #  ============================================================

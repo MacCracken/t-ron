@@ -780,6 +780,117 @@ fn test_gate_audit_logged() {
     return 0;
 }
 
+fn _mk_bytes3(a, b, c) {
+    var buf = alloc(4);
+    store8(buf,     a);
+    store8(buf + 1, b);
+    store8(buf + 2, c);
+    store8(buf + 3, 0);
+    return buf;
+}
+
+fn test_audit_unsafe_ids_rejected() {
+    test_group("audit: reject control chars in identifiers");
+    #  Unit separator (rate-limiter bucket collision). Cyrius string literals
+    #  don't support \x escapes, so we build the byte sequence manually.
+    var sep = _mk_bytes3(97, 0x1f, 98);       #  "a" 0x1f "b"
+    assert_eq(tron_is_safe_identifier(sep), 0, "0x1f rejected");
+    #  Newline
+    var nl = _mk_bytes3(97, 10, 98);
+    assert_eq(tron_is_safe_identifier(nl), 0, "newline rejected");
+    #  DEL
+    var del = _mk_bytes3(97, 127, 98);
+    assert_eq(tron_is_safe_identifier(del), 0, "DEL rejected");
+    #  Non-ASCII (blocks overlong-UTF-8 bypass)
+    var na = _mk_bytes3(97, 0xC0, 0xAE);
+    assert_eq(tron_is_safe_identifier(na), 0, "non-ASCII rejected");
+    #  Empty string
+    assert_eq(tron_is_safe_identifier(""), 0, "empty rejected");
+    #  Plain names OK
+    assert_eq(tron_is_safe_identifier("web-agent"), 1, "plain OK");
+    assert_eq(tron_is_safe_identifier("agent_42"), 1, "alphanumeric+underscore OK");
+
+    #  End-to-end: pipeline denies on bad id even with permissive config.
+    var t = tron_new(_permissive_config());
+    var v = tron_check(t, tool_call_new(sep, "tool", "{}", clock_epoch_ns()));
+    assert_eq(verdict_is_denied(v), 1, "0x1f agent denied");
+    assert_eq(verdict_code(v), DENY_UNAUTHORIZED, "denied as unauthorized");
+    return 0;
+}
+
+fn test_audit_path_double_encoded() {
+    test_group("audit: double-encoded path traversal");
+    var p1 = "%252e%252e/etc/passwd";
+    assert_eq((scanner_scan_text(p1, strlen(p1)) != 0), 1, "double %2e caught");
+    var p2 = "%252E%252E/etc/shadow";
+    assert_eq((scanner_scan_text(p2, strlen(p2)) != 0), 1, "uppercase double caught");
+    #  Overlong UTF-8 `.` (0xC0 0xAE)
+    var p3 = alloc(10);
+    store8(p3,     0xC0); store8(p3 + 1, 0xAE);
+    store8(p3 + 2, 0xC0); store8(p3 + 3, 0xAE);
+    store8(p3 + 4, 0x2F); store8(p3 + 5, 0);
+    assert_eq((scanner_scan_text(p3, 5) != 0), 1, "overlong UTF-8 dot-dot caught");
+    return 0;
+}
+
+fn test_audit_sql_evasion() {
+    test_group("audit: SQL evasion payloads");
+    #  MySQL versioned comment (libinjection-style bypass)
+    var s1 = "id=1/*!50000 union*//*!50000 select*/ from passwords";
+    assert_eq((scanner_scan_text(s1, strlen(s1)) != 0), 1, "mysql versioned comment caught");
+    #  Null byte keyword splitter — build manually (no \x escapes in Cyrius literals)
+    var s2 = alloc(32);
+    memcpy(s2, "uni", 3);
+    store8(s2 + 3, 0);
+    memcpy(s2 + 4, "on select from x", 16);
+    #  The scanner is handed an explicit length, so it sees all 20 bytes.
+    assert_eq((scanner_scan_text(s2, 20) != 0), 1, "null-byte keyword split caught");
+    return 0;
+}
+
+fn test_audit_shell_filler() {
+    test_group("audit: shell metachar filler bypass");
+    #  ${IFS}rm -rf /
+    var s1 = "data;${IFS}rm -rf /";
+    assert_eq((scanner_scan_text(s1, strlen(s1)) != 0), 1, "${IFS} filler caught");
+    #  $IFS$9rm
+    var s2 = "x;$IFS$9rm x";
+    assert_eq((scanner_scan_text(s2, strlen(s2)) != 0), 1, "$IFS$9 filler caught");
+    #  {rm,-rf,/} brace expansion
+    var s3 = "x;{rm,-rf,/}";
+    assert_eq((scanner_scan_text(s3, strlen(s3)) != 0), 1, "brace expansion caught");
+    return 0;
+}
+
+fn test_audit_template_delimiters() {
+    test_group("audit: extra template delimiters");
+    #  Jinja2 statement block
+    var s1 = "{% for x in self.items %}";
+    assert_eq((scanner_scan_text(s1, strlen(s1)) != 0), 1, "{%..%} caught");
+    #  FreeMarker directive
+    var s2 = "<#assign x=exec>";
+    assert_eq((scanner_scan_text(s2, strlen(s2)) != 0), 1, "<#..> caught");
+    #  ERB/Ruby interpolation
+    var s3 = "name: #{User.system}";
+    assert_eq((scanner_scan_text(s3, strlen(s3)) != 0), 1, "#{..} caught");
+    return 0;
+}
+
+fn test_audit_template_redos() {
+    test_group("audit: template unclosed-open is O(N), not O(N^2)");
+    #  Build a ~4 KB payload of unclosed `{{` opens. On the old O(N^2) scanner
+    #  this would balloon to multi-second; the fixed scanner returns near-instantly.
+    var big = alloc(4100);
+    memset(big, 123, 4096);            #  4096 `{` bytes
+    store8(big + 4096, 0);
+    var start = clock_now_ns();
+    scanner_scan_text(big, 4096);
+    var elapsed = clock_now_ns() - start;
+    #  Budget: 100 ms. Anything near that on a modern box means quadratic regression.
+    assert_eq((elapsed < 100000000), 1, "template scan O(N)");
+    return 0;
+}
+
 fn test_tron_tool_defs() {
     test_group("tron tool defs");
     var defs = tron_tool_defs();
@@ -1001,6 +1112,12 @@ fn main() {
     test_tron_policy_deny();
     test_tron_audit_every_verdict();
     test_tron_rate_from_policy();
+    test_audit_unsafe_ids_rejected();
+    test_audit_path_double_encoded();
+    test_audit_sql_evasion();
+    test_audit_shell_filler();
+    test_audit_template_delimiters();
+    test_audit_template_redos();
     test_tron_tool_defs();
     test_gate_deny_unknown_agent();
     test_gate_allow_with_policy();
