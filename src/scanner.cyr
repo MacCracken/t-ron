@@ -1,0 +1,396 @@
+#  scanner.cyr  --  payload scanner for injection patterns
+#
+#  Ported from rust-old/src/scanner.rs.
+#
+#  The Rust version uses `regex` crate with four LazyLock regexes.
+#  Cyrius has no regex engine, so patterns are hand-rolled as
+#  case-insensitive keyword scans with word-boundary checks. The
+#  rules match the Rust regex semantics for the test payloads:
+#
+#    SQL:     keyword-from-set-A (union|select|insert|update|delete|drop|
+#             alter|exec|execute) AND keyword-from-set-B (from|into|table|
+#             where|set)   OR   `--` comment   OR   `;` followed somewhere
+#             by drop|delete|update
+#    Shell:   delimiter char (; & | backtick $) then optional whitespace
+#             then a shell binary name (rm cat curl wget nc bash sh python
+#             perl ruby chmod chown) on a word boundary
+#    Template:{{...}} containing `.`, `__`, config, self, or request
+#             <%...%>
+#             ${...} containing `.`, Runtime, Process, or exec
+#    Path:    ../   ..\   %2e%2e  (case-insensitive on the hex)
+#
+#  The JSON walker parses raw text (so no nested parser needed): every
+#  quoted string leaf is scanned, and object/array depth is tracked to
+#  abort on pathological nesting.
+
+var SCAN_MAX_DEPTH = 64;
+
+#  ============================================================
+#  Byte helpers
+#  ============================================================
+
+fn _sc_to_lower(c) {
+    if (c >= 65 && c <= 90) { return c + 32; }
+    return c;
+}
+
+fn _sc_is_word_char(c) {
+    if (c >= 48 && c <= 57)  { return 1; }    #  0-9
+    if (c >= 65 && c <= 90)  { return 1; }    #  A-Z
+    if (c >= 97 && c <= 122) { return 1; }    #  a-z
+    if (c == 95) { return 1; }                 #  _
+    return 0;
+}
+
+fn _sc_is_space(c) {
+    if (c == 32 || c == 9 || c == 10 || c == 13) { return 1; }
+    return 0;
+}
+
+#  Case-insensitive comparison of `n` bytes between buf+i and needle.
+fn _sc_ci_memeq(buf, i, needle, n) {
+    var k = 0;
+    while (k < n) {
+        if (_sc_to_lower(load8(buf + i + k)) != _sc_to_lower(load8(needle + k))) {
+            return 0;
+        }
+        k = k + 1;
+    }
+    return 1;
+}
+
+#  Return first index of a case-insensitive substring match, else -1.
+#  `needle` is a null-terminated C string; nlen is strlen(needle).
+fn _sc_ci_find(buf, buflen, start, needle, nlen) {
+    if (nlen == 0) { return start; }
+    if (start + nlen > buflen) { return 0 - 1; }
+    var i = start;
+    var last = buflen - nlen;
+    while (i <= last) {
+        if (_sc_ci_memeq(buf, i, needle, nlen) == 1) { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+#  Check that a keyword match at [pos..pos+nlen] is word-bounded.
+fn _sc_word_bounded(buf, buflen, pos, nlen) {
+    if (pos > 0) {
+        if (_sc_is_word_char(load8(buf + pos - 1)) == 1) { return 0; }
+    }
+    if (pos + nlen < buflen) {
+        if (_sc_is_word_char(load8(buf + pos + nlen)) == 1) { return 0; }
+    }
+    return 1;
+}
+
+#  Locate a word-bounded case-insensitive keyword; return first idx or -1.
+fn _sc_find_keyword(buf, buflen, needle) {
+    var nlen = strlen(needle);
+    var i = 0;
+    while (1 == 1) {
+        i = _sc_ci_find(buf, buflen, i, needle, nlen);
+        if (i < 0) { return 0 - 1; }
+        if (_sc_word_bounded(buf, buflen, i, nlen) == 1) { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+#  ============================================================
+#  Pattern checks
+#  ============================================================
+
+#  Return 1 if any of the word-bounded keywords appear in buf.
+fn _sc_has_any(buf, buflen, keywords, count) {
+    var k = 0;
+    while (k < count) {
+        var kw = load64(keywords + k * 8);
+        if (_sc_find_keyword(buf, buflen, kw) >= 0) { return 1; }
+        k = k + 1;
+    }
+    return 0;
+}
+
+var _sc_sql_a_kw = 0;
+var _sc_sql_a_n  = 9;
+var _sc_sql_b_kw = 0;
+var _sc_sql_b_n  = 5;
+var _sc_sql_mod_kw = 0;
+var _sc_sql_mod_n  = 3;
+
+fn _sc_init_sql() {
+    if (_sc_sql_a_kw != 0) { return 0; }
+    var a = alloc(_sc_sql_a_n * 8);
+    store64(a +  0, "union");
+    store64(a +  8, "select");
+    store64(a + 16, "insert");
+    store64(a + 24, "update");
+    store64(a + 32, "delete");
+    store64(a + 40, "drop");
+    store64(a + 48, "alter");
+    store64(a + 56, "exec");
+    store64(a + 64, "execute");
+    _sc_sql_a_kw = a;
+
+    var b = alloc(_sc_sql_b_n * 8);
+    store64(b +  0, "from");
+    store64(b +  8, "into");
+    store64(b + 16, "table");
+    store64(b + 24, "where");
+    store64(b + 32, "set");
+    _sc_sql_b_kw = b;
+
+    var m = alloc(_sc_sql_mod_n * 8);
+    store64(m +  0, "drop");
+    store64(m +  8, "delete");
+    store64(m + 16, "update");
+    _sc_sql_mod_kw = m;
+    return 0;
+}
+
+fn _sc_check_sql(buf, buflen) {
+    _sc_init_sql();
+
+    #  -- comment
+    if (buflen >= 2) {
+        var i = 0;
+        while (i + 1 < buflen) {
+            if (load8(buf + i) == 45 && load8(buf + i + 1) == 45) { return 1; }
+            i = i + 1;
+        }
+    }
+
+    #  ; followed somewhere after by drop|delete|update
+    var si = 0;
+    while (si < buflen) {
+        if (load8(buf + si) == 59) {
+            var j = 0;
+            while (j < _sc_sql_mod_n) {
+                var kw = load64(_sc_sql_mod_kw + j * 8);
+                var found = _sc_find_keyword(buf, buflen, kw);
+                if (found >= 0 && found > si) { return 1; }
+                j = j + 1;
+            }
+        }
+        si = si + 1;
+    }
+
+    #  keyword-A AND keyword-B
+    if (_sc_has_any(buf, buflen, _sc_sql_a_kw, _sc_sql_a_n) == 1) {
+        if (_sc_has_any(buf, buflen, _sc_sql_b_kw, _sc_sql_b_n) == 1) { return 1; }
+    }
+    return 0;
+}
+
+var _sc_sh_bins = 0;
+var _sc_sh_n    = 12;
+
+fn _sc_init_sh() {
+    if (_sc_sh_bins != 0) { return 0; }
+    var a = alloc(_sc_sh_n * 8);
+    store64(a +  0, "rm");
+    store64(a +  8, "cat");
+    store64(a + 16, "curl");
+    store64(a + 24, "wget");
+    store64(a + 32, "nc");
+    store64(a + 40, "bash");
+    store64(a + 48, "sh");
+    store64(a + 56, "python");
+    store64(a + 64, "perl");
+    store64(a + 72, "ruby");
+    store64(a + 80, "chmod");
+    store64(a + 88, "chown");
+    _sc_sh_bins = a;
+    return 0;
+}
+
+fn _sc_is_shell_delim(c) {
+    if (c == 59)  { return 1; }      #  ;
+    if (c == 38)  { return 1; }      #  &
+    if (c == 124) { return 1; }      #  |
+    if (c == 96)  { return 1; }      #  backtick
+    if (c == 36)  { return 1; }      #  $
+    return 0;
+}
+
+fn _sc_check_shell(buf, buflen) {
+    _sc_init_sh();
+    var i = 0;
+    while (i < buflen) {
+        if (_sc_is_shell_delim(load8(buf + i)) == 1) {
+            var j = i + 1;
+            while (j < buflen && _sc_is_space(load8(buf + j)) == 1) { j = j + 1; }
+            var k = 0;
+            while (k < _sc_sh_n) {
+                var bin = load64(_sc_sh_bins + k * 8);
+                var blen = strlen(bin);
+                if (j + blen <= buflen) {
+                    if (_sc_ci_memeq(buf, j, bin, blen) == 1) {
+                        #  right word-boundary
+                        if (j + blen == buflen) { return 1; }
+                        if (_sc_is_word_char(load8(buf + j + blen)) == 0) { return 1; }
+                    }
+                }
+                k = k + 1;
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+#  Find the first `end` byte after `start`; return end index or -1.
+fn _sc_find_byte(buf, buflen, start, target) {
+    var i = start;
+    while (i < buflen) {
+        if (load8(buf + i) == target) { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
+fn _sc_contains_ci(buf, start, endp, needle) {
+    var nlen = strlen(needle);
+    var buflen = endp;
+    var i = start;
+    if (nlen == 0) { return 1; }
+    while (i + nlen <= buflen) {
+        if (_sc_ci_memeq(buf, i, needle, nlen) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _sc_check_template(buf, buflen) {
+    #  {{ ... }} containing . __ config self request
+    var i = 0;
+    while (i + 1 < buflen) {
+        if (load8(buf + i) == 123 && load8(buf + i + 1) == 123) {
+            #  find closing }}
+            var j = i + 2;
+            var end = 0 - 1;
+            while (j + 1 < buflen) {
+                if (load8(buf + j) == 125 && load8(buf + j + 1) == 125) { end = j; j = buflen; }
+                else { j = j + 1; }
+            }
+            if (end > 0) {
+                if (_sc_find_byte(buf, end, i + 2, 46) >= 0) { return 1; }
+                if (_sc_contains_ci(buf, i + 2, end, "__") == 1) { return 1; }
+                if (_sc_contains_ci(buf, i + 2, end, "config") == 1) { return 1; }
+                if (_sc_contains_ci(buf, i + 2, end, "self") == 1) { return 1; }
+                if (_sc_contains_ci(buf, i + 2, end, "request") == 1) { return 1; }
+                i = end + 2;
+            }
+            else { i = i + 2; }
+        }
+        else { i = i + 1; }
+    }
+
+    #  <% ... %>  --  any content flags
+    i = 0;
+    while (i + 1 < buflen) {
+        if (load8(buf + i) == 60 && load8(buf + i + 1) == 37) {
+            var j = i + 2;
+            while (j + 1 < buflen) {
+                if (load8(buf + j) == 37 && load8(buf + j + 1) == 62) { return 1; }
+                j = j + 1;
+            }
+            i = buflen;
+        }
+        else { i = i + 1; }
+    }
+
+    #  ${ ... } containing . Runtime Process exec
+    i = 0;
+    while (i + 1 < buflen) {
+        if (load8(buf + i) == 36 && load8(buf + i + 1) == 123) {
+            var end = _sc_find_byte(buf, buflen, i + 2, 125);
+            if (end > 0) {
+                if (_sc_find_byte(buf, end, i + 2, 46) >= 0) { return 1; }
+                if (_sc_contains_ci(buf, i + 2, end, "Runtime") == 1) { return 1; }
+                if (_sc_contains_ci(buf, i + 2, end, "Process") == 1) { return 1; }
+                if (_sc_contains_ci(buf, i + 2, end, "exec")    == 1) { return 1; }
+                i = end + 1;
+            }
+            else { i = i + 2; }
+        }
+        else { i = i + 1; }
+    }
+    return 0;
+}
+
+fn _sc_check_path(buf, buflen) {
+    var i = 0;
+    while (i + 2 < buflen) {
+        var c0 = load8(buf + i);
+        var c1 = load8(buf + i + 1);
+        var c2 = load8(buf + i + 2);
+        if (c0 == 46 && c1 == 46 && c2 == 47) { return 1; }    #  ../
+        if (c0 == 46 && c1 == 46 && c2 == 92) { return 1; }    #  ..\
+        i = i + 1;
+    }
+    #  %2e%2e (case-insensitive)
+    return _sc_contains_ci(buf, 0, buflen, "%2e%2e");
+}
+
+#  ============================================================
+#  Top-level: classify a single string leaf
+#  ============================================================
+#
+#  Returns a threat-label C-string, or 0 if clean.
+
+fn scanner_scan_text(buf, buflen) {
+    if (_sc_check_sql(buf, buflen)      == 1) { return "SQL injection pattern"; }
+    if (_sc_check_shell(buf, buflen)    == 1) { return "shell injection pattern"; }
+    if (_sc_check_template(buf, buflen) == 1) { return "template injection pattern"; }
+    if (_sc_check_path(buf, buflen)     == 1) { return "path traversal pattern"; }
+    return 0;
+}
+
+#  ============================================================
+#  JSON walker  --  scan every string leaf in a JSON text
+#  ============================================================
+#
+#  Rather than build a nested Value tree, we walk the raw JSON bytes
+#  with quote/depth awareness. Every double-quoted string is handed
+#  to scanner_scan_text(). Depth > MAX_DEPTH aborts (matches Rust).
+#
+#  `params` is a null-terminated C string of the JSON parameters
+#  (serialised form). Caller is responsible for passing valid JSON;
+#  the walker is lenient on malformed input (it just stops scanning).
+
+fn scanner_scan(params) {
+    var n = strlen(params);
+    var pos = 0;
+    var depth = 0;
+    while (pos < n) {
+        var c = load8(params + pos);
+        if (c == 123 || c == 91) {
+            depth = depth + 1;
+            if (depth > SCAN_MAX_DEPTH) { return 0; }
+            pos = pos + 1;
+        }
+        elif (c == 125 || c == 93) {
+            depth = depth - 1;
+            pos = pos + 1;
+        }
+        elif (c == 34) {
+            var start = pos + 1;
+            var k = start;
+            while (k < n) {
+                var cc = load8(params + k);
+                if (cc == 92 && k + 1 < n) { k = k + 2; }
+                elif (cc == 34) { break; }
+                else { k = k + 1; }
+            }
+            var threat = scanner_scan_text(params + start, k - start);
+            if (threat != 0) { return threat; }
+            pos = k + 1;
+        }
+        else {
+            pos = pos + 1;
+        }
+    }
+    return 0;
+}

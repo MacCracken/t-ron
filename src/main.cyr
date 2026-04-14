@@ -22,6 +22,7 @@ include "src/error.cyr"
 include "src/gate.cyr"
 include "src/policy.cyr"
 include "src/rate.cyr"
+include "src/scanner.cyr"
 
 fn main() {
     alloc_init();
