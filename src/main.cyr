@@ -55,7 +55,11 @@ include "src/query.cyr"
 include "src/correlation.cyr"
 include "src/tron.cyr"
 include "src/tools.cyr"
+include "lib/net.cyr"
+
 include "src/middleware.cyr"
+include "src/llm_scan.cyr"
+include "src/signing.cyr"
 
 fn main() {
     alloc_init();

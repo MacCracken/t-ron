@@ -140,12 +140,16 @@ Cyrius 4.5.0, x86_64, 2026-04-14 (see `bench-history.csv` for full history):
 
 ## Roadmap
 
-### Pending (unblocked by dependencies)
-- [ ] `llm_scan.cyr` — hoosh-assisted prompt injection detection (hoosh is already ported; bote integration waits on bote's final WebSocket release)
-- [ ] `signing.cyr` — sigil Ed25519 policy signature verification
+### Pending
 - [ ] `signal.cyr` — SIGHUP policy hot-reload via signalfd
 - [ ] `safety/` — AI guardrails submodule (5 modules, ~1 500 LOC from rust-old)
 - [ ] `audit_export_encrypted` — ChaCha20-Poly1305 audit export
+- [ ] description-hash pinning in bote registry (audit follow-up F1)
+
+### Recently landed
+- `src/llm_scan.cyr` — LLM-assisted prompt injection detection via hoosh 2.0 HTTP API (self-contained, stdlib-only)
+- `src/signing.cyr` — Ed25519 policy signature verification via sigil
+- bote bump to 2.0.0 (stable handler-claims ABI)
 
 ### Phase 2 — Advanced Detection
 - [ ] ML-based anomaly detection (train on normal patterns, flag deviations)
@@ -169,7 +173,7 @@ Cyrius 4.5.0, x86_64, 2026-04-14 (see `bench-history.csv` for full history):
 
 | Source | Relevance | Location |
 |---|---|---|
-| [bote](https://github.com/MacCracken/bote) | MCP protocol layer — t-ron wraps its Dispatcher via SecurityGate | `../bote` (tag 1.9.2) |
+| [bote](https://github.com/MacCracken/bote) | MCP protocol layer — t-ron wraps its Dispatcher via SecurityGate | `../bote` (tag 2.0.0) |
 | [libro](https://github.com/MacCracken/libro) | Cryptographic audit chain — t-ron writes every verdict to libro | `../libro` (tag 1.0.3) |
 | [cyrius](https://github.com/MacCracken/cyrius) | Language toolchain | 4.5.0 |
 | [hoosh](https://github.com/MacCracken/hoosh) | LLM-assisted prompt injection detection (ported, awaiting bote integration) | `../hoosh` |

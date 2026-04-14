@@ -1,0 +1,134 @@
+#  signing.cyr  --  Ed25519 policy signature verification via sigil
+#
+#  Ported from rust-old/src/signing.rs.
+#
+#  Gates `tron_load_policy_file` on a valid Ed25519 signature: we expect
+#  a detached `.sig` file alongside the policy (i.e. `/etc/t-ron.toml`
+#  + `/etc/t-ron.toml.sig`). Any key in the verifier's trusted set that
+#  validates the signature is sufficient.
+#
+#  The Rust version bundled ed25519-dalek directly; the Cyrius port
+#  delegates to sigil's `verify_data()` which is already included in
+#  the t-ron stdlib set.
+
+var SIGNING_PUBKEY_SIZE    = 32;
+var SIGNING_SIGNATURE_SIZE = 64;
+var SIGNING_MAX_POLICY_BYTES = 262144;      #  256 KB — mirrors lib/toml.cyr cap
+
+#  ============================================================
+#  PolicyVerifier layout (8 bytes): vec of 32-byte pubkey buffers.
+#
+#  Each entry in the vec is a pointer to a freshly-copied 32-byte
+#  buffer so callers can free their own keys without affecting us.
+#  ============================================================
+
+fn policy_verifier_new() {
+    var v = alloc(8);
+    store64(v, vec_new());
+    return v;
+}
+
+fn policy_verifier_keys(v) { return load64(v); }
+
+fn policy_verifier_key_count(v) {
+    return vec_len(load64(v));
+}
+
+#  Add a trusted 32-byte public key. We copy the key so the caller
+#  retains ownership of the source buffer.
+fn policy_verifier_add_key(v, pubkey) {
+    var owned = alloc(SIGNING_PUBKEY_SIZE);
+    memcpy(owned, pubkey, SIGNING_PUBKEY_SIZE);
+    vec_push(load64(v), owned);
+    return 0;
+}
+
+#  ============================================================
+#  File reader  --  detached-signature convention: {path}.sig
+#  ============================================================
+#
+#  Reads the raw bytes of the policy file into buf_out and returns
+#  the length (or -1 on failure). buf_cap bounds the read; anything
+#  beyond that is truncated and we return -1 (fail-closed).
+
+fn _signing_read_all(path, buf_out, buf_cap) {
+    var n = file_read_all(path, buf_out, buf_cap);
+    if (n < 0) { return 0 - 1; }
+    if (n >= buf_cap) { return 0 - 1; }        #  refuse if we filled the buffer
+    return n;
+}
+
+#  Build the detached-signature path: "<path>.sig". Heap-allocated.
+fn _signing_sig_path(path) {
+    var n = strlen(path);
+    var buf = alloc(n + 5);
+    memcpy(buf, path, n);
+    memcpy(buf + n, ".sig", 4);
+    store8(buf + n + 4, 0);
+    return buf;
+}
+
+#  ============================================================
+#  Verify + read  --  returns the policy cstring on success, or 0.
+#  ============================================================
+#
+#  Steps:
+#    1. Reject if no trusted keys loaded.
+#    2. Read policy + signature into fresh buffers.
+#    3. Try each trusted key; success on first match.
+#    4. Null-terminate the policy buffer and return the cstring.
+
+var _signing_policy_buf   = 0;
+var _signing_sig_buf      = 0;
+
+fn _signing_ensure_buffers() {
+    if (_signing_policy_buf == 0) {
+        _signing_policy_buf = alloc(SIGNING_MAX_POLICY_BYTES + 1);
+        _signing_sig_buf    = alloc(SIGNING_SIGNATURE_SIZE);
+    }
+    return 0;
+}
+
+fn policy_verifier_verify_and_read(v, path) {
+    if (policy_verifier_key_count(v) == 0) { return 0; }
+    _signing_ensure_buffers();
+
+    var plen = _signing_read_all(path, _signing_policy_buf, SIGNING_MAX_POLICY_BYTES);
+    if (plen < 0) { return 0; }
+    store8(_signing_policy_buf + plen, 0);
+
+    var sig_path = _signing_sig_path(path);
+    var slen = _signing_read_all(sig_path, _signing_sig_buf, SIGNING_SIGNATURE_SIZE + 1);
+    if (slen != SIGNING_SIGNATURE_SIZE) { return 0; }
+
+    var keys = policy_verifier_keys(v);
+    var n = vec_len(keys);
+    var i = 0;
+    while (i < n) {
+        var pk = vec_get(keys, i);
+        if (verify_data(_signing_policy_buf, plen, _signing_sig_buf, pk) == 1) {
+            #  Return the (null-terminated) policy buffer. We do NOT free it
+            #  between calls — the caller is expected to hand it straight to
+            #  tron_load_policy which consumes the bytes synchronously.
+            return _signing_policy_buf;
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+#  ============================================================
+#  TRon integration  --  verify, then load + apply rate limits.
+#  ============================================================
+#
+#  Returns TRON_ERR_NONE on success, TRON_ERR_SIGNATURE on verification
+#  failure (including missing keys / missing files / bad signature).
+
+fn tron_verify_and_load_policy(tron, verifier, path) {
+    var toml = policy_verifier_verify_and_read(verifier, path);
+    if (toml == 0) { return TRON_ERR_SIGNATURE; }
+    var rc = tron_load_policy(tron, toml);
+    if (rc != TRON_ERR_NONE) { return rc; }
+    tron_set_policy_path(tron, path);
+    return TRON_ERR_NONE;
+}

@@ -53,7 +53,11 @@ include "src/query.cyr"
 include "src/correlation.cyr"
 include "src/tron.cyr"
 include "src/tools.cyr"
+include "lib/net.cyr"
+
 include "src/middleware.cyr"
+include "src/llm_scan.cyr"
+include "src/signing.cyr"
 
 fn test_errors() {
     test_group("error codes");
@@ -891,6 +895,234 @@ fn test_audit_template_redos() {
     return 0;
 }
 
+fn test_llm_parse_clean() {
+    test_group("llm: parse clean classification");
+    var r = parse_classification("{\"injection\": false, \"confidence\": 0.1, \"reason\": \"safe\"}");
+    assert_eq((r != 0),                     1,   "parsed");
+    assert_eq(llm_scan_injection(r),        0,   "not injection");
+    assert_eq(llm_scan_confidence(r),       100, "0.1 -> 100 bp");
+    assert_eq(streq(llm_scan_reason(r), "safe"), 1, "reason: safe");
+    return 0;
+}
+
+fn test_llm_parse_injection() {
+    test_group("llm: parse injection classification");
+    var r = parse_classification("{\"injection\": true, \"confidence\": 0.95, \"reason\": \"ignore instructions pattern\"}");
+    assert_eq(llm_scan_injection(r),        1,   "injection=true");
+    assert_eq(llm_scan_confidence(r),       950, "0.95 -> 950 bp");
+    assert_eq(streq(llm_scan_reason(r), "ignore instructions pattern"), 1, "reason matches");
+    return 0;
+}
+
+fn test_llm_parse_markdown_wrapped() {
+    test_group("llm: extract JSON from markdown-wrapped");
+    var text = "```json\n{\"injection\": true, \"confidence\": 0.8, \"reason\": \"t\"}\n```";
+    var r = parse_classification(text);
+    assert_eq(llm_scan_injection(r),  1,   "injection");
+    assert_eq(llm_scan_confidence(r), 800, "0.8 -> 800");
+    return 0;
+}
+
+fn test_llm_parse_with_preamble() {
+    test_group("llm: parse JSON with preamble");
+    var text = "Here is my analysis:\n{\"injection\": false, \"confidence\": 0.05, \"reason\": \"normal\"}";
+    var r = parse_classification(text);
+    assert_eq(llm_scan_injection(r),  0,  "not injection");
+    assert_eq(llm_scan_confidence(r), 50, "0.05 -> 50");
+    return 0;
+}
+
+fn test_llm_parse_invalid() {
+    test_group("llm: invalid JSON returns 0");
+    assert_eq(parse_classification("not json at all"), 0, "bad input rejected");
+    assert_eq(parse_classification("{\"nothing\": 42}"), 0, "missing fields rejected");
+    return 0;
+}
+
+fn test_llm_extract_json() {
+    test_group("llm: extract_json boundaries");
+    var js = extract_json("prefix {\"a\": 1} suffix");
+    assert_eq(streq(js, "{\"a\": 1}"), 1, "finds object");
+    assert_eq(extract_json("no braces here"), 0, "no match -> 0");
+    return 0;
+}
+
+fn test_llm_threshold() {
+    test_group("llm: threshold builder + clamp");
+    var s = llm_scanner_new("localhost", 8088, "llama3");
+    assert_eq(llm_scanner_threshold(s), LLM_SCAN_DEFAULT_THRESHOLD_BP, "default 700 bp");
+    llm_scanner_with_threshold(s, 900);
+    assert_eq(llm_scanner_threshold(s), 900, "custom 900");
+    #  Clamping: out-of-range values get clipped.
+    llm_scanner_with_threshold(s, 1500);
+    assert_eq(llm_scanner_threshold(s), 1000, "clamped to 1000");
+    llm_scanner_with_threshold(s, 0 - 50);
+    assert_eq(llm_scanner_threshold(s), 0, "clamped to 0");
+    return 0;
+}
+
+fn test_llm_build_body() {
+    test_group("llm: request body shape");
+    var s = llm_scanner_new("localhost", 8088, "llama3");
+    var body = llm_scan_build_body(s, "what is 2+2?");
+    #  Sanity check the three key fields are present.
+    var c1 = _sc_ci_find(body, strlen(body), 0, "\"model\":\"llama3\"", 16);
+    assert_eq((c1 >= 0), 1, "model field");
+    var c2 = _sc_ci_find(body, strlen(body), 0, "\"prompt\":\"what is 2+2?\"", 23);
+    assert_eq((c2 >= 0), 1, "prompt field (text embedded verbatim)");
+    var c3 = _sc_ci_find(body, strlen(body), 0, "\"temperature\":0", 15);
+    assert_eq((c3 >= 0), 1, "temperature 0");
+    return 0;
+}
+
+fn test_llm_build_body_escapes() {
+    test_group("llm: JSON escapes in prompt body");
+    var s = llm_scanner_new("localhost", 8088, "m");
+    var body = llm_scan_build_body(s, "a\"b\\c");
+    #  Should contain escaped sequences \" and \\
+    var c1 = _sc_ci_find(body, strlen(body), 0, "a\\\"b\\\\c", 7);
+    assert_eq((c1 >= 0), 1, "escaped quote + backslash");
+    return 0;
+}
+
+fn _write_file(path, buf, len) {
+    return file_write_all(path, buf, len);
+}
+
+fn _sign_content(content, content_len, sk_out, pk_out, sig_out) {
+    ed25519_generate_keypair(sk_out, pk_out);
+    ed25519_sign(sk_out, content, content_len, sig_out);
+    return 0;
+}
+
+fn test_signing_no_trusted_keys() {
+    test_group("signing: no trusted keys -> fail");
+    var v = policy_verifier_new();
+    assert_eq(policy_verifier_key_count(v), 0, "empty verifier");
+    assert_eq(policy_verifier_verify_and_read(v, "/tmp/does-not-matter"), 0, "no-keys rejected");
+    return 0;
+}
+
+fn test_signing_valid_roundtrip() {
+    test_group("signing: valid signature roundtrip");
+    var content = "[agent.\"test\"]\nallow = [\"*\"]\n";
+    var clen = strlen(content);
+    var path    = "/tmp/_tron_signtest.toml";
+    var sigpath = "/tmp/_tron_signtest.toml.sig";
+    _write_file(path, content, clen);
+
+    var sk  = alloc(64);
+    var pk  = alloc(32);
+    var sig = alloc(64);
+    _sign_content(content, clen, sk, pk, sig);
+    _write_file(sigpath, sig, 64);
+
+    var v = policy_verifier_new();
+    policy_verifier_add_key(v, pk);
+    assert_eq(policy_verifier_key_count(v), 1, "one key loaded");
+    var toml = policy_verifier_verify_and_read(v, path);
+    assert_eq((toml != 0), 1, "valid signature verified");
+    assert_eq(memeq(toml, content, clen), 1, "policy bytes match");
+    return 0;
+}
+
+fn test_signing_tampered_rejected() {
+    test_group("signing: tampered content rejected");
+    var original = "[agent.\"test\"]\nallow = [\"*\"]\n";
+    var olen = strlen(original);
+    var tampered = "[agent.\"evil\"]\nallow = [\"*\"]\n";
+    var tlen = strlen(tampered);
+    var path    = "/tmp/_tron_signtamp.toml";
+    var sigpath = "/tmp/_tron_signtamp.toml.sig";
+
+    var sk  = alloc(64);
+    var pk  = alloc(32);
+    var sig = alloc(64);
+    _sign_content(original, olen, sk, pk, sig);
+
+    #  Write tampered content but ORIGINAL signature.
+    _write_file(path,    tampered, tlen);
+    _write_file(sigpath, sig, 64);
+
+    var v = policy_verifier_new();
+    policy_verifier_add_key(v, pk);
+    assert_eq(policy_verifier_verify_and_read(v, path), 0, "tampered rejected");
+    return 0;
+}
+
+fn test_signing_wrong_key_rejected() {
+    test_group("signing: wrong key rejected");
+    var content = "[agent.\"x\"]\nallow = [\"*\"]\n";
+    var clen = strlen(content);
+    var path    = "/tmp/_tron_signwrong.toml";
+    var sigpath = "/tmp/_tron_signwrong.toml.sig";
+    _write_file(path, content, clen);
+
+    var sk1 = alloc(64);
+    var pk1 = alloc(32);
+    var sig = alloc(64);
+    _sign_content(content, clen, sk1, pk1, sig);
+    _write_file(sigpath, sig, 64);
+
+    #  Build a verifier with a DIFFERENT keypair.
+    var sk2 = alloc(64);
+    var pk2 = alloc(32);
+    ed25519_generate_keypair(sk2, pk2);
+    var v = policy_verifier_new();
+    policy_verifier_add_key(v, pk2);
+    assert_eq(policy_verifier_verify_and_read(v, path), 0, "untrusted key rejected");
+    return 0;
+}
+
+fn test_signing_missing_sig_rejected() {
+    test_group("signing: missing .sig file rejected");
+    var content = "[agent.\"a\"]\nallow = [\"*\"]\n";
+    var clen = strlen(content);
+    var path    = "/tmp/_tron_signmiss.toml";
+    var sigpath = "/tmp/_tron_signmiss.toml.sig";
+    _write_file(path, content, clen);
+    #  Deliberately NOT writing the .sig file. Ensure any previous file
+    #  from a prior test run is gone by writing zero bytes to the path
+    #  (Cyrius stdlib has no unlink — zero-length + our size check does
+    #  the right thing below).
+    _write_file(sigpath, "", 0);
+
+    var sk = alloc(64);
+    var pk = alloc(32);
+    ed25519_generate_keypair(sk, pk);
+    var v = policy_verifier_new();
+    policy_verifier_add_key(v, pk);
+    assert_eq(policy_verifier_verify_and_read(v, path), 0, "missing sig rejected");
+    return 0;
+}
+
+fn test_signing_pipeline_integration() {
+    test_group("signing: tron_verify_and_load_policy end-to-end");
+    var content = "[agent.\"trusted\"]\nallow = [\"tarang_*\"]\n";
+    var clen = strlen(content);
+    var path    = "/tmp/_tron_signe2e.toml";
+    var sigpath = "/tmp/_tron_signe2e.toml.sig";
+    _write_file(path, content, clen);
+
+    var sk = alloc(64);
+    var pk = alloc(32);
+    var sig = alloc(64);
+    _sign_content(content, clen, sk, pk, sig);
+    _write_file(sigpath, sig, 64);
+
+    var v = policy_verifier_new();
+    policy_verifier_add_key(v, pk);
+
+    var t = tron_new(tron_config_default());
+    var rc = tron_verify_and_load_policy(t, v, path);
+    assert_eq(rc, TRON_ERR_NONE, "verify+load ok");
+
+    #  Confirm the policy actually loaded into the engine.
+    var k, r = policy_check(tron_policy(t), "trusted", "tarang_probe");
+    assert_eq(k, PR_ALLOW, "signed policy grants trusted agent");
+    return 0;
+}
+
 fn test_tron_tool_defs() {
     test_group("tron tool defs");
     var defs = tron_tool_defs();
@@ -1118,6 +1350,21 @@ fn main() {
     test_audit_shell_filler();
     test_audit_template_delimiters();
     test_audit_template_redos();
+    test_llm_parse_clean();
+    test_llm_parse_injection();
+    test_llm_parse_markdown_wrapped();
+    test_llm_parse_with_preamble();
+    test_llm_parse_invalid();
+    test_llm_extract_json();
+    test_llm_threshold();
+    test_llm_build_body();
+    test_llm_build_body_escapes();
+    test_signing_no_trusted_keys();
+    test_signing_valid_roundtrip();
+    test_signing_tampered_rejected();
+    test_signing_wrong_key_rejected();
+    test_signing_missing_sig_rejected();
+    test_signing_pipeline_integration();
     test_tron_tool_defs();
     test_gate_deny_unknown_agent();
     test_gate_allow_with_policy();

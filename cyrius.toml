@@ -11,7 +11,7 @@ entry = "src/main.cyr"
 output = "t-ron"
 
 [deps]
-stdlib = ["string", "fmt", "alloc", "vec", "str", "syscalls", "io", "args", "assert", "tagged", "hashmap", "regex", "fnptr", "chrono", "freelist", "sakshi", "bigint", "json", "base64", "sigil"]
+stdlib = ["string", "fmt", "alloc", "vec", "str", "syscalls", "io", "args", "assert", "tagged", "hashmap", "regex", "fnptr", "chrono", "freelist", "sakshi", "bigint", "json", "base64", "sigil", "net"]
 
 [deps.libro]
 git = "https://github.com/MacCracken/libro"
@@ -31,7 +31,7 @@ modules = [
 [deps.bote]
 git = "https://github.com/MacCracken/bote"
 path = "../bote"
-tag = "1.9.2"
+tag = "2.0.0"
 modules = [
     "src/error.cyr",
     "src/protocol.cyr",
