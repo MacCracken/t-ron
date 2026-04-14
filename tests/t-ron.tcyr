@@ -22,6 +22,8 @@ include "src/policy.cyr"
 include "src/rate.cyr"
 include "src/scanner.cyr"
 include "src/pattern.cyr"
+include "src/audit.cyr"
+include "src/score.cyr"
 
 fn test_errors() {
     test_group("error codes");
@@ -418,6 +420,127 @@ fn test_pattern_isolation() {
     return 0;
 }
 
+fn _mk_deny() {
+    return verdict_deny("nope", DENY_UNAUTHORIZED);
+}
+
+fn _mk_flag() {
+    return verdict_flag("sus");
+}
+
+fn _mk_audit_call(agent, tool) {
+    return tool_call_new(agent, tool, str_from("{}"), 0);
+}
+
+fn test_audit_log_and_query() {
+    test_group("audit log and retrieve");
+    var a = audit_logger_new();
+    var c = _mk_audit_call("agent-1", "test_tool");
+    audit_log(a, c, verdict_allow());
+    audit_log(a, c, _mk_deny());
+    assert_eq(audit_total_count(a), 2, "total = 2");
+    assert_eq(audit_deny_count(a),  1, "denies = 1");
+    var recent = audit_recent(a, 10);
+    assert_eq(vec_len(recent), 2, "recent has 2");
+    assert_eq(security_event_kind(vec_get(recent, 0)), VK_DENY, "most recent is deny");
+    return 0;
+}
+
+fn test_audit_flag_verdict() {
+    test_group("audit flag verdict");
+    var a = audit_logger_new();
+    audit_log(a, _mk_audit_call("agent-1", "test_tool"), _mk_flag());
+    var events = audit_recent(a, 1);
+    assert_eq(security_event_kind(vec_get(events, 0)),  VK_FLAG,        "flag recorded");
+    assert_eq(streq(security_event_reason(vec_get(events, 0)), "sus"), 1, "flag reason");
+    assert_eq(audit_deny_count(a), 0, "flags not counted as denies");
+    return 0;
+}
+
+fn test_audit_agent_filter() {
+    test_group("audit agent event filtering");
+    var a  = audit_logger_new();
+    var ca = _mk_audit_call("agent-a", "tool");
+    var cb = _mk_audit_call("agent-b", "tool");
+    for (var i = 0; i < 5; i = i + 1) { audit_log(a, ca, verdict_allow()); }
+    for (var i = 0; i < 3; i = i + 1) { audit_log(a, cb, verdict_allow()); }
+    assert_eq(vec_len(audit_agent_events(a, "agent-a", 100)), 5, "agent-a = 5");
+    assert_eq(vec_len(audit_agent_events(a, "agent-b", 100)), 3, "agent-b = 3");
+    assert_eq(vec_len(audit_agent_events(a, "nobody",   100)), 0, "nobody = 0");
+    assert_eq(vec_len(audit_agent_events(a, "agent-a", 3)),    3, "limit = 3");
+    return 0;
+}
+
+fn test_audit_empty() {
+    test_group("audit empty state");
+    var a = audit_logger_new();
+    assert_eq(audit_total_count(a),               0, "empty total");
+    assert_eq(audit_deny_count(a),                0, "empty denies");
+    assert_eq(vec_len(audit_recent(a, 10)),       0, "empty recent");
+    assert_eq(vec_len(audit_agent_events(a, "x", 10)), 0, "empty agent events");
+    return 0;
+}
+
+fn test_audit_unique_id() {
+    test_group("audit unique event ids");
+    var a = audit_logger_new();
+    var c = _mk_audit_call("agent-1", "tool");
+    audit_log(a, c, verdict_allow());
+    audit_log(a, c, verdict_allow());
+    var r = audit_recent(a, 2);
+    var id_a = security_event_id(vec_get(r, 0));
+    var id_b = security_event_id(vec_get(r, 1));
+    assert_eq((id_a != id_b), 1, "ids differ");
+    return 0;
+}
+
+fn test_risk_clean() {
+    test_group("risk score clean agent");
+    var a = audit_logger_new();
+    var c = _mk_audit_call("good-agent", "tool");
+    for (var i = 0; i < 10; i = i + 1) { audit_log(a, c, verdict_allow()); }
+    assert_eq(risk_score(a, "good-agent"), 0, "0 risk for all allows");
+    return 0;
+}
+
+fn test_risk_max() {
+    test_group("risk score all denied");
+    var a = audit_logger_new();
+    var c = _mk_audit_call("bad-agent", "tool");
+    for (var i = 0; i < 10; i = i + 1) { audit_log(a, c, _mk_deny()); }
+    assert_eq(risk_score(a, "bad-agent"), SCORE_SCALE, "1000 = max risk");
+    return 0;
+}
+
+fn test_risk_unknown() {
+    test_group("risk score unknown agent");
+    var a = audit_logger_new();
+    assert_eq(risk_score(a, "nobody"), 0, "unknown = 0");
+    return 0;
+}
+
+fn test_risk_flags_half() {
+    test_group("risk score flags only");
+    var a = audit_logger_new();
+    var c = _mk_audit_call("flagged", "tool");
+    for (var i = 0; i < 10; i = i + 1) { audit_log(a, c, _mk_flag()); }
+    #  10 flags, 0 denies, total=10: (0*2 + 10)/(10*2) = 0.5 -> 500
+    assert_eq(risk_score(a, "flagged"), 500, "flags-only = 500");
+    return 0;
+}
+
+fn test_risk_mixed() {
+    test_group("risk score mixed verdicts");
+    var a = audit_logger_new();
+    var c = _mk_audit_call("mixed", "tool");
+    for (var i = 0; i < 5; i = i + 1) { audit_log(a, c, verdict_allow()); }
+    for (var i = 0; i < 3; i = i + 1) { audit_log(a, c, _mk_deny()); }
+    for (var i = 0; i < 2; i = i + 1) { audit_log(a, c, _mk_flag()); }
+    #  (3*2 + 2) / (10*2) = 8/20 = 0.4 -> 400
+    assert_eq(risk_score(a, "mixed"), 400, "mixed = 400");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_errors();
@@ -440,6 +563,16 @@ fn main() {
     test_pattern_ring_buffer();
     test_pattern_time_anomaly();
     test_pattern_isolation();
+    test_audit_log_and_query();
+    test_audit_flag_verdict();
+    test_audit_agent_filter();
+    test_audit_empty();
+    test_audit_unique_id();
+    test_risk_clean();
+    test_risk_max();
+    test_risk_unknown();
+    test_risk_flags_half();
+    test_risk_mixed();
     return assert_summary();
 }
 

@@ -1,0 +1,140 @@
+#  audit.cyr  --  operational audit logger (ring buffer tier)
+#
+#  Ported from rust-old/src/audit.rs. This file covers the ring-buffer
+#  side only (fast operational queries for risk scoring + recent events).
+#  The libro cryptographic hash chain will be wired in a follow-up step
+#  once the [deps.libro] entry is added to cyrius.toml.
+
+var AUDIT_MAX_EVENTS = 10000;
+
+#  ============================================================
+#  SecurityEvent  --  one logged verdict
+#  ============================================================
+#
+#  Layout (48 bytes):
+#    +0   id           i64      incrementing sequence number
+#    +8   timestamp    i64      ns since epoch (clock_epoch_ns)
+#    +16  agent_id     cstring  owned copy
+#    +24  tool_name    cstring  owned copy
+#    +32  verdict_kind i64      VK_ALLOW | VK_DENY | VK_FLAG
+#    +40  reason       cstring  owned copy (0 if none)
+
+fn _audit_dup_cstr(s) {
+    if (s == 0) { return 0; }
+    var n = strlen(s);
+    var buf = alloc(n + 1);
+    memcpy(buf, s, n);
+    store8(buf + n, 0);
+    return buf;
+}
+
+fn security_event_new(id, ts, agent_id, tool_name, kind, reason) {
+    var e = alloc(48);
+    store64(e,      id);
+    store64(e + 8,  ts);
+    store64(e + 16, _audit_dup_cstr(agent_id));
+    store64(e + 24, _audit_dup_cstr(tool_name));
+    store64(e + 32, kind);
+    store64(e + 40, _audit_dup_cstr(reason));
+    return e;
+}
+
+fn security_event_id(e)        { return load64(e); }
+fn security_event_timestamp(e) { return load64(e + 8); }
+fn security_event_agent_id(e)  { return load64(e + 16); }
+fn security_event_tool_name(e) { return load64(e + 24); }
+fn security_event_kind(e)      { return load64(e + 32); }
+fn security_event_reason(e)    { return load64(e + 40); }
+
+#  ============================================================
+#  AuditLogger  --  ring-buffered event stream
+#  ============================================================
+#
+#  Layout (16 bytes):
+#    +0   events     vec<SecurityEvent>
+#    +8   next_id    i64       monotonic event id
+
+fn audit_logger_new() {
+    var a = alloc(16);
+    store64(a,     vec_new());
+    store64(a + 8, 0);
+    return a;
+}
+
+fn audit_events(a) { return load64(a); }
+
+fn _audit_next_id(a) {
+    var id = load64(a + 8);
+    store64(a + 8, id + 1);
+    return id;
+}
+
+#  Log a verdict. Extracts reason from the Verdict struct (0 for Allow).
+fn audit_log(a, call, verdict) {
+    var kind = verdict_kind(verdict);
+    var reason = verdict_reason(verdict);            #  0 for Allow, cstring otherwise
+    var e = security_event_new(
+        _audit_next_id(a),
+        clock_epoch_ns(),
+        tool_call_agent_id(call),
+        tool_call_tool_name(call),
+        kind,
+        reason);
+    var events = load64(a);
+    vec_push(events, e);
+    while (vec_len(events) > AUDIT_MAX_EVENTS) { vec_remove(events, 0); }
+    return 0;
+}
+
+#  Total event count.
+fn audit_total_count(a) {
+    return vec_len(load64(a));
+}
+
+#  Total denied events.
+fn audit_deny_count(a) {
+    var events = load64(a);
+    var n = vec_len(events);
+    var denies = 0;
+    var i = 0;
+    while (i < n) {
+        if (security_event_kind(vec_get(events, i)) == VK_DENY) {
+            denies = denies + 1;
+        }
+        i = i + 1;
+    }
+    return denies;
+}
+
+#  Return up to `limit` most-recent events as a new vec (newest first).
+fn audit_recent(a, limit) {
+    var events = load64(a);
+    var n = vec_len(events);
+    var out = vec_new();
+    var i = n - 1;
+    var taken = 0;
+    while (i >= 0 && taken < limit) {
+        vec_push(out, vec_get(events, i));
+        taken = taken + 1;
+        i = i - 1;
+    }
+    return out;
+}
+
+#  Return up to `limit` most-recent events filtered by agent_id.
+fn audit_agent_events(a, agent_id, limit) {
+    var events = load64(a);
+    var n = vec_len(events);
+    var out = vec_new();
+    var i = n - 1;
+    var taken = 0;
+    while (i >= 0 && taken < limit) {
+        var e = vec_get(events, i);
+        if (streq(security_event_agent_id(e), agent_id) == 1) {
+            vec_push(out, e);
+            taken = taken + 1;
+        }
+        i = i - 1;
+    }
+    return out;
+}

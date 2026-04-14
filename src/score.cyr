@@ -1,0 +1,39 @@
+#  score.cyr  --  per-agent rolling risk score
+#
+#  Ported from rust-old/src/score.rs.
+#
+#  Rust returns f64 in [0.0, 1.0]. Cyrius is i64 at the value level, so
+#  we return an integer in basis points of a full scale of 1000 (1000 =
+#  max risk, 0 = trusted). Callers that want a percentage divide by 10;
+#  callers that want the Rust fractional divide by 1000.
+#
+#  Formula matches Rust exactly:
+#    weighted = denies * 2 + flags
+#    score    = weighted / (total * 2)        [clamped to 1.0]
+#
+#  Integer form:
+#    score_milli = weighted * 1000 / (total * 2)
+#    (if weighted * 2 >= total * 2, clamp to 1000)
+
+var SCORE_SCALE = 1000;
+
+fn risk_score(audit, agent_id) {
+    var events = audit_agent_events(audit, agent_id, 100);
+    var n = vec_len(events);
+    if (n == 0) { return 0; }
+
+    var denies = 0;
+    var flags  = 0;
+    var i = 0;
+    while (i < n) {
+        var k = security_event_kind(vec_get(events, i));
+        if (k == VK_DENY) { denies = denies + 1; }
+        elif (k == VK_FLAG) { flags = flags + 1; }
+        i = i + 1;
+    }
+
+    var weighted = denies * 2 + flags;
+    var denom    = n * 2;
+    if (weighted >= denom) { return SCORE_SCALE; }
+    return (weighted * SCORE_SCALE) / denom;
+}

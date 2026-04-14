@@ -78,7 +78,7 @@ fn verdict_kind_as_str(k) {
 #
 #  Layout (32 bytes):
 #    +0   kind    i64      VerdictKind
-#    +8   reason  i64      Str pointer (0 for Allow)
+#    +8   reason  i64      cstring pointer (0 for Allow)
 #    +16  code    i64      DenyCode (only meaningful for Deny; 0 otherwise)
 #    +24  _rsv    i64      reserved for future fields
 

@@ -24,6 +24,8 @@ include "src/policy.cyr"
 include "src/rate.cyr"
 include "src/scanner.cyr"
 include "src/pattern.cyr"
+include "src/audit.cyr"
+include "src/score.cyr"
 
 fn main() {
     alloc_init();
