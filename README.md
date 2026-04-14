@@ -141,15 +141,16 @@ Cyrius 4.5.0, x86_64, 2026-04-14 (see `bench-history.csv` for full history):
 ## Roadmap
 
 ### Pending
-- [ ] `signal.cyr` — SIGHUP policy hot-reload via signalfd
 - [ ] `safety/` — AI guardrails submodule (5 modules, ~1 500 LOC from rust-old)
-- [ ] `audit_export_encrypted` — ChaCha20-Poly1305 audit export
 - [ ] description-hash pinning in bote registry (audit follow-up F1)
 
 ### Recently landed
+- `src/signal.cyr` — SIGHUP hot-reload via signalfd (non-blocking, consumer-polled). `tron_load_policy_file` + `tron_reload_policy` plumbing.
+- `src/crypto_chacha20.cyr` — RFC 7539 ChaCha20 stream cipher, verified against the standard test vector
+- `audit_export_json` + `audit_export_encrypted` / `audit_decrypt_export` — operational JSON dump and ChaCha20 + Ed25519 AEAD envelope (Ed25519 replaces Poly1305 to reuse sigil's constant-time impl)
 - `src/llm_scan.cyr` — LLM-assisted prompt injection detection via hoosh 2.0 HTTP API (self-contained, stdlib-only)
 - `src/signing.cyr` — Ed25519 policy signature verification via sigil
-- bote bump to 2.0.0 (stable handler-claims ABI)
+- bote bump to 2.2.0 (JWT HS256 verifier)
 
 ### Phase 2 — Advanced Detection
 - [ ] ML-based anomaly detection (train on normal patterns, flag deviations)

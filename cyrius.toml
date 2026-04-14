@@ -31,7 +31,7 @@ modules = [
 [deps.bote]
 git = "https://github.com/MacCracken/bote"
 path = "../bote"
-tag = "2.0.0"
+tag = "2.2.0"
 modules = [
     "src/error.cyr",
     "src/protocol.cyr",

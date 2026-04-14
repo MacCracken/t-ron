@@ -1,0 +1,115 @@
+#  crypto_chacha20.cyr  --  ChaCha20 stream cipher (RFC 7539 section 2.3)
+#
+#  Cyrius is i64-everything; ChaCha20 is 32-bit. Every arithmetic result
+#  is masked through `x & 0xFFFFFFFF` so the high 32 bits of each state
+#  word are always zero. Verified against RFC 7539 section 2.4.2 test
+#  vectors (tests/t-ron-crypto.tcyr:test_chacha20_rfc_vector).
+
+var cc20_state_g   = 0;
+var cc20_working_g = 0;
+var cc20_ks_g      = 0;
+
+fn cc20_u32(x) { return x & 0xFFFFFFFF; }
+
+fn cc20_rotl32(x, n) {
+    return cc20_u32((x << n) | ((x & 0xFFFFFFFF) >> (32 - n)));
+}
+
+fn cc20_qr(state, a, b, c, d) {
+    var va = load64(state + a * 8);
+    var vb = load64(state + b * 8);
+    var vc = load64(state + c * 8);
+    var vd = load64(state + d * 8);
+    va = cc20_u32(va + vb); vd = cc20_rotl32(vd ^ va, 16);
+    vc = cc20_u32(vc + vd); vb = cc20_rotl32(vb ^ vc, 12);
+    va = cc20_u32(va + vb); vd = cc20_rotl32(vd ^ va, 8);
+    vc = cc20_u32(vc + vd); vb = cc20_rotl32(vb ^ vc, 7);
+    store64(state + a * 8, va);
+    store64(state + b * 8, vb);
+    store64(state + c * 8, vc);
+    store64(state + d * 8, vd);
+    return 0;
+}
+
+fn cc20_le32(buf, off) {
+    var a = load8(buf + off)     & 0xFF;
+    var b = load8(buf + off + 1) & 0xFF;
+    var c = load8(buf + off + 2) & 0xFF;
+    var d = load8(buf + off + 3) & 0xFF;
+    return cc20_u32(a | (b << 8) | (c << 16) | (d << 24));
+}
+
+fn cc20_st32(buf, off, v) {
+    store8(buf + off,     v        & 0xFF);
+    store8(buf + off + 1, (v >> 8)  & 0xFF);
+    store8(buf + off + 2, (v >> 16) & 0xFF);
+    store8(buf + off + 3, (v >> 24) & 0xFF);
+    return 0;
+}
+
+fn cc20_init(state, key, counter, nonce) {
+    store64(state +  0 * 8, 0x61707865);
+    store64(state +  1 * 8, 0x3320646e);
+    store64(state +  2 * 8, 0x79622d32);
+    store64(state +  3 * 8, 0x6b206574);
+    var i = 0;
+    while (i < 8) {
+        store64(state + (4 + i) * 8, cc20_le32(key, i * 4));
+        i = i + 1;
+    }
+    store64(state + 12 * 8, cc20_u32(counter));
+    store64(state + 13 * 8, cc20_le32(nonce, 0));
+    store64(state + 14 * 8, cc20_le32(nonce, 4));
+    store64(state + 15 * 8, cc20_le32(nonce, 8));
+    return 0;
+}
+
+fn cc20_block(key, counter, nonce, out) {
+    if (cc20_state_g == 0) {
+        cc20_state_g   = alloc(128);
+        cc20_working_g = alloc(128);
+    }
+    cc20_init(cc20_state_g, key, counter, nonce);
+    memcpy(cc20_working_g, cc20_state_g, 128);
+    var r = 0;
+    while (r < 10) {
+        cc20_qr(cc20_working_g, 0, 4,  8, 12);
+        cc20_qr(cc20_working_g, 1, 5,  9, 13);
+        cc20_qr(cc20_working_g, 2, 6, 10, 14);
+        cc20_qr(cc20_working_g, 3, 7, 11, 15);
+        cc20_qr(cc20_working_g, 0, 5, 10, 15);
+        cc20_qr(cc20_working_g, 1, 6, 11, 12);
+        cc20_qr(cc20_working_g, 2, 7,  8, 13);
+        cc20_qr(cc20_working_g, 3, 4,  9, 14);
+        r = r + 1;
+    }
+    var i = 0;
+    while (i < 16) {
+        var sum = cc20_u32(load64(cc20_working_g + i * 8) + load64(cc20_state_g + i * 8));
+        cc20_st32(out, i * 4, sum);
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn chacha20_xor(key, nonce, counter, data, len, out) {
+    if (cc20_ks_g == 0) { cc20_ks_g = alloc(64); }
+    var processed = 0;
+    var ctr = counter;
+    while (processed < len) {
+        cc20_block(key, ctr, nonce, cc20_ks_g);
+        var remaining = len - processed;
+        var take = 64;
+        if (remaining < take) { take = remaining; }
+        var j = 0;
+        while (j < take) {
+            var a = load8(data + processed + j) & 0xFF;
+            var b = load8(cc20_ks_g + j)         & 0xFF;
+            store8(out + processed + j, a ^ b);
+            j = j + 1;
+        }
+        processed = processed + take;
+        ctr = cc20_u32(ctr + 1);
+    }
+    return 0;
+}

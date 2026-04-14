@@ -139,6 +139,34 @@ fn tron_load_policy(t, toml_cstr) {
     return TRON_ERR_NONE;
 }
 
+#  Load a policy from a file path and stash the path for later reload.
+#  Returns TRON_ERR_NONE on success, TRON_ERR_IO on read failure,
+#  TRON_ERR_POLICY_CONFIG on parse failure.
+var _tron_policy_read_buf = 0;
+var _tron_policy_read_cap = 262144;      #  256 KB — same cap as lib/toml.cyr
+
+fn tron_load_policy_file(t, path) {
+    if (_tron_policy_read_buf == 0) {
+        _tron_policy_read_buf = alloc(_tron_policy_read_cap + 1);
+    }
+    var n = file_read_all(path, _tron_policy_read_buf, _tron_policy_read_cap);
+    if (n < 0) { return TRON_ERR_IO; }
+    if (n >= _tron_policy_read_cap) { return TRON_ERR_IO; }
+    store8(_tron_policy_read_buf + n, 0);
+    var rc = tron_load_policy(t, _tron_policy_read_buf);
+    if (rc != TRON_ERR_NONE) { return rc; }
+    tron_set_policy_path(t, path);
+    return TRON_ERR_NONE;
+}
+
+#  Reload policy from the previously stored path. Returns TRON_ERR_POLICY
+#  if no path was set, otherwise the same codes as tron_load_policy_file.
+fn tron_reload_policy(t) {
+    var path = load64(t + 48);
+    if (path == 0) { return TRON_ERR_POLICY; }
+    return tron_load_policy_file(t, path);
+}
+
 #  ============================================================
 #  check()  --  the security pipeline
 #  ============================================================

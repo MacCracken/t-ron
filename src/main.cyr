@@ -60,6 +60,8 @@ include "lib/net.cyr"
 include "src/middleware.cyr"
 include "src/llm_scan.cyr"
 include "src/signing.cyr"
+include "src/signal.cyr"
+include "src/crypto_chacha20.cyr"
 
 fn main() {
     alloc_init();

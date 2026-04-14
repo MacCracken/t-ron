@@ -1,0 +1,86 @@
+#  signal.cyr  --  SIGHUP-driven policy hot-reload via signalfd
+#
+#  Ported from rust-old/src/signal.rs. The Rust version spawns a tokio
+#  task that awaits `SignalKind::hangup()` and calls `reload_policy`.
+#  Cyrius is sync, so the port exposes primitives the consumer plugs
+#  into its own event loop:
+#
+#    fd = sighup_init()                  # block SIGHUP, open signalfd
+#    while running {
+#        # ... multiplex with epoll / poll here, waking on fd ...
+#        n = sighup_drain_and_reload(fd, tron)
+#        if n > 0 { log("reloaded") }
+#    }
+#    sighup_close(fd)
+#
+#  `sighup_drain_and_reload` returns the number of successfully-
+#  processed SIGHUPs in the current drain (signalfd coalesces queued
+#  signals into siginfo records, one per read).
+
+var SIGNALFD_SIGINFO_SIZE = 128;       #  struct signalfd_siginfo (kernel fixed)
+var SFD_NONBLOCK          = 2048;      #  O_NONBLOCK
+
+#  ============================================================
+#  Init  --  block SIGHUP process-wide and return a signalfd.
+#  ============================================================
+#
+#  Must be called BEFORE any thread might deliver SIGHUP. Blocking
+#  the signal prevents the default hang-up action (process exit) and
+#  routes the signal into the returned file descriptor instead.
+#
+#  Returns the fd (>=0) on success, a negative errno value on failure.
+
+fn sighup_init() {
+    var mask = sigset_new();
+    sigset_add(mask, SIGHUP);
+    var rc = sys_sigprocmask(SIG_BLOCK, mask, 0);
+    if (rc < 0) { return rc; }
+    #  fd=-1 → create a new signalfd; SFD_NONBLOCK so the drain loop can
+    #  detect "no more queued signals" via a short read instead of
+    #  blocking forever. Consumers that want blocking semantics should
+    #  integrate via epoll/poll rather than calling the drain helper.
+    return sys_signalfd(0 - 1, mask, SFD_NONBLOCK);
+}
+
+#  ============================================================
+#  Drain  --  consume all queued signalfd records, reload once.
+#  ============================================================
+#
+#  signalfd coalesces duplicate queued signals into a single record per
+#  read; we loop until the fd is empty (in non-blocking mode) or until
+#  read returns fewer than SIGINFO_SIZE bytes (in blocking mode, this
+#  should not happen — callers poll first). Regardless of how many
+#  records we drained, we only trigger ONE reload per drain cycle
+#  because reloading the same file twice in a row is wasteful.
+#
+#  Returns 0 on success (reload OK, or no signals pending), a TRON_ERR_*
+#  code on reload failure.
+
+var _sighup_buf = 0;
+
+fn sighup_drain_and_reload(fd, tron) {
+    if (_sighup_buf == 0) { _sighup_buf = alloc(SIGNALFD_SIGINFO_SIZE); }
+
+    var saw_signal = 0;
+    while (1 == 1) {
+        var n = sys_read(fd, _sighup_buf, SIGNALFD_SIGINFO_SIZE);
+        if (n != SIGNALFD_SIGINFO_SIZE) { break; }
+        saw_signal = 1;
+    }
+    if (saw_signal == 0) { return TRON_ERR_NONE; }
+
+    return tron_reload_policy(tron);
+}
+
+#  ============================================================
+#  Close  --  release the signalfd (leaves SIGHUP still blocked).
+#  ============================================================
+#
+#  The sigprocmask change is intentionally not reverted — re-enabling
+#  SIGHUP without a replacement handler would resurrect the default
+#  "terminate" disposition mid-run.
+
+fn sighup_close(fd) {
+    sys_close(fd);
+    return 0;
+}

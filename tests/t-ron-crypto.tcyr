@@ -1,0 +1,288 @@
+# t-ron crypto + signal + audit-export test suite
+#
+# This file is separate from tests/t-ron.tcyr because the combined
+# content exceeds a Cyrius compile-state threshold; splitting gives
+# each suite its own fresh parser context.
+
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/alloc.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/syscalls.cyr"
+include "lib/io.cyr"
+include "lib/tagged.cyr"
+include "lib/assert.cyr"
+include "lib/fnptr.cyr"
+include "lib/hashmap.cyr"
+include "lib/regex.cyr"
+include "lib/chrono.cyr"
+include "lib/freelist.cyr"
+include "lib/sakshi.cyr"
+include "lib/bigint.cyr"
+include "lib/json.cyr"
+include "lib/base64.cyr"
+include "lib/sigil.cyr"
+include "lib/net.cyr"
+
+include "lib/libro_error.cyr"
+include "lib/libro_hasher.cyr"
+include "lib/libro_entry.cyr"
+include "lib/libro_verify.cyr"
+include "lib/libro_chain.cyr"
+include "lib/libro_query.cyr"
+include "lib/libro_retention.cyr"
+include "lib/libro_review.cyr"
+
+include "src/error.cyr"
+include "src/gate.cyr"
+include "src/policy.cyr"
+include "src/rate.cyr"
+include "src/scanner.cyr"
+include "src/pattern.cyr"
+include "src/audit.cyr"
+include "src/score.cyr"
+include "src/query.cyr"
+include "src/correlation.cyr"
+include "src/tron.cyr"
+include "src/signing.cyr"
+include "src/signal.cyr"
+include "src/crypto_chacha20.cyr"
+
+fn _write_file(path, buf, len) { return file_write_all(path, buf, len); }
+
+fn _mk_audit_call(agent, tool) {
+    return tool_call_new(agent, tool, "{}", 0);
+}
+
+fn _mk_deny() { return verdict_deny("nope", DENY_UNAUTHORIZED); }
+fn _mk_flag() { return verdict_flag("sus"); }
+
+# ============================================================
+# tron_load_policy_file + tron_reload_policy
+# ============================================================
+
+fn test_tron_load_policy_file() {
+    test_group("tron: load policy from file path");
+    var path = "/tmp/_tron_loadfile.toml";
+    var content = "[agent.\"filer\"]\nallow = [\"tarang_*\"]\n";
+    _write_file(path, content, strlen(content));
+    var t = tron_new(tron_config_default());
+    assert_eq(tron_load_policy_file(t, path), TRON_ERR_NONE, "load ok");
+    assert_eq(streq(tron_policy_path(t), path), 1, "path stored");
+    var k, r = policy_check(tron_policy(t), "filer", "tarang_probe");
+    assert_eq(k, PR_ALLOW, "policy active");
+    return 0;
+}
+
+fn test_tron_reload_policy_noop() {
+    test_group("tron: reload without stored path errors");
+    var t = tron_new(tron_config_default());
+    assert_eq(tron_reload_policy(t), TRON_ERR_POLICY, "no path -> policy err");
+    return 0;
+}
+
+fn test_tron_reload_policy_picks_up_changes() {
+    test_group("tron: reload picks up file changes");
+    var path = "/tmp/_tron_reload.toml";
+    _write_file(path, "[agent.\"webA\"]\nallow = [\"tarang_*\"]\n",
+                strlen("[agent.\"webA\"]\nallow = [\"tarang_*\"]\n"));
+    var t = tron_new(tron_config_default());
+    assert_eq(tron_load_policy_file(t, path), TRON_ERR_NONE, "initial load");
+    var k1, r1 = policy_check(tron_policy(t), "webA", "tarang_probe");
+    assert_eq(k1, PR_ALLOW, "v1 allow");
+
+    var updated = "[agent.\"webB\"]\nallow = [\"rasa_*\"]\n";
+    _write_file(path, updated, strlen(updated));
+    assert_eq(tron_reload_policy(t), TRON_ERR_NONE, "reload ok");
+    var k2, r2 = policy_check(tron_policy(t), "webA", "tarang_probe");
+    assert_eq(k2, PR_UNKNOWN_AGENT, "old agent gone after reload");
+    var k3, r3 = policy_check(tron_policy(t), "webB", "rasa_edit");
+    assert_eq(k3, PR_ALLOW, "new agent active");
+    return 0;
+}
+
+# ============================================================
+# SIGHUP hot-reload via signalfd
+# ============================================================
+
+fn test_sighup_init_returns_fd() {
+    test_group("signal: sighup_init returns usable non-blocking fd");
+    var fd = sighup_init();
+    assert_eq((fd >= 0), 1, "fd returned");
+    var t = tron_new(tron_config_default());
+    assert_eq(sighup_drain_and_reload(fd, t), TRON_ERR_NONE, "empty drain ok");
+    sighup_close(fd);
+    return 0;
+}
+
+fn test_sighup_triggers_reload() {
+    test_group("signal: delivered SIGHUP triggers reload");
+    var path = "/tmp/_tron_sighup.toml";
+    var original = "[agent.\"pre\"]\nallow = [\"*\"]\n";
+    _write_file(path, original, strlen(original));
+    var t = tron_new(tron_config_default());
+    assert_eq(tron_load_policy_file(t, path), TRON_ERR_NONE, "initial load");
+
+    var fd = sighup_init();
+    assert_eq((fd >= 0), 1, "fd ok");
+
+    var updated = "[agent.\"post\"]\nallow = [\"*\"]\n";
+    _write_file(path, updated, strlen(updated));
+    var pid = syscall(39, 0);                      # SYS_getpid
+    syscall(62, pid, SIGHUP);                      # SYS_kill(self, SIGHUP)
+
+    assert_eq(sighup_drain_and_reload(fd, t), TRON_ERR_NONE, "drain+reload ok");
+    var k, r = policy_check(tron_policy(t), "post", "any");
+    assert_eq(k, PR_ALLOW, "reloaded policy active");
+    var k2, r2 = policy_check(tron_policy(t), "pre", "any");
+    assert_eq(k2, PR_UNKNOWN_AGENT, "old agent gone");
+    sighup_close(fd);
+    return 0;
+}
+
+# ============================================================
+# ChaCha20  --  RFC 7539 section 2.4.2 test vector
+# ============================================================
+
+fn _cc_fill_key(buf) {
+    var i = 0;
+    while (i < 32) { store8(buf + i, i); i = i + 1; }
+    return 0;
+}
+
+fn _cc_fill_nonce(buf) {
+    store8(buf +  0, 0);  store8(buf +  1, 0);
+    store8(buf +  2, 0);  store8(buf +  3, 0);
+    store8(buf +  4, 0);  store8(buf +  5, 0);
+    store8(buf +  6, 0);  store8(buf +  7, 0x4a);
+    store8(buf +  8, 0);  store8(buf +  9, 0);
+    store8(buf + 10, 0);  store8(buf + 11, 0);
+    return 0;
+}
+
+fn test_chacha20_rfc_vector() {
+    test_group("chacha20: RFC 7539 test vector");
+    var key = alloc(32);
+    _cc_fill_key(key);
+    var nonce = alloc(12);
+    _cc_fill_nonce(nonce);
+    var plaintext = "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.";
+    var plen = strlen(plaintext);
+    var ct = alloc(plen);
+    chacha20_xor(key, nonce, 1, plaintext, plen, ct);
+
+    assert_eq(load8(ct + 0) & 0xFF, 0x6e, "ct[0] = 6e");
+    assert_eq(load8(ct + 1) & 0xFF, 0x2e, "ct[1] = 2e");
+    assert_eq(load8(ct + 2) & 0xFF, 0x35, "ct[2] = 35");
+    assert_eq(load8(ct + 3) & 0xFF, 0x9a, "ct[3] = 9a");
+    assert_eq(load8(ct + 4) & 0xFF, 0x25, "ct[4] = 25");
+    assert_eq(load8(ct + 5) & 0xFF, 0x68, "ct[5] = 68");
+
+    var pt2 = alloc(plen + 1);
+    chacha20_xor(key, nonce, 1, ct, plen, pt2);
+    store8(pt2 + plen, 0);
+    assert_eq(memeq(pt2, plaintext, plen), 1, "roundtrip plaintext");
+    return 0;
+}
+
+# ============================================================
+# Audit export  --  plain JSON + ChaCha20+Ed25519 AEAD
+# ============================================================
+
+fn test_audit_export_json_shape() {
+    test_group("audit: export_json shape");
+    var a = audit_logger_new();
+    var c = _mk_audit_call("agent-1", "tarang_probe");
+    audit_log(a, c, verdict_allow());
+    audit_log(a, c, _mk_deny());
+    var json = audit_export_json(a);
+    var n = strlen(json);
+    assert_eq(load8(json)     & 0xFF, 0x5b, "starts with [");
+    assert_eq(load8(json + n - 1) & 0xFF, 0x5d, "ends with ]");
+    return 0;
+}
+
+fn test_audit_export_encrypted_roundtrip() {
+    test_group("audit: encrypted export roundtrip");
+    var a = audit_logger_new();
+    var c = _mk_audit_call("secret-agent", "tarang_probe");
+    audit_log(a, c, verdict_allow());
+    audit_log(a, c, verdict_flag("sus"));
+
+    var sk = alloc(64);
+    var pk = alloc(32);
+    ed25519_generate_keypair(sk, pk);
+
+    var key = alloc(32);
+    var i = 0;
+    while (i < 32) { store8(key + i, 0x20 + i); i = i + 1; }
+    var nonce = alloc(12);
+    var j = 0;
+    while (j < 12) { store8(nonce + j, 0x80 + j); j = j + 1; }
+
+    var out_len_slot = alloc(8);
+    var cipher = audit_export_encrypted(a, nonce, key, sk, out_len_slot);
+    var cipher_len = load64(out_len_slot);
+    assert_eq((cipher_len > 76), 1, "envelope has ciphertext");
+
+    var plain = audit_decrypt_export(cipher, cipher_len, key, pk);
+    assert_eq((plain != 0), 1, "decrypt ok");
+
+    var expected = audit_export_json(a);
+    assert_eq(streq(plain, expected), 1, "plaintext matches export_json");
+    return 0;
+}
+
+fn test_audit_decrypt_rejects_tamper() {
+    test_group("audit: decrypt rejects tampered envelope");
+    var a = audit_logger_new();
+    audit_log(a, _mk_audit_call("x", "y"), verdict_allow());
+    var sk = alloc(64);
+    var pk = alloc(32);
+    ed25519_generate_keypair(sk, pk);
+    var key = alloc(32); memset(key, 0x11, 32);
+    var nonce = alloc(12); memset(nonce, 0x22, 12);
+    var out_len_slot = alloc(8);
+    var cipher = audit_export_encrypted(a, nonce, key, sk, out_len_slot);
+    var clen = load64(out_len_slot);
+
+    store8(cipher + 80, (load8(cipher + 80) & 0xFF) ^ 0xFF);
+    assert_eq(audit_decrypt_export(cipher, clen, key, pk), 0, "tampered rejected");
+    return 0;
+}
+
+fn test_audit_decrypt_rejects_wrong_key() {
+    test_group("audit: decrypt rejects wrong signing key");
+    var a = audit_logger_new();
+    audit_log(a, _mk_audit_call("x", "y"), verdict_allow());
+    var sk1 = alloc(64); var pk1 = alloc(32);
+    var sk2 = alloc(64); var pk2 = alloc(32);
+    ed25519_generate_keypair(sk1, pk1);
+    ed25519_generate_keypair(sk2, pk2);
+    var key = alloc(32); memset(key, 0x33, 32);
+    var nonce = alloc(12); memset(nonce, 0x44, 12);
+    var out_len_slot = alloc(8);
+    var cipher = audit_export_encrypted(a, nonce, key, sk1, out_len_slot);
+    var clen = load64(out_len_slot);
+    assert_eq(audit_decrypt_export(cipher, clen, key, pk2), 0, "wrong-key rejected");
+    return 0;
+}
+
+fn main() {
+    alloc_init();
+    test_tron_load_policy_file();
+    test_tron_reload_policy_noop();
+    test_tron_reload_policy_picks_up_changes();
+    test_sighup_init_returns_fd();
+    test_sighup_triggers_reload();
+    test_chacha20_rfc_vector();
+    test_audit_export_json_shape();
+    test_audit_export_encrypted_roundtrip();
+    test_audit_decrypt_rejects_tamper();
+    test_audit_decrypt_rejects_wrong_key();
+    return assert_summary();
+}
+
+var exit_code = main();
+syscall(60, exit_code);

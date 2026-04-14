@@ -8,6 +8,10 @@ All notable changes to t-ron are documented here. This project follows
 ### Added (post-audit)
 - `src/llm_scan.cyr` — optional LLM-assisted prompt injection detection targeting hoosh's HTTP `/infer` endpoint. Self-contained (uses stdlib `net.cyr`), basis-point confidence threshold, markdown-wrapped JSON tolerance, escape-aware body builder. 9 parser tests.
 - `src/signing.cyr` — Ed25519 policy signature verification via sigil. `PolicyVerifier` holds trusted public keys; detached `.sig` files alongside the policy; `tron_verify_and_load_policy` gates the existing load path. 6 tests cover valid roundtrip, tampered content, wrong key, missing sig, empty keyring, and end-to-end pipeline integration.
+- `src/signal.cyr` — SIGHUP policy hot-reload via non-blocking `signalfd`. Consumer-polled API (`sighup_init` / `sighup_drain_and_reload` / `sighup_close`) so t-ron integrates into any event loop. `tron_load_policy_file` + `tron_reload_policy` round out the file-backed policy path. Live SIGHUP-delivery test confirms roundtrip.
+- `src/crypto_chacha20.cyr` — RFC 7539 ChaCha20 stream cipher. Pure Cyrius, i64-masked 32-bit arithmetic, verified against the RFC 7539 section 2.4.2 test vector.
+- `audit.cyr::audit_export_json` + `audit_export_encrypted` + `audit_decrypt_export` — plain JSON ring-buffer export plus ChaCha20 + Ed25519 AEAD envelope. Ed25519 replaces Poly1305 to reuse sigil's constant-time primitive. Wire format: nonce (12) ‖ signature (64) ‖ ciphertext (N). Tamper and wrong-key rejection tests included.
+- `tests/t-ron-crypto.tcyr` — 10-test companion suite (signal, reload, chacha20, audit export). Split from `t-ron.tcyr` because the combined file exceeds a Cyrius compile-state threshold; each suite gets its own fresh parser context.
 
 ### Security
 - Full CVE-class audit pass (see [`docs/audit/2026-04-14.md`](docs/audit/2026-04-14.md)) — 10 fixes landed with regression tests:
@@ -27,7 +31,7 @@ This release is a ground-up rewrite from Rust 0.90.0 to [Cyrius](https://github.
 - **Binary**: 320 KB x86_64 (no runtime, no libc, static ELF)
 
 ### Added
-- `cyrius.toml` with pinned deps: `libro` 1.0.3, `bote` **2.0.0**
+- `cyrius.toml` with pinned deps: `libro` 1.0.3, `bote` **2.2.0**
 - `tests/t-ron.tcyr` — 62 test groups, 245 assertions covering the full pipeline
 - `tests/t-ron.bcyr` — 5 benchmarks (policy_check, scanner variants, audit_log, full check)
 - `scripts/bench-history.sh` — appends `cyrius bench` output to `bench-history.csv`
@@ -37,12 +41,8 @@ This release is a ground-up rewrite from Rust 0.90.0 to [Cyrius](https://github.
 ### Fixed
 - Vendored patch to libro 1.0.3 `_cjh_hash_object`: upstream passed a cstring to `json_get` (which wants a `Str`), causing SEGV on any non-empty details JSON. See [memory note](.claude/memory/libro_1_0_3_bug.md) — drop the patch when libro ships a newer tag.
 
-### Pending (now unblocked — bote 2.0 released)
-- `llm_scan.cyr` — hoosh integration (both deps Cyrius-ready)
-- `signing.cyr` — sigil Ed25519 policy signature verification
-- `signal.cyr` — SIGHUP hot-reload via signalfd
+### Pending
 - `safety/` submodule — AI guardrails (5 Rust files, ~1 500 LOC)
-- `export_encrypted` on `AuditLogger` — ChaCha20-Poly1305 audit export
 - description-hash pinning in bote registry (audit follow-up F1)
 
 ### Benchmarks (x86_64, Cyrius 4.5.0, 2026-04-14)
