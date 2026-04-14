@@ -20,6 +20,10 @@ enum DefaultAction {
     DA_FLAG  = 2;
 }
 
+#  Named constants — replace magic numbers scattered through the pipeline.
+var TRON_DEFAULT_MAX_PARAM_BYTES = 65536;
+var TRON_NS_PER_SEC              = 1000000000;
+
 #  ============================================================
 #  TRonConfig  --  tunable behaviour (40 bytes)
 #  ============================================================
@@ -44,7 +48,7 @@ fn tron_config_default() {
     var c = alloc(48);
     store64(c,      DA_DENY);
     store64(c + 8,  DA_DENY);
-    store64(c + 16, 65536);
+    store64(c + 16, TRON_DEFAULT_MAX_PARAM_BYTES);
     store64(c + 24, 1);
     store64(c + 32, 1);
     store64(c + 40, 0);
@@ -263,7 +267,7 @@ fn tron_check(t, call) {
 
     #  6. Cross-agent correlation
     if (tron_config_enable_correlation(cfg) == 1) {
-        var ts_secs = tool_call_timestamp(call) / 1000000000;
+        var ts_secs = tool_call_timestamp(call) / TRON_NS_PER_SEC;
         var alert = correlation_record_and_check(load64(t + 24), agent_id, tool_name, ts_secs);
         if (alert != 0) {
             var v_corr = verdict_flag(alert);

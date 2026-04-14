@@ -1123,6 +1123,60 @@ fn test_signing_pipeline_integration() {
     return 0;
 }
 
+fn test_audit_oversize_identifier_rejected() {
+    test_group("audit: oversized identifier rejected");
+    #  Build an agent_id 300 bytes long — past the 256-byte safety cap.
+    var huge = alloc(301);
+    var i = 0;
+    while (i < 300) { store8(huge + i, 97); i = i + 1; }
+    store8(huge + 300, 0);
+    assert_eq(tron_is_safe_identifier(huge), 0, "300-byte id rejected");
+
+    var t = tron_new(_permissive_config());
+    var v = tron_check(t, tool_call_new(huge, "tool", "{}", clock_epoch_ns()));
+    assert_eq(verdict_is_denied(v), 1, "pipeline denies oversized id");
+    return 0;
+}
+
+fn test_audit_boundary_identifier_accepted() {
+    test_group("audit: 256-byte identifier at the edge is accepted");
+    var edge = alloc(257);
+    var i = 0;
+    while (i < 256) { store8(edge + i, 98); i = i + 1; }
+    store8(edge + 256, 0);
+    assert_eq(tron_is_safe_identifier(edge), 1, "exactly-256 byte id allowed");
+    return 0;
+}
+
+fn test_scanner_malformed_json_safe() {
+    test_group("scanner: malformed JSON doesn't crash walker");
+    var m1 = "{\"name\": \"unterminated";
+    assert_eq(scanner_scan(m1), 0, "unterminated string: clean walk");
+    var m2 = "{{{{{{{{";
+    assert_eq(scanner_scan(m2), 0, "open-only braces safe");
+    var m3 = "{\"q\":\"safe\" , \"x\": ";
+    assert_eq(scanner_scan(m3), 0, "truncated trailing value safe");
+    return 0;
+}
+
+fn test_scanner_empty_payload() {
+    test_group("scanner: empty / tiny payload");
+    assert_eq(scanner_scan(""),    0, "empty clean");
+    assert_eq(scanner_scan("{}"),  0, "empty object clean");
+    assert_eq(scanner_scan("[]"),  0, "empty array clean");
+    assert_eq(scanner_scan("null"),0, "null literal clean");
+    return 0;
+}
+
+fn test_tron_default_constants() {
+    test_group("tron: named constants match documented defaults");
+    assert_eq(TRON_DEFAULT_MAX_PARAM_BYTES, 65536, "default max = 64 KiB");
+    assert_eq(TRON_NS_PER_SEC, 1000000000, "ns per sec");
+    var cfg = tron_config_default();
+    assert_eq(tron_config_max_param_size(cfg), TRON_DEFAULT_MAX_PARAM_BYTES, "cfg uses constant");
+    return 0;
+}
+
 fn test_tron_tool_defs() {
     test_group("tron tool defs");
     var defs = tron_tool_defs();
@@ -1350,6 +1404,11 @@ fn main() {
     test_audit_shell_filler();
     test_audit_template_delimiters();
     test_audit_template_redos();
+    test_audit_oversize_identifier_rejected();
+    test_audit_boundary_identifier_accepted();
+    test_scanner_malformed_json_safe();
+    test_scanner_empty_payload();
+    test_tron_default_constants();
     test_llm_parse_clean();
     test_llm_parse_injection();
     test_llm_parse_markdown_wrapped();

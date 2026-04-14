@@ -1031,9 +1031,12 @@ fn safety_default_policies() {
     var out = vec_new();
 
     var p1 = safety_policy_new("default-forbidden", "Default Forbidden Actions", SE_BLOCK, 10);
-    safety_policy_add_rule(p1, _safety_mk_forbidden_rule("forbid-rm-rf",    "Block recursive root deletion", "rm -rf /",       SS_CRITICAL));
-    safety_policy_add_rule(p1, _safety_mk_forbidden_rule("forbid-mkfs",     "Block filesystem formatting",   "mkfs",           SS_CRITICAL));
-    safety_policy_add_rule(p1, _safety_mk_forbidden_rule("forbid-dd-zero",  "Block disk zeroing",            "dd if=/dev/zero",SS_CRITICAL));
+    safety_policy_add_rule(p1, _safety_mk_forbidden_rule(
+        "forbid-rm-rf", "Block recursive root deletion", "rm -rf /", SS_CRITICAL));
+    safety_policy_add_rule(p1, _safety_mk_forbidden_rule(
+        "forbid-mkfs", "Block filesystem formatting", "mkfs", SS_CRITICAL));
+    safety_policy_add_rule(p1, _safety_mk_forbidden_rule(
+        "forbid-dd-zero", "Block disk zeroing", "dd if=/dev/zero", SS_CRITICAL));
     vec_push(out, p1);
 
     var p2 = safety_policy_new("default-escalation", "Default Privilege Escalation", SE_BLOCK, 9);

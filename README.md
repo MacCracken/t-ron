@@ -109,7 +109,7 @@ Build and run:
 ```sh
 cyrius deps                              # resolve libro + bote from cyrius.toml
 cyrius build src/main.cyr build/t-ron    # compile (375 KB static x86_64 ELF)
-cyrius test tests/t-ron.tcyr             # 299 assertions across 67 groups
+cyrius test tests/t-ron.tcyr             # 312 assertions across 72 groups
 cyrius test tests/t-ron-crypto.tcyr      # 30 assertions (signal + crypto + export)
 cyrius test tests/t-ron-safety.tcyr      # 48 assertions (safety engine)
 cyrius bench tests/t-ron.bcyr            # 5 pipeline benchmarks

@@ -96,7 +96,7 @@ Rust idioms map to Cyrius as follows:
 
 ## Verification
 
-- 377 tests across 3 suites (`t-ron.tcyr`, `t-ron-crypto.tcyr`,
+- 390 tests across 3 suites (`t-ron.tcyr`, `t-ron-crypto.tcyr`,
   `t-ron-safety.tcyr`), all green.
 - Full CVE-class audit with 10 fixes and regression tests (see
   `docs/audit/2026-04-14.md`).
