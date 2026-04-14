@@ -1,0 +1,177 @@
+#  rate.cyr  --  per-agent, per-tool token bucket rate limiter
+#
+#  Ported from rust-old/src/rate.rs.
+#
+#  Rust uses f64 tokens with fractional refill. Cyrius is i64-first, so
+#  tokens are stored as "millitokens" (tokens * 1000). This gives a
+#  clean fractional bucket without f64 at the value level and preserves
+#  second-granularity refill precision for rates up to ~60,000 cpm.
+#
+#  Keys are "agent_id\x1ftool_name" null-terminated. The 0x1f unit
+#  separator is an ASCII control char that cannot appear in a valid
+#  agent/tool name, so prefix matching on agent_id is unambiguous.
+
+var RATE_DEFAULT_CPM  = 60;
+var RATE_MILLI_PER_TOKEN = 1000;
+var RATE_NS_PER_SEC   = 1000000000;
+
+#  ============================================================
+#  TokenBucket  --  one bucket per (agent_id, tool_name) pair
+#  ============================================================
+#
+#  Layout (32 bytes):
+#    +0   tokens_milli        i64   current tokens * 1000
+#    +8   max_tokens_milli    i64   capacity * 1000
+#    +16  refill_milli_per_s  i64   millitokens to add per second
+#    +24  last_refill_ns      i64   clock_now_ns() of last refill
+
+fn bucket_new(cpm) {
+    var b = alloc(32);
+    var max_milli = cpm * RATE_MILLI_PER_TOKEN;
+    store64(b,      max_milli);
+    store64(b + 8,  max_milli);
+    store64(b + 16, max_milli / 60);
+    store64(b + 24, clock_now_ns());
+    return b;
+}
+
+fn bucket_tokens_milli(b)   { return load64(b); }
+fn bucket_max_milli(b)      { return load64(b + 8); }
+fn bucket_refill_rate(b)    { return load64(b + 16); }
+fn bucket_last_refill(b)    { return load64(b + 24); }
+
+#  Replace the bucket's capacity in response to a policy rate change.
+#  Matches the Rust behaviour: clamp current tokens so a lowered limit
+#  takes effect immediately.
+fn bucket_set_rate(b, cpm) {
+    var max_milli = cpm * RATE_MILLI_PER_TOKEN;
+    store64(b + 8,  max_milli);
+    store64(b + 16, max_milli / 60);
+    if (load64(b) > max_milli) { store64(b, max_milli); }
+    return 0;
+}
+
+#  Refill this bucket based on elapsed wall time since last refill.
+fn bucket_refill(b) {
+    var now = clock_now_ns();
+    var elapsed_ns = now - load64(b + 24);
+    if (elapsed_ns <= 0) {
+        store64(b + 24, now);
+        return 0;
+    }
+    #  added_milli = elapsed_ns * refill_milli_per_s / 1_000_000_000
+    var added = (elapsed_ns * load64(b + 16)) / RATE_NS_PER_SEC;
+    var new_tokens = load64(b) + added;
+    var cap = load64(b + 8);
+    if (new_tokens > cap) { new_tokens = cap; }
+    store64(b, new_tokens);
+    store64(b + 24, now);
+    return 0;
+}
+
+#  Try to consume one whole token. Returns 1 if allowed, 0 if exhausted.
+fn bucket_try_consume(b) {
+    bucket_refill(b);
+    if (load64(b) >= RATE_MILLI_PER_TOKEN) {
+        store64(b, load64(b) - RATE_MILLI_PER_TOKEN);
+        return 1;
+    }
+    return 0;
+}
+
+#  ============================================================
+#  RateLimiter  --  top-level: buckets map + per-agent overrides
+#  ============================================================
+#
+#  Layout (24 bytes):
+#    +0   buckets      hashmap<cstring, bucket ptr>   key = "agent\x1ftool"
+#    +8   default_cpm  i64
+#    +16  agent_rates  hashmap<cstring, i64>          agent_id -> cpm
+
+fn rate_limiter_new() {
+    var r = alloc(24);
+    store64(r,      map_new());
+    store64(r + 8,  RATE_DEFAULT_CPM);
+    store64(r + 16, map_new());
+    return r;
+}
+
+fn rate_limiter_buckets(r) { return load64(r); }
+fn rate_limiter_default_cpm(r) { return load64(r + 8); }
+fn rate_limiter_agent_rates(r) { return load64(r + 16); }
+
+fn rate_limiter_set_default(r, cpm) {
+    store64(r + 8, cpm);
+    return 0;
+}
+
+#  Compose "agent\x1ftool\0" in a fresh allocation.
+fn _rate_bucket_key(agent_id, tool_name) {
+    var alen = strlen(agent_id);
+    var tlen = strlen(tool_name);
+    var key  = alloc(alen + 1 + tlen + 1);
+    memcpy(key, agent_id, alen);
+    store8(key + alen, 0x1f);
+    memcpy(key + alen + 1, tool_name, tlen);
+    store8(key + alen + 1 + tlen, 0);
+    return key;
+}
+
+#  Resolve the effective rate for an agent (per-agent override or default).
+fn _rate_effective_cpm(r, agent_id) {
+    var rates = load64(r + 16);
+    if (map_has(rates, agent_id) == 1) {
+        return map_get(rates, agent_id);
+    }
+    return load64(r + 8);
+}
+
+#  Return 1 if `key` begins with `prefix` followed by 0x1f.
+fn _rate_key_is_agent(key, prefix, prefix_len) {
+    if (memeq(key, prefix, prefix_len) == 0) { return 0; }
+    if (load8(key + prefix_len) != 0x1f) { return 0; }
+    return 1;
+}
+
+#  Check rate limit; consumes a token on success.
+#  Returns 1 if the call is within limits, 0 if it should be denied.
+fn rate_limiter_check(r, agent_id, tool_name) {
+    var buckets = load64(r);
+    var key = _rate_bucket_key(agent_id, tool_name);
+    var b = 0;
+    if (map_has(buckets, key) == 1) {
+        b = map_get(buckets, key);
+    }
+    else {
+        b = bucket_new(_rate_effective_cpm(r, agent_id));
+        map_set(buckets, key, b);
+    }
+    return bucket_try_consume(b);
+}
+
+#  Set the rate limit for a specific agent (cpm).
+#  Applies immediately to existing buckets and is stored so future
+#  buckets for this agent also use the new rate.
+fn rate_limiter_set_rate(r, agent_id, cpm) {
+    #  Store per-agent override (copy into owned cstring so the hashmap
+    #  keeps its own reference independent of caller lifetime).
+    var alen = strlen(agent_id);
+    var owned = alloc(alen + 1);
+    memcpy(owned, agent_id, alen);
+    store8(owned + alen, 0);
+    map_set(load64(r + 16), owned, cpm);
+
+    #  Update all existing buckets keyed by agent_id\x1f*.
+    var buckets = load64(r);
+    var keys = map_keys(buckets);
+    var n = vec_len(keys);
+    var i = 0;
+    while (i < n) {
+        var k = vec_get(keys, i);
+        if (_rate_key_is_agent(k, agent_id, alen) == 1) {
+            bucket_set_rate(map_get(buckets, k), cpm);
+        }
+        i = i + 1;
+    }
+    return 0;
+}

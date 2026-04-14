@@ -16,10 +16,12 @@ include "lib/assert.cyr"
 include "lib/fnptr.cyr"
 include "lib/hashmap.cyr"
 include "lib/regex.cyr"
+include "lib/chrono.cyr"
 
 include "src/error.cyr"
 include "src/gate.cyr"
 include "src/policy.cyr"
+include "src/rate.cyr"
 
 fn main() {
     alloc_init();

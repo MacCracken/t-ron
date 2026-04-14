@@ -12,10 +12,12 @@ include "lib/assert.cyr"
 include "lib/fnptr.cyr"
 include "lib/hashmap.cyr"
 include "lib/regex.cyr"
+include "lib/chrono.cyr"
 
 include "src/error.cyr"
 include "src/gate.cyr"
 include "src/policy.cyr"
+include "src/rate.cyr"
 
 fn main() {
     alloc_init();
@@ -141,6 +143,58 @@ fn main() {
     policy_load_toml(eng5, "[agent.\"lockdown\"]\ndeny = [\"*\"]\n");
     var k14, r14 = policy_check(eng5, "lockdown", "anything");
     assert_eq(k14, PR_DENY, "deny-only policy");
+
+    test_group("rate limiter basic");
+    var rl = rate_limiter_new();
+    var allowed = 0;
+    for (var i = 0; i < 60; i = i + 1) {
+        if (rate_limiter_check(rl, "agent", "tool") == 1) { allowed = allowed + 1; }
+    }
+    assert_eq(allowed, 60, "60 calls allowed");
+    assert_eq(rate_limiter_check(rl, "agent", "tool"), 0, "61st denied");
+
+    test_group("rate limiter separate agents");
+    var rl2 = rate_limiter_new();
+    for (var i = 0; i < 60; i = i + 1) { rate_limiter_check(rl2, "agent-a", "tool"); }
+    assert_eq(rate_limiter_check(rl2, "agent-a", "tool"), 0, "agent-a exhausted");
+    assert_eq(rate_limiter_check(rl2, "agent-b", "tool"), 1, "agent-b has tokens");
+
+    test_group("rate limiter separate tools");
+    var rl3 = rate_limiter_new();
+    for (var i = 0; i < 60; i = i + 1) { rate_limiter_check(rl3, "agent", "tool_a"); }
+    assert_eq(rate_limiter_check(rl3, "agent", "tool_a"), 0, "tool_a exhausted");
+    assert_eq(rate_limiter_check(rl3, "agent", "tool_b"), 1, "tool_b has tokens");
+
+    test_group("rate limiter set_rate lowers");
+    var rl4 = rate_limiter_new();
+    rate_limiter_check(rl4, "agent", "tool");
+    rate_limiter_set_rate(rl4, "agent", 10);
+    var after = 0;
+    for (var i = 0; i < 20; i = i + 1) {
+        if (rate_limiter_check(rl4, "agent", "tool") == 1) { after = after + 1; }
+        else { break; }
+    }
+    assert_eq(after, 10, "lowered to 10");
+
+    test_group("rate limiter set_rate before check");
+    var rl5 = rate_limiter_new();
+    rate_limiter_set_rate(rl5, "nobody", 5);
+    var cnt = 0;
+    for (var i = 0; i < 10; i = i + 1) {
+        if (rate_limiter_check(rl5, "nobody", "tool") == 1) { cnt = cnt + 1; }
+    }
+    assert_eq(cnt, 5, "override applies to new buckets");
+
+    test_group("rate limiter set_rate doesnt cross agents");
+    var rl6 = rate_limiter_new();
+    rate_limiter_check(rl6, "agent-a", "tool");
+    rate_limiter_check(rl6, "agent-b", "tool");
+    rate_limiter_set_rate(rl6, "agent-a", 5);
+    var bcount = 0;
+    for (var i = 0; i < 59; i = i + 1) {
+        if (rate_limiter_check(rl6, "agent-b", "tool") == 1) { bcount = bcount + 1; }
+    }
+    assert_eq(bcount, 59, "agent-b keeps default rate");
 
     return assert_summary();
 }
