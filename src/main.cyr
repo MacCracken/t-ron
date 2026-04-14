@@ -1,0 +1,13 @@
+# t-ron — Cyrius port
+# Ported from 6611 lines of Rust
+
+# Stdlib auto-included via cyrius.toml
+
+fn main() {
+    alloc_init();
+    println("t-ron ready");
+    return 0;
+}
+
+var r = main();
+syscall(SYS_EXIT, r);
