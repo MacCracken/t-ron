@@ -1,10 +1,121 @@
-# t-ron benchmarks
+# t-ron benchmarks — measures the core pipeline + detectors.
+# Run with: cyrius bench tests/t-ron.bcyr
 
-fn bench_noop() { return 0; }
+include "lib/string.cyr"
+include "lib/fmt.cyr"
+include "lib/alloc.cyr"
+include "lib/vec.cyr"
+include "lib/str.cyr"
+include "lib/syscalls.cyr"
+include "lib/io.cyr"
+include "lib/tagged.cyr"
+include "lib/fnptr.cyr"
+include "lib/hashmap.cyr"
+include "lib/regex.cyr"
+include "lib/chrono.cyr"
+include "lib/freelist.cyr"
+include "lib/sakshi.cyr"
+include "lib/bigint.cyr"
+include "lib/json.cyr"
+include "lib/base64.cyr"
+include "lib/sigil.cyr"
+include "lib/bench.cyr"
+
+include "lib/libro_error.cyr"
+include "lib/libro_hasher.cyr"
+include "lib/libro_entry.cyr"
+include "lib/libro_verify.cyr"
+include "lib/libro_chain.cyr"
+include "lib/libro_query.cyr"
+include "lib/libro_retention.cyr"
+include "lib/libro_review.cyr"
+
+include "src/error.cyr"
+include "src/gate.cyr"
+include "src/policy.cyr"
+include "src/rate.cyr"
+include "src/scanner.cyr"
+include "src/pattern.cyr"
+include "src/audit.cyr"
+include "src/score.cyr"
+include "src/query.cyr"
+include "src/correlation.cyr"
+include "src/tron.cyr"
+
+# Shared fixtures — single allocation, reused across benchmarks.
+var _b_eng      = 0;
+var _b_rate     = 0;
+var _b_audit    = 0;
+var _b_call     = 0;
+var _b_permissive_cfg = 0;
+var _b_tron     = 0;
+
+fn _b_setup() {
+    _b_eng = policy_engine_new();
+    policy_grant(_b_eng, "agent-1", "tarang_*");
+    _b_rate = rate_limiter_new();
+    _b_audit = audit_logger_new();
+    _b_call = tool_call_new("agent-1", "tarang_probe", "{}", 0);
+    _b_permissive_cfg = tron_config_default();
+    tron_config_set_default_unknown_agent(_b_permissive_cfg, DA_ALLOW);
+    tron_config_set_default_unknown_tool(_b_permissive_cfg,  DA_ALLOW);
+    tron_config_set_scan_payloads(_b_permissive_cfg,    0);
+    tron_config_set_analyze_patterns(_b_permissive_cfg, 0);
+    _b_tron = tron_new(_b_permissive_cfg);
+    return 0;
+}
+
+fn bench_policy_check() {
+    var k, r = policy_check(_b_eng, "agent-1", "tarang_probe");
+    return k;
+}
+
+fn bench_rate_check() {
+    # Reset tokens by replacing the bucket map on every call — avoids drift.
+    return rate_limiter_check(_b_rate, "agent-1", "tarang_probe");
+}
+
+fn bench_scanner_clean() {
+    return scanner_scan_text("hello world safe input", 22);
+}
+
+fn bench_scanner_sql() {
+    var s = "SELECT * FROM users WHERE 1=1 UNION SELECT * FROM passwords";
+    return scanner_scan_text(s, strlen(s));
+}
+
+fn bench_audit_log() {
+    audit_log(_b_audit, _b_call, verdict_allow());
+    return 0;
+}
+
+fn bench_tron_check_allow() {
+    return tron_check(_b_tron, _b_call);
+}
 
 fn main() {
     alloc_init();
-    bench("noop", &bench_noop, 1000000);
+    _b_setup();
+    var b1 = bench_new("policy_check");
+    bench_run(b1, &bench_policy_check, 100000);
+    bench_report(b1);
+
+    var b2 = bench_new("scanner_clean_text");
+    bench_run(b2, &bench_scanner_clean, 100000);
+    bench_report(b2);
+
+    var b3 = bench_new("scanner_sql_detect");
+    bench_run(b3, &bench_scanner_sql, 100000);
+    bench_report(b3);
+
+    var b4 = bench_new("audit_log");
+    bench_run(b4, &bench_audit_log, 1000);
+    bench_report(b4);
+
+    var b5 = bench_new("tron_check_allow");
+    bench_run(b5, &bench_tron_check_allow, 1000);
+    bench_report(b5);
+
     return 0;
 }
 

@@ -1,7 +1,7 @@
 [package]
 name = "t-ron"
-version = "0.1.0"
-description = "t-ron — Cyrius port (from 6611 lines of Rust)"
+version = "1.0.0"
+description = "MCP security monitor — tool call auditing, rate limiting, injection detection, anomaly analysis"
 license = "GPL-3.0-only"
 language = "cyrius"
 cyrius = "4.5.0"

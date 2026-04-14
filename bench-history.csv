@@ -1,0 +1,6 @@
+date,commit,bench_name,avg_ns,min_ns,max_ns,iters
+2026-04-14T10:10:51Z,ef0cd7b,policy_check,727,681,8000,100000
+2026-04-14T10:10:51Z,ef0cd7b,scanner_clean_text,3000,3000,33000,100000
+2026-04-14T10:10:51Z,ef0cd7b,scanner_sql_detect,1000,1000,34000,100000
+2026-04-14T10:10:51Z,ef0cd7b,audit_log,44000,40000,119000,1000
+2026-04-14T10:10:51Z,ef0cd7b,tron_check_allow,54000,37000,157000,1000
