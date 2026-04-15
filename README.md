@@ -168,7 +168,7 @@ bote.
 
 ## Benchmarks
 
-Cyrius 4.8.1, x86_64, 2026-04-14 (see
+Cyrius 4.8.4, x86_64, 2026-04-14 (see
 [`bench-history.csv`](bench-history.csv) for full history and
 [`docs/benchmarks-rust-v-cyrius.md`](docs/benchmarks-rust-v-cyrius.md)
 for the side-by-side):
@@ -198,9 +198,9 @@ the full roadmap. Highlights:
 
 | Source | Relevance | Location |
 |---|---|---|
-| [bote](https://github.com/MacCracken/bote) | MCP protocol layer — t-ron wraps its Dispatcher via SecurityGate | `../bote` (tag 2.4.0) |
+| [bote](https://github.com/MacCracken/bote) | MCP protocol layer — t-ron wraps its Dispatcher via SecurityGate | `../bote` (tag 2.5.1) |
 | [libro](https://github.com/MacCracken/libro) | Cryptographic audit chain — t-ron writes every verdict to libro | `../libro` (tag 1.0.3) |
-| [cyrius](https://github.com/MacCracken/cyrius) | Language toolchain | 4.8.1 |
+| [cyrius](https://github.com/MacCracken/cyrius) | Language toolchain | 4.8.4 |
 | [hoosh](https://github.com/MacCracken/hoosh) | LLM-assisted prompt injection detection | `../hoosh` (HTTP API, tag 2.0.0) |
 | [sigil](https://github.com/MacCracken/cyrius) | Ed25519 + SHA-256 primitives (Cyrius stdlib dep) | `lib/sigil.cyr` |
 | [SecureYeoman](https://github.com/MacCracken/SecureYeoman) | T.Ron personality consumes query API and MCP tools | `../SecureYeoman` |

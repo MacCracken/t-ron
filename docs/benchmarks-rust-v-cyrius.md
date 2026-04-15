@@ -12,7 +12,7 @@ under comparable load.
 | Kernel | Linux 6.18.19-1-lts x86_64 |
 | Date | 2026-04-14 |
 | Rust | rustc from `rust-old/rust-toolchain.toml` (criterion `--output-format=bencher`) |
-| Cyrius | 4.8.1 (`cyrius bench tests/t-ron.bcyr`) |
+| Cyrius | 4.8.4 (`cyrius bench tests/t-ron.bcyr`) |
 | t-ron | 2.0.0 (Cyrius) · 0.90.0 (Rust, archived in `rust-old/`) |
 
 ## Same-op benchmarks

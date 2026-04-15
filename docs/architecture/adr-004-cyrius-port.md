@@ -23,10 +23,10 @@ cleared through 2026-04.
 
 Port t-ron in full to Cyrius, archiving the Rust sources in
 `rust-old/` as a reference and benchmark target. Cyrius target
-version: 4.8.1 (pinned via `.cyrius-toolchain`). Deps:
+version: 4.8.4 (pinned via `.cyrius-toolchain`). Deps:
 
 - `libro` 1.0.3 (git/path)
-- `bote` 2.4.0 (git/path)
+- `bote` 2.5.1 (git/path)
 - `sigil` (Cyrius stdlib)
 
 ### Translation conventions

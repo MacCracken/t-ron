@@ -4,7 +4,7 @@ version = "2.0.0"
 description = "MCP security monitor — tool call auditing, rate limiting, injection detection, anomaly analysis"
 license = "GPL-3.0-only"
 language = "cyrius"
-cyrius = "4.8.1"
+cyrius = "4.8.4"
 
 [build]
 entry = "src/main.cyr"
@@ -31,7 +31,7 @@ modules = [
 [deps.bote]
 git = "https://github.com/MacCracken/bote"
 path = "../bote"
-tag = "2.4.0"
+tag = "2.5.1"
 modules = [
     "src/error.cyr",
     "src/protocol.cyr",

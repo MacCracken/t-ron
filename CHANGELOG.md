@@ -8,7 +8,7 @@ Versioning](https://semver.org/).
 
 ### Breaking
 
-- **Language**: Rust → [Cyrius](https://github.com/MacCracken/cyrius) 4.8.1 (pinned via `.cyrius-toolchain`).
+- **Language**: Rust → [Cyrius](https://github.com/MacCracken/cyrius) 4.8.4 (pinned via `.cyrius-toolchain`).
 - **Build**: `cargo build` → `cyrius build src/main.cyr build/t-ron`.
 - **Async → sync**: the check pipeline is synchronous; concurrency guarantees move to the embedding dispatcher layer.
 - **Risk / confidence scores**: `f64 [0.0, 1.0]` → integer basis points `i64 [0, 1000]`. Callers divide by 1000 for the original scale.
@@ -18,7 +18,7 @@ Versioning](https://semver.org/).
 ### Added
 
 - Full Cyrius port: 16 modules in `src/*.cyr` covering the complete Rust 0.90.0 surface area.
-- `cyrius.toml` with pinned deps: `libro` 1.0.3, `bote` **2.4.0** (+ sigil from Cyrius stdlib).
+- `cyrius.toml` with pinned deps: `libro` 1.0.3, `bote` **2.5.1** (+ sigil from Cyrius stdlib).
 - `src/crypto_chacha20.cyr` — RFC 7539 ChaCha20 stream cipher, verified against the §2.4.2 test vector.
 - `src/signing.cyr` — Ed25519 policy signature verification via sigil. `PolicyVerifier` holds trusted public keys; detached `.sig` files alongside the policy; `tron_verify_and_load_policy` gates the existing load path.
 - `src/signal.cyr` — SIGHUP policy hot-reload via non-blocking `signalfd`. Consumer-polled API (`sighup_init` / `sighup_drain_and_reload` / `sighup_close`). `tron_load_policy_file` + `tron_reload_policy` round out the file-backed policy path.
@@ -48,7 +48,7 @@ Full audit pass recorded at [`docs/audit/2026-04-14.md`](docs/audit/2026-04-14.m
 
 No performance regression (all benchmarks within noise).
 
-### Benchmarks (x86_64, Cyrius 4.8.1, 2026-04-14)
+### Benchmarks (x86_64, Cyrius 4.8.4, 2026-04-14)
 
 | Operation | Avg | Min | Iters |
 |---|---|---|---|

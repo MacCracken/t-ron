@@ -1,7 +1,7 @@
 # Integration Guide
 
 Step-by-step walkthrough for embedding t-ron in a bote-based MCP
-service. Current for t-ron 2.0.0 (Cyrius port) + bote 2.4.0.
+service. Current for t-ron 2.0.0 (Cyrius port) + bote 2.5.1.
 
 ## 1. Add t-ron to your project
 
@@ -13,7 +13,7 @@ t-ron to your dep set. Pin every dep to a tag for reproducibility:
 name = "your-service"
 version = "0.1.0"
 language = "cyrius"
-cyrius = "4.8.1"
+cyrius = "4.8.4"
 
 [build]
 entry = "src/main.cyr"
@@ -39,7 +39,7 @@ modules = [
 [deps.bote]
 git = "https://github.com/MacCracken/bote"
 path = "../bote"
-tag = "2.4.0"
+tag = "2.5.1"
 modules = [
     "src/error.cyr", "src/protocol.cyr", "src/jsonx.cyr",
     "src/codec.cyr", "src/registry.cyr", "src/events.cyr",
