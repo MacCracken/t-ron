@@ -16,6 +16,49 @@ top. Mirrors bote 2.7.0's flow.
 
 _(empty)_
 
+## [2.1.1] — 2026-05-10 · `dist/t-ron.cyr` consumer bundle
+
+Second patch of the **2.1.x modernization arc**. Lands the
+single-file consumer distribution bundle (`dist/t-ron.cyr` via
+`cyrius distlib`) that the named consumers — daimon, phylax, bote
+middleware — pull through `[deps.t-ron]`. Mirrors libro 2.6.3 and
+bote 2.6.3.
+
+No SecurityGate behaviour change; the bundle is the same code
+that `src/main.cyr` already includes, concatenated in the
+`[lib] modules` declaration order.
+
+### Added
+
+- **`dist/t-ron.cyr`** — 4 512 lines / 157 KB, deterministically
+  produced by `cyrius distlib` from the 19 files listed in
+  `cyrius.cyml [lib] modules` (1 compat shim + 18 src/ modules).
+  Bundle header stamps `# Version: 2.1.1` from VERSION.
+- **`DEPS-PATTERN.md`** at repo root — the distribution contract
+  for downstream consumers. Mirrors libro's pattern doc:
+  what's-in / what's-not-in the bundle, the canonical wire-up
+  (`[deps.t-ron] modules = ["dist/t-ron.cyr"]`), pre-release
+  verification checklist, and a reference to bote/libro for
+  drift checks.
+- **`.github/workflows/ci.yml`** — `dist/t-ron.cyr is up-to-date`
+  step. Regenerates the bundle on every push and fails CI if the
+  committed copy no longer matches src/. Catches the "I edited a
+  module but forgot to run `cyrius distlib`" mistake before any
+  consumer pulls a stale tag.
+- **`.github/workflows/release.yml`** — three new pieces:
+  - `Regenerate dist bundle` step before any asset upload —
+    ensures the tag carries a fresh `dist/t-ron.cyr`.
+  - `Verify dist bundle matches committed copy` step — refuses
+    the release if the bundle would change.
+  - `t-ron-<tag>.cyr` added to the release-asset upload list +
+    SHA256SUMS line, alongside `t-ron-<tag>-src.tar.gz`,
+    `t-ron-<tag>-x86_64-linux`, and `cyrius.lock`.
+
+### Performance
+
+No change. The bundle is the same `[lib]` source preprocessed in
+a different shape; the emitted binary is byte-identical.
+
 ## [2.1.0] — 2026-05-10 · Toolchain + dep floor
 
 First patch of the **2.1.x modernization arc**. Catches t-ron up

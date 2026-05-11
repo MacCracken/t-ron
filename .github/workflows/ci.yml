@@ -142,6 +142,25 @@ jobs:
           done
           [ $fail -eq 0 ] || exit 1
 
+      - name: dist/t-ron.cyr is up-to-date
+        # `cyrius distlib` reads cyrius.cyml [lib] modules and emits
+        # dist/t-ron.cyr deterministically. The committed bundle must
+        # match the regenerated bundle byte-for-byte; otherwise a
+        # downstream consumer cloning at our tag gets stale code under
+        # `cyrius deps`. Mirrors libro / bote freshness gate.
+        # cyrius emits an informational note about unresolved symbols
+        # in consumer-included bundles (expected — stdlib is supplied
+        # by the consumer); the bundle is still emitted, we only fail
+        # on a stale diff.
+        run: |
+          cyrius distlib || true
+          test -s dist/t-ron.cyr || { echo "FAIL: dist/t-ron.cyr not produced"; exit 1; }
+          if ! git diff --exit-code dist/t-ron.cyr; then
+            echo "FAIL: dist/t-ron.cyr is stale. Run 'cyrius distlib' and commit."
+            exit 1
+          fi
+          echo "dist/t-ron.cyr matches src/ ($(wc -l < dist/t-ron.cyr) lines)"
+
       - name: Build benchmarks (non-fatal)
         run: |
           if [ -f tests/t-ron.bcyr ]; then

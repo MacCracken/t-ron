@@ -1,10 +1,11 @@
 # t-ron Roadmap
 
-> **Current**: `2.1.0` (cyrius 5.10.34, libro 2.6.2, bote 2.7.1).
+> **Current**: `2.1.1` (cyrius 5.10.34, libro 2.6.2, bote 2.7.1).
 > Full pipeline 17 µs (was 52 µs at 2.0.0), 390 assertions across
 > three test suites, ChaCha20+Ed25519 encrypted audit export,
 > 6-pattern prompt-injection detector, 5 default AGNOS safety
-> policies.
+> policies, `dist/t-ron.cyr` single-file consumer bundle (4 512
+> lines / 157 KB).
 >
 > **Full release history**: [CHANGELOG.md](../../CHANGELOG.md).
 > Rust archive preserved at git tag `0.90.0` under `rust-old/`.
@@ -29,6 +30,7 @@ defers to 2.2.x+ — see the section after the arc table.
 | **0.90.0** | Cross-agent correlation detector — coordinated-attack signal |
 | **2.0.0** | **Cyrius port complete.** 16 modules in `src/*.cyr`; ChaCha20 + Ed25519 AEAD audit export; sigil-Ed25519 policy signing; SIGHUP signalfd hot-reload; LLM-assisted scan via hoosh HTTP; full AGNOS safety submodule (5 default policies, 6-pattern injection detector, circuit breaker); 390 assertions; security audit with 10 CVE-class fixes |
 | **2.1.0** | **Modernization arc opens.** cyrius 5.10.34 / libro 2.6.2 / bote 2.7.1; bote 2.0 handler ABI fully observed (`fn h(args, claims)`); `cyrius.cyml` + `${file:VERSION}` + `cyrius.lock`; versioned-toolchain CI installer + `cyrius deps --verify` + manifest-completeness gate; vendored libro patch retired; full pipeline 17 µs (3× faster) |
+| **2.1.1** | **`dist/t-ron.cyr` consumer bundle.** Single-file distribution via `cyrius distlib` (4 512 lines / 157 KB); `DEPS-PATTERN.md` contract doc; CI freshness gate; release asset alongside src tarball + linux binary + lockfile + SHA256SUMS |
 
 See [CHANGELOG.md](../../CHANGELOG.md) for the full detail per release.
 
@@ -44,10 +46,10 @@ level.
 | Patch | Bite | Status |
 |---|---|---|
 | **2.1.0** | Toolchain + dep floor + bote 2.0 handler ABI + manifest modernization + CI installer + `docs/doc-health.md` ledger + roadmap reslate | ✅ Shipped |
-| **2.1.1** | Test-file refactor for the cyrius 5.10.x assert-nested-call parser quirk if it surfaces on a future test add (not triggered in current suite) | 🟡 Conditional |
-| **2.1.2** | `dist/t-ron.cyr` single-file consumer bundle via `cyrius distlib` — daimon / bote middleware / phylax pull `[deps.t-ron] modules = ["dist/t-ron.cyr"]`. CI freshness gate + release asset. `DEPS-PATTERN.md` at root | 🟢 Open |
-| **2.1.3** | CI capacity gate — `CYRIUS_STATS=1` + 95% fn_table / identifier-buffer threshold. Modeled on bote 2.6.4 | 🟢 Open |
-| **2.1.4** | `CONTRIBUTING.md` Cyrius-era rewrite — current file is Rust-era (cargo / make / MSRV 1.89). Mirrors bote 2.7.1 rewrite | 🟢 Open |
+| **2.1.1** | `dist/t-ron.cyr` consumer bundle via `cyrius distlib` (19 modules, 4 512 lines) + `DEPS-PATTERN.md` contract + CI freshness gate + release-asset wiring | ✅ Shipped |
+| **2.1.2** | CI capacity gate — `CYRIUS_STATS=1` + 95% fn_table / identifier-buffer threshold. Modeled on bote 2.6.4 | 🟢 Open |
+| **2.1.3** | `CONTRIBUTING.md` + `CLAUDE.md` Cyrius-era rewrite — current files are Rust-era (cargo / make / MSRV 1.89 / `src/lib.rs`). Mirrors bote 2.7.1 rewrite | 🟢 Open |
+| **Watching** | **Test-file refactor for the cyrius 5.10.x assert-nested-call parser quirk** — bote 2.7.1 hit it; t-ron has not surfaced it today. Lands as a patch only if a future test add trips the pattern | 🟡 Conditional |
 | **Future** | **Full bote dist-bundle adoption** — blocked on either a cyrius compile-source-size cap raise (the 2 MB ceiling forces per-module bote pull today) or a bote opt-in profile that excludes the transport stack | 🔴 Blocked |
 
 Closes when the items above ship.

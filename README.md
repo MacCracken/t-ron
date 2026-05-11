@@ -4,7 +4,7 @@
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 [![Language: Cyrius](https://img.shields.io/badge/Language-Cyrius-brightgreen.svg)](https://github.com/MacCracken/cyrius)
-[![Version: 2.1.0](https://img.shields.io/badge/Version-2.1.0-informational.svg)](VERSION)
+[![Version: 2.1.1](https://img.shields.io/badge/Version-2.1.1-informational.svg)](VERSION)
 
 T-Ron is a [Cyrius](https://github.com/MacCracken/cyrius) security-middleware module set that sits between [bote](https://github.com/MacCracken/bote) (MCP protocol layer) and tool handlers, enforcing per-agent permissions, rate limiting, payload scanning, anomaly detection, and auditing every verdict to a tamper-proof [libro](https://github.com/MacCracken/libro) hash chain. Named after Tron, the security program that fights the Master Control Program.
 
@@ -194,7 +194,8 @@ the full roadmap. Highlights:
 - **2.1.x — modernization arc** (in progress) — cyrius 5.10.34 +
   libro 2.6.2 + bote 2.7.1 floor, bote 2.0 handler-ABI fully observed,
   manifest modernization, CI/release installer parity with bote/libro,
-  `docs/doc-health.md` ledger.
+  `docs/doc-health.md` ledger, `dist/t-ron.cyr` consumer bundle
+  via `cyrius distlib`.
 - **Phase 2 — Advanced detection** (post-2.1.x) — ML-based anomaly
   detection, privilege escalation, time-of-day, capability-source
   policy / L3 agent-injection defense.

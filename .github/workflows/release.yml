@@ -87,6 +87,24 @@ jobs:
           out=$(./build/t-ron 2>&1 || true)
           echo "$out" | grep -q "t-ron ready" || { echo "FAIL: t-ron smoke test"; echo "$out"; exit 1; }
 
+      - name: Regenerate dist bundle (consumer distribution artifact)
+        # Downstream consumers (daimon / phylax / bote middleware)
+        # pull `dist/t-ron.cyr` via `[deps.t-ron] modules =
+        # ["dist/t-ron.cyr"]`. A tagged release without
+        # dist/t-ron.cyr = broken `cyrius deps` for every consumer.
+        # Mirrors libro / bote release flow. See DEPS-PATTERN.md.
+        run: |
+          cyrius distlib || true
+          test -s dist/t-ron.cyr || { echo "FAIL: dist/t-ron.cyr not produced"; exit 1; }
+          echo "dist/t-ron.cyr: $(wc -l < dist/t-ron.cyr) lines, $(wc -c < dist/t-ron.cyr) bytes"
+
+      - name: Verify dist bundle matches committed copy
+        run: |
+          if ! git diff --exit-code dist/t-ron.cyr; then
+            echo "FAIL: dist/t-ron.cyr is stale. Regenerate via 'cyrius distlib' and commit before tagging."
+            exit 1
+          fi
+
       - name: Clean toolchain artifacts
         run: rm -f cyrius-*.tar.gz
 
@@ -94,8 +112,9 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME#v}"
           git archive --format=tar.gz --prefix="t-ron-${TAG}/" -o "t-ron-${TAG}-src.tar.gz" HEAD
-          cp build/t-ron "t-ron-${TAG}-x86_64-linux"
-          sha256sum "t-ron-${TAG}-src.tar.gz" "t-ron-${TAG}-x86_64-linux" cyrius.lock > SHA256SUMS
+          cp build/t-ron     "t-ron-${TAG}-x86_64-linux"
+          cp dist/t-ron.cyr  "t-ron-${TAG}.cyr"
+          sha256sum "t-ron-${TAG}-src.tar.gz" "t-ron-${TAG}-x86_64-linux" "t-ron-${TAG}.cyr" cyrius.lock > SHA256SUMS
 
       - name: Extract changelog
         run: |
@@ -110,5 +129,6 @@ jobs:
           files: |
             t-ron-*.tar.gz
             t-ron-*-linux
+            t-ron-*.cyr
             cyrius.lock
             SHA256SUMS

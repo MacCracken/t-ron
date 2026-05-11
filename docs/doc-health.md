@@ -6,7 +6,7 @@ type: state
 
 # Documentation Health — t-ron
 
-> **Last refresh**: 2026-05-10 (initial audit at 2.1.0 — modernization arc opens) | **Refresh cadence**: when docs are touched, update the affected row.
+> **Last refresh**: 2026-05-10 (2.1.1 — `dist/t-ron.cyr` consumer bundle + `DEPS-PATTERN.md`) | **Refresh cadence**: when docs are touched, update the affected row.
 > **Scope**: This repo only (`t-ron`) — root-level files (README, CHANGELOG, CLAUDE.md, etc.) plus the entire `docs/` tree. Cross-repo dep pin drift lives in CHANGELOG entries and the [roadmap](development/roadmap.md), not here.
 
 This is a **ledger**, not a one-time audit. Rewrite-in-place as
@@ -22,14 +22,14 @@ Pattern lifted from the libro ledger ([`libro/docs/doc-health.md`](https://githu
 
 ## At a glance — 2026-05-10 inventory
 
-**~17 markdown files** total (7 root + 10 under `docs/`). Bucket
-counts after the 2.1.0 modernization-arc refresh:
+**~18 markdown files** total (8 root + 10 under `docs/`). Bucket
+counts after the 2.1.1 refresh:
 
 | Bucket | Count | What it means |
 |---|---|---|
-| ✅ **Fresh — touched in the 2.1.0 cycle** | 9 | CHANGELOG, README, roadmap, doc-health (this file), `docs/examples/01..04-*.cyr` (all four rewritten + verified end-to-end), `docs/examples/README.md` (no edit needed) |
-| 🟡 **Stale — refresh in place** | 3 | CONTRIBUTING.md (Rust-era, full rewrite scheduled at 2.1.4); CLAUDE.md (mentions some Rust-era discipline items that map cleanly to cyrius equivalents); docs/guides/integration.md + testing.md (last touched at 2.0.0 — verify code samples still build against 5.10.34 stdlib) |
-| 🟠 **Read-through outstanding** | 1 | docs/architecture/overview.md (last touched 2.0.0 — verify module map matches src/ post-2.1.0; no shape change is expected but the pre-2.1.0 ABI prose for handlers needs a "see 2.1.0" note) |
+| ✅ **Fresh — touched in the 2.1.x cycle** | 11 | CHANGELOG, README, roadmap, doc-health (this file), `DEPS-PATTERN.md` (new in 2.1.1), `docs/examples/01..04-*.cyr` (all four rewritten + verified end-to-end at 2.1.0), `docs/examples/README.md` (no edit needed) |
+| 🟡 **Stale — refresh in place** | 3 | CONTRIBUTING.md (Rust-era, full rewrite scheduled at 2.1.3); CLAUDE.md (mentions some Rust-era discipline items that map cleanly to cyrius equivalents — bundled into the 2.1.3 rewrite); docs/guides/integration.md + testing.md (last touched at 2.0.0 — verify code samples still build against 5.10.34 stdlib + libro 2.6.2 + bote 2.7.1 surface) |
+| 🟠 **Read-through outstanding** | 1 | docs/architecture/overview.md (last touched 2.0.0 — verify module map matches src/ post-2.1.x; no shape change is expected but the pre-2.1.0 ABI prose for handlers needs a "see 2.1.0" note, and the 2.1.1 `dist/t-ron.cyr` distribution surface should land a one-sentence reference) |
 | 🔵 **No version-tied claims today** | 3 | `SECURITY.md`, `CODE_OF_CONDUCT.md`, `LICENSE`. None reference current version numbers or moving APIs |
 | 📦 **Date-stamped historical record** | 1 | `docs/audit/2026-04-14.md` (2.0.0 audit). Point-in-time report; the date is in the filename |
 | 📝 **ADRs** | 6 | All six ADRs (001–006) reflect decisions made in the 1.0 → 2.0 era. None retired. ADRs 002 (default-deny) and 003 (bote middleware) gain a 2.1.0 note about the handler-ABI plumbing |
@@ -43,10 +43,11 @@ counts after the 2.1.0 modernization-arc refresh:
 | `README.md` | 2026-05-10 | ✅ Fresh | Version badge bumped 2.0.0 → 2.1.0; Rust-vs-Cyrius table now has a 2.1.0 column; cyrius / libro / bote pins refreshed; build/bench numbers and reference table refreshed. Roadmap section now points at the 2.1.x arc |
 | `CHANGELOG.md` | 2026-05-10 | ✅ Fresh | `## [Unreleased]` flow adopted (bote 2.7.0 convention); 2.1.0 entry lands the toolchain + dep floor + bote 2.0 handler-ABI observance + manifest modernization + CI installer parity + perf table (3× pipeline win) |
 | `CLAUDE.md` | 2026-04-14 | 🟡 Stale | Current rules are mostly cyrius-correct (`#[non_exhaustive]`/`#[must_use]` items are obviously Rust-era and should be re-cast as the cyrius equivalent — `#non_exhaustive` enums in cyrius, `#derive(...)`, `#[inline]`-hot-path markers). DO-NOT list still references `unwrap()`/`panic!()` (Rust). Carry-forward at 2.1.4 alongside CONTRIBUTING |
-| `CONTRIBUTING.md` | 2026-04-14 | 🟡 Stale | Rust-era: `cargo`, `make check`, MSRV 1.89, `src/lib.rs`. Full rewrite scheduled at 2.1.4 — mirror bote 2.7.1 rewrite |
+| `CONTRIBUTING.md` | 2026-04-14 | 🟡 Stale | Rust-era: `cargo`, `make check`, MSRV 1.89, `src/lib.rs`. Full rewrite scheduled at 2.1.3 — mirror bote 2.7.1 rewrite |
 | `SECURITY.md` | 2026-04-14 | 🔵 No version-tied claims | Reporting policy + scope |
 | `CODE_OF_CONDUCT.md` | 2026-04-14 | 🔵 No version-tied claims | Standard |
-| `VERSION` | 2026-05-10 | ✅ Fresh | `2.1.0` — single source of truth, read into `cyrius.cyml` via `${file:VERSION}` |
+| `DEPS-PATTERN.md` | 2026-05-10 | ✅ Fresh | New in 2.1.1. Distribution contract for downstream consumers (daimon / phylax / bote middleware). Mirrors libro's pattern doc: what's-in / what's-not-in `dist/t-ron.cyr`, canonical wire-up, pre-release verification checklist |
+| `VERSION` | 2026-05-10 | ✅ Fresh | `2.1.1` — single source of truth, read into `cyrius.cyml` via `${file:VERSION}` |
 | `LICENSE` | (initial commit) | 🔵 No version-tied claims | GPL-3.0-only |
 
 ---
@@ -174,5 +175,6 @@ table.
 
 ---
 
-*Last refresh: 2026-05-10 (initial audit at 2.1.0 — modernization
-arc opens). Refresh in place when docs are touched.*
+*Last refresh: 2026-05-10 (2.1.1 — `dist/t-ron.cyr` consumer
+bundle landed; `DEPS-PATTERN.md` added). Refresh in place when
+docs are touched.*
