@@ -52,10 +52,18 @@ level.
 | **2.1.0** | Toolchain + dep floor + bote 2.0 handler ABI + manifest modernization + CI installer + `docs/doc-health.md` ledger + roadmap reslate | ✅ Shipped |
 | **2.1.1** | `dist/t-ron.cyr` consumer bundle via `cyrius distlib` (19 modules, 4 512 lines) + `DEPS-PATTERN.md` contract + CI freshness gate + release-asset wiring | ✅ Shipped |
 | **2.1.2** | CI capacity gate — `CYRIUS_STATS=1` + 95 % `fn_table` / `identifiers` threshold. Modeled on bote 2.6.4. `code_size` (97 %) surfaced as informational warning | ✅ Shipped |
-| **2.1.3** | `CONTRIBUTING.md` + `CLAUDE.md` Cyrius-era rewrite — current files are Rust-era (cargo / make / MSRV 1.89 / `src/lib.rs`). Mirrors bote 2.7.1 rewrite | 🟢 Open |
+| **2.1.3** | `CONTRIBUTING.md` + `CLAUDE.md` Cyrius-era rewrite | 🚫 Not a release (docs-only) — work lands on main under `## [Unreleased]` in CHANGELOG; pairs with the next release-worthy patch |
 | **2.1.x** | **`code_size` headroom** — at 97 % today. Response paths: (1) upstream cyrius cap raise (preferred — caps have moved before), (2) feature-gate `llm_scan` / `safety` / `signing` behind `#ifdef`, (3) opt-in compile-unit split (bote's `libro_tools.cyr` pattern). Patch number assigned when path chosen | 🟡 Watching |
 | **Watching** | **Test-file refactor for the cyrius 5.10.x assert-nested-call parser quirk** — bote 2.7.1 hit it; t-ron has not surfaced it today. Lands as a patch only if a future test add trips the pattern | 🟡 Conditional |
-| **Future** | **Full bote dist-bundle adoption** — blocked on either a cyrius compile-source-size cap raise (the 2 MB ceiling forces per-module bote pull today) or a bote opt-in profile that excludes the transport stack | 🔴 Blocked |
+| **Future** | **Full bote dist-bundle adoption.** Two upstream tracks filed 2026-05-10; landing either unblocks t-ron, landing both gives consumers the choice: (1) [cyrius compile-source-size cap raise 2 MB → 4 MB](https://github.com/MacCracken/cyrius/blob/main/docs/development/proposals/2026-05-10-raise-compile-source-cap.md) (cyrius-side proposal); (2) [bote opt-in `dist/bote-core.cyr` profile](https://github.com/MacCracken/bote/blob/main/docs/development/issues/2026-05-10-opt-in-transport-profile.md) excluding transport stack (bote-side issue, **P1 in bote's current arc**). When one lands, t-ron flips `[deps.bote]` to the single-bundle form and closes this row | 🔴 Blocked |
+
+> **Release discipline.** Docs-only work (`.md` / `docs/` /
+> examples prose) does **not** earn a version bump in t-ron. It
+> lands on `main` as a regular commit and accumulates under
+> `## [Unreleased]` in CHANGELOG until the next release-worthy
+> patch (code, CI, release-flow, dep-pin, manifest, tests)
+> ships, at which point the unreleased notes ride along into
+> that release's section.
 
 Closes when the items above ship.
 

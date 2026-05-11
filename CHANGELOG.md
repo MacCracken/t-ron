@@ -14,7 +14,40 @@ top. Mirrors bote 2.7.0's flow.
 
 ## [Unreleased]
 
-_(empty)_
+> Note: docs-only changes don't earn a version bump in t-ron;
+> they accumulate here until the next release-worthy patch (code,
+> CI, release-flow, dep-pin, manifest, tests) ships and the notes
+> ride along.
+
+### Changed (docs)
+
+- **`CONTRIBUTING.md`** rewritten Cyrius-era. Drops the Rust-era
+  `cargo` / `make` / MSRV 1.89 / `src/lib.rs` references.
+  New sections: Prerequisites (cyrius toolchain only); Common
+  Commands table (`cyrius deps` / `cyrius build` / `cyrius test`
+  / `cyrius bench` / `cyrius distlib` / `CYRIUS_STATS` /
+  `CYRIUS_DCE` / `CYRIUS_NO_WARN_SHADOW_LIB`); Release
+  Discipline (docs-only commits don't earn a version bump);
+  Adding a New Security Check (`[lib] modules` + main.cyr include
+  order + 3-file test split + `dist/t-ron.cyr` regen); Code
+  Style (cyrius equivalents for `#[non_exhaustive]` /
+  `#[must_use]` / `#[inline]`, `ct_eq_bytes_lens` for
+  constant-time compares, bote 2.0 handler ABI). Mirrors bote
+  2.7.1's CONTRIBUTING rewrite.
+- **`CLAUDE.md`** Rust-era discipline items re-cast for cyrius.
+  Project Identity now reflects the Cyrius port (cyrius 5.10.34
+  pin, `VERSION` + `${file:VERSION}` as single source of truth);
+  cleanliness check uses `cyrius deps --verify` /
+  `cyrius distlib` / `CYRIUS_STATS=1` / `git diff --exit-code
+  dist/t-ron.cyr` rather than `cargo fmt` / `cargo clippy`;
+  `#[non_exhaustive]` / `#[must_use]` / `#[inline]` re-cast as
+  the cyrius-equivalent disciplines; `unwrap()`/`panic!()` DO-NOT
+  entries reframed as "no unguarded `syscall(60, ...)` or
+  out-of-bounds in library code"; new Release Discipline section
+  formalizes the docs-no-version-bump rule; added Bote handler
+  ABI and `src/_libro_compat.cyr` notes.
+- No code, CI, release-flow, dep-pin, manifest, or test change.
+  Emitted binary byte-identical; `dist/t-ron.cyr` unchanged.
 
 ## [2.1.2] — 2026-05-10 · CI capacity gate
 

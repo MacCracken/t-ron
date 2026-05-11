@@ -103,9 +103,17 @@ modules = ["dist/libro.cyr"]
 # Dispatcher + tool-registry surface, so the nine-module cherry-pick
 # stays under the cap. Handler ABI changed in bote 2.0
 # (fn h(args, claims)); 2.1.0 lands that observance — see
-# src/tools.cyr and src/middleware.cyr. Dist-bundle adoption is
-# parked as a later 2.1.x candidate gated on either a cyrius cap
-# raise or a bote opt-in profile that excludes transports.
+# src/tools.cyr and src/middleware.cyr.
+#
+# Dist-bundle adoption is parked under the roadmap's "Future" row,
+# blocked on one of two upstream tracks (both filed 2026-05-10):
+#   - cyrius/docs/development/proposals/2026-05-10-raise-compile-source-cap.md
+#     (2 MB → 4 MB compile-source-size cap raise)
+#   - bote/docs/development/issues/2026-05-10-opt-in-transport-profile.md
+#     (P1 in bote's current arc; opt-in dist/bote-core.cyr profile
+#     excluding the transport stack)
+# When either ships, this block flips to modules = ["dist/bote.cyr"]
+# or modules = ["dist/bote-core.cyr"] respectively.
 [deps.bote]
 git = "https://github.com/MacCracken/bote"
 path = "../bote"
