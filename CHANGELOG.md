@@ -16,6 +16,64 @@ top. Mirrors bote 2.7.0's flow.
 
 _(empty)_
 
+## [2.1.2] — 2026-05-10 · CI capacity gate
+
+Third patch of the **2.1.x modernization arc**. Wires the
+compile-time resource gate modeled on bote 2.6.4: `CYRIUS_STATS=1`
+at build time, parse the `cyrius stats:` tail of stdout, fail CI
+when `fn_table` or `identifiers` cross 95%. No source change; no
+SecurityGate behaviour change; emitted binary byte-identical.
+
+### Added
+
+- **`.github/workflows/ci.yml`** — two new steps:
+  - **Build** step now passes `CYRIUS_STATS=1` and tees stdout to
+    `build/build.log` so the capacity report is captured for the
+    next step.
+  - **Capacity gate** step parses the `cyrius stats:` block,
+    computes utilisation percentages, fails CI at ≥95% on
+    `fn_table` or `identifiers`.
+
+### Current utilisation (cyrius 5.10.34, 2026-05-10)
+
+| Counter | Used | Cap | % |
+|---|---:|---:|---:|
+| `fn_table` | 3 076 | 4 096 | 75 % |
+| `identifiers` | 91 014 | 131 072 | 69 % |
+| `var_table` | 1 615 | 8 192 | 20 % |
+| `fixup_table` | 9 689 | 262 144 | 4 % |
+| `string_data` | 28 103 | 2 097 152 | 1 % |
+| `code_size` | 1 013 096 | 1 048 576 | **97 %** |
+
+`fn_table` and `identifiers` have headroom; the gate is here to
+catch future regression.
+
+### Watch — code_size headroom
+
+`code_size` (the cyrius compile-time code-buffer cap, distinct
+from the post-DCE emitted binary size) is at **97 %** — the
+most-constrained dimension. It is intentionally **not** gated at
+95 % today because that would ship an immediately-firing gate.
+The gate surfaces it as a `::warning::` for visibility. Response
+paths (ordered by preference):
+
+1. Upstream cyrius cap raise (the cap has moved before —
+   identifier buffer 32 KB → 128 KB at 4.6.2, fn_table
+   2048 → 4096 at 4.7.1).
+2. Feature-gate `src/llm_scan.cyr` / `src/safety.cyr` /
+   `src/signing.cyr` behind `#ifdef` markers so consumers that
+   don't need them shed the code-emit cost.
+3. Split an opt-in compile unit (mirrors bote's `libro_tools.cyr`
+   pattern at 2.6.4).
+
+Tracked under the 2.1.x arc; specific patch number assigned when
+the response path is chosen.
+
+### Regenerated
+
+- `dist/t-ron.cyr` — header now stamps `# Version: 2.1.2`. Bytes
+  otherwise unchanged from 2.1.1; CI freshness gate verifies.
+
 ## [2.1.1] — 2026-05-10 · `dist/t-ron.cyr` consumer bundle
 
 Second patch of the **2.1.x modernization arc**. Lands the

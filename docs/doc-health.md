@@ -6,7 +6,7 @@ type: state
 
 # Documentation Health — t-ron
 
-> **Last refresh**: 2026-05-10 (2.1.1 — `dist/t-ron.cyr` consumer bundle + `DEPS-PATTERN.md`) | **Refresh cadence**: when docs are touched, update the affected row.
+> **Last refresh**: 2026-05-10 (2.1.2 — CI capacity gate) | **Refresh cadence**: when docs are touched, update the affected row.
 > **Scope**: This repo only (`t-ron`) — root-level files (README, CHANGELOG, CLAUDE.md, etc.) plus the entire `docs/` tree. Cross-repo dep pin drift lives in CHANGELOG entries and the [roadmap](development/roadmap.md), not here.
 
 This is a **ledger**, not a one-time audit. Rewrite-in-place as
@@ -47,7 +47,7 @@ counts after the 2.1.1 refresh:
 | `SECURITY.md` | 2026-04-14 | 🔵 No version-tied claims | Reporting policy + scope |
 | `CODE_OF_CONDUCT.md` | 2026-04-14 | 🔵 No version-tied claims | Standard |
 | `DEPS-PATTERN.md` | 2026-05-10 | ✅ Fresh | New in 2.1.1. Distribution contract for downstream consumers (daimon / phylax / bote middleware). Mirrors libro's pattern doc: what's-in / what's-not-in `dist/t-ron.cyr`, canonical wire-up, pre-release verification checklist |
-| `VERSION` | 2026-05-10 | ✅ Fresh | `2.1.1` — single source of truth, read into `cyrius.cyml` via `${file:VERSION}` |
+| `VERSION` | 2026-05-10 | ✅ Fresh | `2.1.2` — single source of truth, read into `cyrius.cyml` via `${file:VERSION}` |
 | `LICENSE` | (initial commit) | 🔵 No version-tied claims | GPL-3.0-only |
 
 ---
@@ -175,6 +175,6 @@ table.
 
 ---
 
-*Last refresh: 2026-05-10 (2.1.1 — `dist/t-ron.cyr` consumer
-bundle landed; `DEPS-PATTERN.md` added). Refresh in place when
-docs are touched.*
+*Last refresh: 2026-05-10 (2.1.2 — CI capacity gate landed;
+fn_table 75 % / identifiers 69 % / code_size 97 % on watch).
+Refresh in place when docs are touched.*

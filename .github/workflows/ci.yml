@@ -115,11 +115,72 @@ jobs:
       - name: Build
         run: |
           mkdir -p build
-          cyrius build src/main.cyr build/t-ron
+          # CYRIUS_STATS=1 emits a machine-parseable capacity report
+          # at the tail of stdout — feeds the capacity gate below.
+          CYRIUS_STATS=1 cyrius build src/main.cyr build/t-ron 2>&1 | tee build/build.log
           echo "t-ron: $(wc -c < build/t-ron) bytes"
 
       - name: Verify ELF
         run: xxd -l 4 build/t-ron | grep -q "7f45 4c46"
+
+      - name: Capacity gate
+        # Compile-time resource gate, modeled on bote 2.6.4. Cyrius
+        # prints utilisation under `cyrius stats:` when CYRIUS_STATS=1
+        # (see the build step). We fail CI if fn_table or identifiers
+        # cross 95% — the cyrius compiler itself warns at 85%, but the
+        # warning isn't load-bearing so something has to enforce. 95%
+        # leaves ~5% headroom for a mid-PR feature add before forcing
+        # the split conversation.
+        #
+        # If this gate fires, the response is one of:
+        #   1. Land the cyrius cap raise upstream (preferred; the cap
+        #      has moved before — 2048→4096 in cyrius 4.7.1).
+        #   2. Split an opt-in module out (e.g. keep llm_scan / safety
+        #      / signing in opt-in compile units).
+        #   3. Feature-gate unused surface behind `#ifdef`.
+        #
+        # `code_size` is intentionally NOT in the gate. t-ron is
+        # currently at ~97% on that counter — well above the 95%
+        # threshold the source-symbol counters use. Including it
+        # would ship an immediately-firing gate. The headroom there
+        # is the most-constrained dimension and motivates either an
+        # upstream cyrius cap raise or a feature-gate of llm_scan /
+        # safety / signing in a future 2.1.x patch. The line is
+        # surfaced as a warning so it's visible in CI logs.
+        #
+        # Inspect locally with `CYRIUS_STATS=1 cyrius build
+        # src/main.cyr build/t-ron` — the `cyrius stats:` block at
+        # the tail of stdout shows current utilisation.
+        run: |
+          if ! grep -q "^cyrius stats:" build/build.log; then
+            echo "::warning::cyrius stats: line not found — CYRIUS_STATS may be unsupported on this toolchain. Skipping gate."
+            exit 0
+          fi
+          fn_used=$(grep "^  fn_table:"    build/build.log | awk '{print $2}')
+          fn_cap=$(grep  "^  fn_table:"    build/build.log | awk '{print $4}')
+          id_used=$(grep "^  identifiers:" build/build.log | awk '{print $2}')
+          id_cap=$(grep  "^  identifiers:" build/build.log | awk '{print $4}')
+          cs_used=$(grep "^  code_size:"   build/build.log | awk '{print $2}')
+          cs_cap=$(grep  "^  code_size:"   build/build.log | awk '{print $4}')
+          fn_pct=$(( fn_used * 100 / fn_cap ))
+          id_pct=$(( id_used * 100 / id_cap ))
+          cs_pct=$(( cs_used * 100 / cs_cap ))
+          echo "fn_table:    $fn_used / $fn_cap  (${fn_pct}%)"
+          echo "identifiers: $id_used / $id_cap  (${id_pct}%)"
+          echo "code_size:   $cs_used / $cs_cap  (${cs_pct}%)  (informational — not gated; see comment)"
+          if [ "$cs_pct" -ge 95 ]; then
+            echo "::warning::code_size at ${cs_pct}% — the most-constrained dimension; cyrius cap raise or feature-gate planned. Tracked in roadmap 2.1.x"
+          fi
+          fail=0
+          if [ "$fn_pct" -ge 95 ]; then
+            echo "::error::fn_table at ${fn_pct}% — split / cap-raise required (gate threshold 95%)"
+            fail=1
+          fi
+          if [ "$id_pct" -ge 95 ]; then
+            echo "::error::identifier buffer at ${id_pct}% — split / cap-raise required (gate threshold 95%)"
+            fail=1
+          fi
+          exit $fail
 
       - name: Smoke test
         run: |

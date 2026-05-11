@@ -1,11 +1,13 @@
 # t-ron Roadmap
 
-> **Current**: `2.1.1` (cyrius 5.10.34, libro 2.6.2, bote 2.7.1).
+> **Current**: `2.1.2` (cyrius 5.10.34, libro 2.6.2, bote 2.7.1).
 > Full pipeline 17 µs (was 52 µs at 2.0.0), 390 assertions across
 > three test suites, ChaCha20+Ed25519 encrypted audit export,
 > 6-pattern prompt-injection detector, 5 default AGNOS safety
 > policies, `dist/t-ron.cyr` single-file consumer bundle (4 512
-> lines / 157 KB).
+> lines / 157 KB), CI capacity gate (fn_table 75 % / identifiers
+> 69 % / code_size 97 % — `code_size` is the most-constrained
+> dimension).
 >
 > **Full release history**: [CHANGELOG.md](../../CHANGELOG.md).
 > Rust archive preserved at git tag `0.90.0` under `rust-old/`.
@@ -31,6 +33,8 @@ defers to 2.2.x+ — see the section after the arc table.
 | **2.0.0** | **Cyrius port complete.** 16 modules in `src/*.cyr`; ChaCha20 + Ed25519 AEAD audit export; sigil-Ed25519 policy signing; SIGHUP signalfd hot-reload; LLM-assisted scan via hoosh HTTP; full AGNOS safety submodule (5 default policies, 6-pattern injection detector, circuit breaker); 390 assertions; security audit with 10 CVE-class fixes |
 | **2.1.0** | **Modernization arc opens.** cyrius 5.10.34 / libro 2.6.2 / bote 2.7.1; bote 2.0 handler ABI fully observed (`fn h(args, claims)`); `cyrius.cyml` + `${file:VERSION}` + `cyrius.lock`; versioned-toolchain CI installer + `cyrius deps --verify` + manifest-completeness gate; vendored libro patch retired; full pipeline 17 µs (3× faster) |
 | **2.1.1** | **`dist/t-ron.cyr` consumer bundle.** Single-file distribution via `cyrius distlib` (4 512 lines / 157 KB); `DEPS-PATTERN.md` contract doc; CI freshness gate; release asset alongside src tarball + linux binary + lockfile + SHA256SUMS |
+| **2.1.2** | **CI capacity gate.** `CYRIUS_STATS=1` at build time + parser step in `ci.yml`; fail at ≥95 % on `fn_table` or `identifiers`. Mirrors bote 2.6.4. Surfaces `code_size` (97 %) as informational warning |
+| **2.1.2** | **CI capacity gate.** `CYRIUS_STATS=1` at build + parser step in `ci.yml`; fail at ≥95 % on `fn_table` or `identifiers`. Current util fn_table 75 % / identifiers 69 %. Surfaces `code_size` (97 %, the most-constrained dimension) as an informational warning — not gated to avoid an immediately-firing CI |
 
 See [CHANGELOG.md](../../CHANGELOG.md) for the full detail per release.
 
@@ -47,8 +51,9 @@ level.
 |---|---|---|
 | **2.1.0** | Toolchain + dep floor + bote 2.0 handler ABI + manifest modernization + CI installer + `docs/doc-health.md` ledger + roadmap reslate | ✅ Shipped |
 | **2.1.1** | `dist/t-ron.cyr` consumer bundle via `cyrius distlib` (19 modules, 4 512 lines) + `DEPS-PATTERN.md` contract + CI freshness gate + release-asset wiring | ✅ Shipped |
-| **2.1.2** | CI capacity gate — `CYRIUS_STATS=1` + 95% fn_table / identifier-buffer threshold. Modeled on bote 2.6.4 | 🟢 Open |
+| **2.1.2** | CI capacity gate — `CYRIUS_STATS=1` + 95 % `fn_table` / `identifiers` threshold. Modeled on bote 2.6.4. `code_size` (97 %) surfaced as informational warning | ✅ Shipped |
 | **2.1.3** | `CONTRIBUTING.md` + `CLAUDE.md` Cyrius-era rewrite — current files are Rust-era (cargo / make / MSRV 1.89 / `src/lib.rs`). Mirrors bote 2.7.1 rewrite | 🟢 Open |
+| **2.1.x** | **`code_size` headroom** — at 97 % today. Response paths: (1) upstream cyrius cap raise (preferred — caps have moved before), (2) feature-gate `llm_scan` / `safety` / `signing` behind `#ifdef`, (3) opt-in compile-unit split (bote's `libro_tools.cyr` pattern). Patch number assigned when path chosen | 🟡 Watching |
 | **Watching** | **Test-file refactor for the cyrius 5.10.x assert-nested-call parser quirk** — bote 2.7.1 hit it; t-ron has not surfaced it today. Lands as a patch only if a future test add trips the pattern | 🟡 Conditional |
 | **Future** | **Full bote dist-bundle adoption** — blocked on either a cyrius compile-source-size cap raise (the 2 MB ceiling forces per-module bote pull today) or a bote opt-in profile that excludes the transport stack | 🔴 Blocked |
 
