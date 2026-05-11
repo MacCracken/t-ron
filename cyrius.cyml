@@ -47,6 +47,14 @@ modules = [
 # the include order at the top of src/main.cyr so the manifest stays
 # load-bearing.
 [deps]
+# Pure cyrius-stdlib modules. `sigil` and `sakshi` are intentionally
+# NOT listed here even though src/main.cyr includes them — libro
+# 2.6.2 pulls both transitively via [deps.sigil] (tag 3.0.1) and
+# its own stdlib reference, so listing them here as well makes
+# `cyrius deps` attempt two writes to lib/sigil.cyr / lib/sakshi.cyr.
+# Locally the writes are byte-identical and silently succeed; in CI
+# the second write errors with "cannot write lib/sigil.cyr". Mirrors
+# the dep-chain bote/libro use.
 stdlib = [
     "string",
     "fmt",
@@ -63,11 +71,9 @@ stdlib = [
     "regex",
     "chrono",
     "freelist",
-    "sakshi",
     "bigint",
     "json",
     "base64",
-    "sigil",
     "net",
     # `ct` is required by lib/libro.cyr — libro 2.6.2's
     # constant_time_eq_str delegates to cyrius stdlib's

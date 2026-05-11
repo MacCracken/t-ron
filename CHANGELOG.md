@@ -101,11 +101,31 @@ introspection tools (`tron_status` / `tron_risk` / `tron_audit` /
   Phase 2A capability-source policy / L3 agent-injection defense;
   Phase 3 hardening with policy-signing + encrypted-export marked
   ✅-already-shipped at 2.0.0).
+- **`docs/examples/01..03-*.cyr`** updated for the 2.1.0 dep
+  surface — swap the eight per-module `lib/libro_*.cyr` includes
+  for `lib/libro.cyr` + `lib/ct.cyr` + the `src/_libro_compat.cyr`
+  shim. All four examples verified end-to-end:
+  `01-minimal-gate` (allow + deny paths), `02-signed-policy`
+  (Ed25519 sign + verify_and_load round-trip),
+  `03-audit-export` (ChaCha20 + Ed25519 AEAD envelope round-trip,
+  456-byte envelope), `04-safety-check` (default-policy load +
+  forbidden-action match). `04` needed no include change — the
+  safety module is self-contained.
 
 ### Changed
 
 - `.cyrius-toolchain` → `5.10.34` (kept as a local-dev convenience;
   CI now reads the pin from `cyrius.cyml`).
+- **`cyrius.cyml [deps].stdlib`** trimmed — `sigil` and `sakshi`
+  are no longer listed here even though `src/main.cyr` includes
+  them. libro 2.6.2 pulls both transitively (`[deps.sigil]` tag
+  3.0.1 + libro's own stdlib reference). Listing them in t-ron's
+  stdlib too made `cyrius deps` attempt two writes to
+  `lib/sigil.cyr` / `lib/sakshi.cyr`; locally the bytes are
+  identical and the second write silently succeeds, but CI
+  reports it as `error: cannot write lib/sigil.cyr` and fails the
+  resolve step. Same pattern bote uses for transitive sigil
+  resolution.
 - `scripts/version-bump.sh` reduced to its single load-bearing
   side effect — writing VERSION. With `${file:VERSION}`
   interpolation the manifest does not need editing. The 2.0.0-era

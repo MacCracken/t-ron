@@ -27,7 +27,7 @@ counts after the 2.1.0 modernization-arc refresh:
 
 | Bucket | Count | What it means |
 |---|---|---|
-| ✅ **Fresh — touched in the 2.1.0 cycle** | 4 | CHANGELOG, README, roadmap, doc-health (this file) |
+| ✅ **Fresh — touched in the 2.1.0 cycle** | 9 | CHANGELOG, README, roadmap, doc-health (this file), `docs/examples/01..04-*.cyr` (all four rewritten + verified end-to-end), `docs/examples/README.md` (no edit needed) |
 | 🟡 **Stale — refresh in place** | 3 | CONTRIBUTING.md (Rust-era, full rewrite scheduled at 2.1.4); CLAUDE.md (mentions some Rust-era discipline items that map cleanly to cyrius equivalents); docs/guides/integration.md + testing.md (last touched at 2.0.0 — verify code samples still build against 5.10.34 stdlib) |
 | 🟠 **Read-through outstanding** | 1 | docs/architecture/overview.md (last touched 2.0.0 — verify module map matches src/ post-2.1.0; no shape change is expected but the pre-2.1.0 ABI prose for handlers needs a "see 2.1.0" note) |
 | 🔵 **No version-tied claims today** | 3 | `SECURITY.md`, `CODE_OF_CONDUCT.md`, `LICENSE`. None reference current version numbers or moving APIs |
@@ -116,10 +116,10 @@ co-dated with the close of 2.1.4.
 
 | File | Last touched | Status | Notes |
 |---|---|---|---|
-| `01-minimal-gate.cyr` | 2026-04-14 | 🟠 Read-through outstanding | Verify the SecurityGate sample compiles under the 2.1.0 includes (bote per-module + libro dist) |
-| `02-signed-policy.cyr` | 2026-04-14 | 🟠 Read-through outstanding | Same check |
-| `03-audit-export.cyr` | 2026-04-14 | 🟠 Read-through outstanding | Same check |
-| `04-safety-check.cyr` | 2026-04-14 | 🟠 Read-through outstanding | Same check |
+| `01-minimal-gate.cyr` | 2026-05-10 | ✅ Fresh | Include rewrite for the 2.1.0 surface (lib/libro.cyr dist bundle + lib/ct.cyr + src/_libro_compat.cyr shim). Builds + runs clean |
+| `02-signed-policy.cyr` | 2026-05-10 | ✅ Fresh | Same include rewrite. Builds + runs clean (Ed25519 sign + verify round-trip) |
+| `03-audit-export.cyr` | 2026-05-10 | ✅ Fresh | Same include rewrite. Builds + runs clean (ChaCha20 + Ed25519 AEAD envelope round-trip, 456 bytes) |
+| `04-safety-check.cyr` | 2026-05-10 | ✅ Fresh | No libro/bote include — safety module is self-contained. Verified to build + run under 2.1.0 |
 | `README.md` | 2026-04-14 | ✅ Fresh | Examples index — text-only, no version-tied claims |
 
 ---
