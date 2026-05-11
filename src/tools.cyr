@@ -109,8 +109,16 @@ fn _tron_result_text(text, is_error) {
 #  ============================================================
 #  Handlers
 #  ============================================================
+#
+#  Handler ABI (bote 2.0+): fn h(args_cstr, claims) → result_cstr.
+#  t-ron's introspection tools currently ignore `claims` — these
+#  endpoints expose project-wide audit / risk / policy state, not
+#  caller-private data. A 2.2.x candidate is to gate `tron_audit`
+#  / `tron_policy` on caller identity once the agnosticos claims
+#  schema firms up; the param is plumbed through here so the ABI
+#  is correct now.
 
-fn tron_status_handler(args) {
+fn tron_status_handler(args, claims) {
     var audit = tron_audit(_tools_tron);
     var total   = query_total_events(audit);
     var denials = query_total_denials(audit);
@@ -134,7 +142,7 @@ fn tron_status_handler(args) {
     return _tron_result_text(buf, 0);
 }
 
-fn tron_risk_handler(args) {
+fn tron_risk_handler(args, claims) {
     var audit = tron_audit(_tools_tron);
     var agent_id = jsonx_get_str(args, "agent_id");
     if (agent_id == 0) { agent_id = ""; }
@@ -163,7 +171,7 @@ fn _tron_risk_level(score_bp) {
     return "low";
 }
 
-fn tron_audit_handler(args) {
+fn tron_audit_handler(args, claims) {
     #  `limit` defaults to 20, capped at 1000 as in Rust.
     var limit = 20;
     var limit_raw = jsonx_get_raw(args, "limit");
@@ -207,7 +215,7 @@ fn _tron_events_to_json(events) {
     return buf;
 }
 
-fn tron_policy_handler(args) {
+fn tron_policy_handler(args, claims) {
     var toml_str = jsonx_get_str(args, "toml");
     if (toml_str == 0) { return _tron_result_text("\"policy error: missing toml argument\"", 1); }
     if (strlen(toml_str) == 0) { return _tron_result_text("\"policy error: empty toml argument\"", 1); }

@@ -56,7 +56,13 @@ fn security_gate_dispatch(g, request, agent_id) {
         var denied = _sec_check_tool_call(g, request, agent_id);
         if (denied != 0) { return denied; }
     }
-    return dispatcher_dispatch(load64(g + 8), request);
+    #  bote 2.0 ABI: dispatcher_dispatch(d, request, claims). t-ron
+    #  does not yet plumb caller claims through the security gate;
+    #  bote's docs flag claims=0 as the documented "no auth context"
+    #  default (lib/bote_dispatch.cyr `fncall2(fp, args, claims)`).
+    #  A future 2.x adds an explicit claims arg to this fn so callers
+    #  can propagate bote's bearer / JWT context into t-ron's handlers.
+    return dispatcher_dispatch(load64(g + 8), request, 0);
 }
 
 #  ============================================================

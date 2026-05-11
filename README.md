@@ -4,27 +4,25 @@
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 [![Language: Cyrius](https://img.shields.io/badge/Language-Cyrius-brightgreen.svg)](https://github.com/MacCracken/cyrius)
-[![Version: 2.0.0](https://img.shields.io/badge/Version-2.0.0-informational.svg)](VERSION)
+[![Version: 2.1.0](https://img.shields.io/badge/Version-2.1.0-informational.svg)](VERSION)
 
 T-Ron is a [Cyrius](https://github.com/MacCracken/cyrius) security-middleware module set that sits between [bote](https://github.com/MacCracken/bote) (MCP protocol layer) and tool handlers, enforcing per-agent permissions, rate limiting, payload scanning, anomaly detection, and auditing every verdict to a tamper-proof [libro](https://github.com/MacCracken/libro) hash chain. Named after Tron, the security program that fights the Master Control Program.
 
-> **2.0.0 — Cyrius port complete.** A ground-up rewrite from Rust with a layered security audit, signed policy loading, SIGHUP hot-reload, encrypted audit export, and the full AGNOS safety submodule on top. The Rust sources remain archived in `rust-old/` for reference and benchmarking. See [CHANGELOG.md](CHANGELOG.md) for the port log.
+> **2.1.0 — modernization arc opens.** Cyrius 5.10.34, libro 2.6.2, bote 2.7.1; bote 2.0 handler-ABI fully observed; `cyrius.cyml` + `${file:VERSION}` + `cyrius.lock`. Full pipeline 3× faster vs 2.0.0 thanks to libro 2.6.x + cyrius 5.10.x. See [CHANGELOG.md](CHANGELOG.md) for the entry and [`docs/development/roadmap.md`](docs/development/roadmap.md) for the rest of the 2.1.x arc.
 
 ## Rust vs. Cyrius — at a glance
 
 Same t-ron pipeline, two implementations, same box, same day. Full
 methodology in [`docs/benchmarks-rust-v-cyrius.md`](docs/benchmarks-rust-v-cyrius.md).
 
-| | Rust 0.90.0 | Cyrius 2.0.0 | Δ |
-|---|---:|---:|---:|
-| **Binary (what ships)** | 2.59 MB rlib + 193 MB dep closure | **375 KB static ELF** | **~500× smaller** |
-| **Source LOC** (`src/`) | 6 611 | 4 546 | −31 % |
-| **Test LOC** | 3 431 | 1 968 | −43 % |
-| **Total LOC** | 10 221 | 6 637 | **−35 %** |
-| External runtime deps | tokio, serde, dashmap, regex, chrono, uuid, ed25519-dalek, chacha20poly1305, thiserror, libro, bote … | libro + bote + sigil (all Cyrius) | — |
-| `policy_check` | 38 ns | 719 ns | 19× slower |
-| `tron_check` (full pipeline) | 2.4 µs | 52 µs | 22× slower |
-| Throughput per thread | ~ 415 k checks/sec | **~ 19 k checks/sec** | Still far above real-world MCP load |
+| | Rust 0.90.0 | Cyrius 2.0.0 (4.8.4) | Cyrius 2.1.0 (5.10.34) | Δ vs Rust |
+|---|---:|---:|---:|---:|
+| **Binary (what ships)** | 2.59 MB rlib + 193 MB dep closure | 375 KB static ELF | **1.12 MB static ELF** | **~170× smaller** |
+| **Source LOC** (`src/`) | 6 611 | 4 546 | 4 565 | −31 % |
+| External runtime deps | tokio, serde, dashmap, regex, chrono, uuid, ed25519-dalek, chacha20poly1305, thiserror, libro, bote … | libro + bote + sigil (all Cyrius) | libro + bote + sigil (all Cyrius) | — |
+| `policy_check` | 38 ns | 719 ns | 489 ns min / 1 µs avg | 13–25× slower |
+| `tron_check` (full pipeline) | 2.4 µs | 52 µs | **17 µs** | **7× slower** (was 22×) |
+| Throughput per thread | ~ 415 k checks/sec | ~ 19 k checks/sec | **~ 59 k checks/sec** | Still far above real-world MCP load |
 
 Cyrius gives up raw throughput (no LLVM, no SIMD, software SHA-256)
 in exchange for **500× artifact shrinkage**, zero runtime, zero
@@ -62,9 +60,10 @@ include "lib/hashmap.cyr"
 include "lib/fnptr.cyr"
 include "lib/chrono.cyr"
 
-# libro + bote modules (auto-vendored via cyrius.toml)
-include "lib/libro_chain.cyr"
-include "lib/bote_dispatch.cyr"
+# libro + bote modules (auto-vendored via cyrius.cyml)
+include "lib/libro.cyr"           # single dist bundle (#derive accessors)
+include "lib/bote_dispatch.cyr"   # per-module — bote dist + libro dist
+                                  # together exceed the 2 MB compile cap
 
 # t-ron
 include "src/tron.cyr"
@@ -107,8 +106,8 @@ fn main() {
 Build and run:
 
 ```sh
-cyrius deps                              # resolve libro + bote from cyrius.toml
-cyrius build src/main.cyr build/t-ron    # compile (375 KB static x86_64 ELF)
+cyrius deps                              # resolve libro + bote from cyrius.cyml
+cyrius build src/main.cyr build/t-ron    # compile (1.12 MB static x86_64 ELF)
 cyrius test tests/t-ron.tcyr             # 312 assertions across 72 groups
 cyrius test tests/t-ron-crypto.tcyr      # 30 assertions (signal + crypto + export)
 cyrius test tests/t-ron-safety.tcyr      # 48 assertions (safety engine)
@@ -168,18 +167,21 @@ bote.
 
 ## Benchmarks
 
-Cyrius 4.8.4, x86_64, 2026-04-14 (see
+Cyrius 5.10.34, x86_64, 2026-05-10 (see
 [`bench-history.csv`](bench-history.csv) for full history and
 [`docs/benchmarks-rust-v-cyrius.md`](docs/benchmarks-rust-v-cyrius.md)
 for the side-by-side):
 
 | Operation | Avg | Min | Iters |
 |---|---|---|---|
-| `policy_check` | **719 ns** | 691 ns | 100 000 |
+| `policy_check` | 1 µs | **489 ns** | 100 000 |
 | `scanner_clean_text` | 4 µs | 3 µs | 100 000 |
-| `scanner_sql_detect` | 1 µs | 1 µs | 100 000 |
-| `audit_log` (ring buffer + libro chain + SHA-256) | 41 µs | 39 µs | 1 000 |
-| `tron_check_allow` (full pipeline) | **52 µs** | 38 µs | 1 000 |
+| `scanner_sql_detect` | 2 µs | 978 ns | 100 000 |
+| `audit_log` (ring buffer + libro chain + SHA-256) | **13 µs** | 10 µs | 1 000 |
+| `tron_check_allow` (full pipeline) | **17 µs** | 13 µs | 1 000 |
+
+Full pipeline is ~3× faster vs 2.0.0 (52 µs → 17 µs) thanks to
+libro 2.6.2's chain optimizations + cyrius 5.10.34 codegen.
 
 ## Roadmap
 
@@ -189,18 +191,23 @@ the full roadmap. Highlights:
 - **Done in 2.0.0** — full pipeline, libro chain integration, signing,
   SIGHUP reload, ChaCha20+Ed25519 encrypted export, LLM-assisted scan,
   AI safety submodule, security audit with 10 CVE-class fixes.
-- **Pending** — description-hash pinning in bote registry (F1 follow-up;
-  lives upstream).
-- **Phase 2** — ML-based anomaly detection, multi-signature policy
-  approval, daimon event-bus alerts, aethersafha dashboard.
+- **2.1.x — modernization arc** (in progress) — cyrius 5.10.34 +
+  libro 2.6.2 + bote 2.7.1 floor, bote 2.0 handler-ABI fully observed,
+  manifest modernization, CI/release installer parity with bote/libro,
+  `docs/doc-health.md` ledger.
+- **Phase 2 — Advanced detection** (post-2.1.x) — ML-based anomaly
+  detection, privilege escalation, time-of-day, capability-source
+  policy / L3 agent-injection defense.
+- **Phase 3 — Hardening** (post-2.1.x) — daimon event-bus alerts,
+  aethersafha dashboard, edge fleet policy distribution.
 
 ## Reference Code
 
 | Source | Relevance | Location |
 |---|---|---|
-| [bote](https://github.com/MacCracken/bote) | MCP protocol layer — t-ron wraps its Dispatcher via SecurityGate | `../bote` (tag 2.5.1) |
-| [libro](https://github.com/MacCracken/libro) | Cryptographic audit chain — t-ron writes every verdict to libro | `../libro` (tag 1.0.3) |
-| [cyrius](https://github.com/MacCracken/cyrius) | Language toolchain | 4.8.4 |
+| [bote](https://github.com/MacCracken/bote) | MCP protocol layer — t-ron wraps its Dispatcher via SecurityGate | `../bote` (tag 2.7.1) |
+| [libro](https://github.com/MacCracken/libro) | Cryptographic audit chain — t-ron writes every verdict to libro | `../libro` (tag 2.6.2) |
+| [cyrius](https://github.com/MacCracken/cyrius) | Language toolchain | 5.10.34 |
 | [hoosh](https://github.com/MacCracken/hoosh) | LLM-assisted prompt injection detection | `../hoosh` (HTTP API, tag 2.0.0) |
 | [sigil](https://github.com/MacCracken/cyrius) | Ed25519 + SHA-256 primitives (Cyrius stdlib dep) | `lib/sigil.cyr` |
 | [SecureYeoman](https://github.com/MacCracken/SecureYeoman) | T.Ron personality consumes query API and MCP tools | `../SecureYeoman` |

@@ -4,6 +4,151 @@ All notable changes to t-ron are documented here. This project follows
 [Keep a Changelog](https://keepachangelog.com/) and [Semantic
 Versioning](https://semver.org/).
 
+### Conventions
+
+Adopted in **2.1.0** — the **`## [Unreleased]`** section below
+accumulates entries during the patch cycle. When a release ships,
+the `## [Unreleased]` header is renamed to `## [VERSION] — DATE —
+headline` and a fresh, empty `## [Unreleased]` is seeded at the
+top. Mirrors bote 2.7.0's flow.
+
+## [Unreleased]
+
+_(empty)_
+
+## [2.1.0] — 2026-05-10 · Toolchain + dep floor
+
+First patch of the **2.1.x modernization arc**. Catches t-ron up
+to the first-party Cyrius floor: cyrius 5.10.34 (was 4.8.4), libro
+2.6.2 (was 1.0.3), bote 2.7.1 (was 2.5.1). Lands the bote 2.0
+handler-ABI observance that 2.0.0 missed, modernizes the manifest
+layout (`cyrius.cyml` + `${file:VERSION}` interpolation), and
+ships `cyrius.lock` + the versioned-toolchain CI installer. 2.1.x
+continues with deferred items — see `docs/development/roadmap.md`.
+
+No MCP-surface change; the SecurityGate wire format and the four
+introspection tools (`tron_status` / `tron_risk` / `tron_audit` /
+`tron_policy`) are byte-identical at the JSON-RPC boundary.
+
+### Breaking
+
+- **bote 2.0 handler ABI now observed end-to-end.** Tool handlers
+  changed signature from `fn h(args)` → `fn h(args, claims)` per
+  bote's 2.0 dispatcher (`fncall2(fp, args, claims)`). t-ron's
+  four handlers (`tron_status_handler`, `tron_risk_handler`,
+  `tron_audit_handler`, `tron_policy_handler`) ignore `claims`
+  in 2.1.0; gating them on caller identity is a 2.2.x candidate
+  once the agnosticos claims schema firms up.
+  `security_gate_dispatch` now forwards `claims = 0` to bote's
+  `dispatcher_dispatch(d, request, claims)` — explicit "no auth
+  context" mode, documented at bote `src/dispatch.cyr:380`.
+  Consumers using `security_gate_dispatch(g, req, agent_id)`
+  retain the same 3-arg surface; the bote-ABI change is internal.
+- **Manifest renamed**: `cyrius.toml` → `cyrius.cyml`. Body
+  changes: `version = "${file:VERSION}"` (single-source-of-truth
+  via VERSION file), new `[lib] modules = […]` enumerating all
+  src/ files in include order (the `cyrius distlib` contract;
+  shipping a `dist/t-ron.cyr` consumer bundle is a later 2.1.x
+  candidate), `repository` field added, libro/bote dep `tag` +
+  `modules` lists refreshed.
+- **Vendored libro patch retired.** The 2.0.0 in-tree patch to
+  `lib/libro_entry.cyr::_cjh_hash_object` (cstring vs Str arg
+  to `json_get`) is no longer in the source tree — libro 2.6.2's
+  dist bundle carries the upstream fix.
+
+### Added
+
+- **`src/_libro_compat.cyr`** — one-symbol shim that maps libro
+  2.6.2's `ct_eq(a, a_len, b, b_len)` to cyrius stdlib's
+  `ct_eq_bytes_lens` (renamed in cyrius 5.9.20 paired with sigil
+  3.0.2). bote sidesteps this because its only `chain_verify`
+  caller is in opt-in `libro_tools.cyr`; t-ron's audit module
+  hits `chain_verify` on every `audit_log`, so the symbol has
+  to resolve. Drops when libro retags with the new name.
+- **`cyrius.lock`** committed — 15 deps, SHA-256 hashes for every
+  resolved `lib/<dep>.cyr`. CI's `cyrius deps --verify` gate now
+  asserts byte-identity on every push.
+- **`.gitignore`** entry for `/lib/` — first-party convention
+  (cyrius deps populates lib/ from the lockfile pin; the contract
+  is the hash, not the bytes on disk).
+- **`.github/workflows/ci.yml`** — modernized installer matching
+  bote / libro / agnosys 5.10.x: release tarball (binaries +
+  deps cache) + source archive (stdlib snapshot) + versioned
+  `~/.cyrius/versions/<V>/` layout + symlinked `~/.cyrius/{bin,lib}`.
+  New gates: toolchain pin read from `cyrius.cyml` (not
+  `.cyrius-toolchain`), `cyrius deps --verify` (soft-skip if
+  lockfile absent), manifest-completeness check (every src/
+  `include` in main.cyr ⊆ `[lib] modules`), 3-suite test matrix
+  (`t-ron` / `-crypto` / `-safety`), benchmark capture as
+  artifact, `CYRIUS_DCE: "1"` + `CYRIUS_NO_WARN_SHADOW_LIB: "1"`.
+  Docs-job verifies `${file:VERSION}` interpolation literal and
+  VERSION ↔ CHANGELOG agreement.
+- **`.github/workflows/release.yml`** — same installer plus
+  semver-shape tag check (accepts both `v2.1.0` and `2.1.0`),
+  source-archive + linux-x86_64 binary + cyrius.lock + SHA256SUMS
+  in the release-asset bundle. Per-version changelog extraction
+  feeds the GitHub release body.
+- **`## [Unreleased]`** changelog flow adopted (bote 2.7.0
+  convention).
+- **`docs/doc-health.md`** — living ledger classifying every doc
+  in the tree (Fresh / Stale / Read-through-outstanding /
+  No-version-tied / Historical / ADR), refreshed in place as docs
+  are touched. Mirrors libro's pattern.
+- **`docs/development/roadmap.md`** rewritten — Shipped table
+  through 2.1.0; 2.1.x modernization arc table; forward items
+  deferred to 2.2.x+ (audit-tool authorization plumbed on the new
+  `claims` arg; agnoshi intents; Phase 2 advanced detection;
+  Phase 2A capability-source policy / L3 agent-injection defense;
+  Phase 3 hardening with policy-signing + encrypted-export marked
+  ✅-already-shipped at 2.0.0).
+
+### Changed
+
+- `.cyrius-toolchain` → `5.10.34` (kept as a local-dev convenience;
+  CI now reads the pin from `cyrius.cyml`).
+- `scripts/version-bump.sh` reduced to its single load-bearing
+  side effect — writing VERSION. With `${file:VERSION}`
+  interpolation the manifest does not need editing. The 2.0.0-era
+  cargo block (regenerating Cargo.lock, editing Cargo.toml) is
+  gone.
+
+### Performance (cyrius 5.10.34 vs 4.8.4, x86_64, 2026-05-10)
+
+| Operation | 2.0.0 | 2.1.0 | Δ |
+|---|---:|---:|---:|
+| `policy_check` | 719 ns | 489 ns min / 1 µs avg | ~flat (signal at min) |
+| `scanner_clean_text` | 4 µs | 4 µs | flat |
+| `scanner_sql_detect` | 1 µs | 2 µs avg / 978 ns min | ~flat (signal at min) |
+| `audit_log` | 41 µs | **13 µs** | **−68 %** |
+| `tron_check_allow` | 52 µs | **17 µs** | **−67 %** |
+
+The full-pipeline wins come from libro 2.6.2's chain optimizations
+plus cyrius 5.10.x codegen.
+
+### Size
+
+- **Binary**: `build/t-ron` = **1.12 MB** static x86_64 ELF (was
+  375 KB at 2.0.0). The growth is from pulling libro's full
+  `dist/libro.cyr` bundle in for the `#derive(accessors)` getters
+  that libro 2.0 relies on (per-module pull leaves them
+  undefined). bote stays on a per-module pull (nine files) to keep
+  the preprocessed source under cyrius's 2 MB compile cap.
+
+### Pending / parked
+
+- **`dist/t-ron.cyr` consumer bundle** via `cyrius distlib` — the
+  `[lib] modules` section is staged; `dist/t-ron.cyr` itself ships
+  in 2.1.x once the consumer story (daimon, bote middleware,
+  phylax) is reviewed end-to-end.
+- **Full dist-bundle dep adoption (bote)** — blocked on either a
+  cyrius compile-source-size cap raise or a bote opt-in profile
+  that excludes the transport stack (sandhi/tls/ws_server). Today
+  the two dist bundles together expand past 2 MB.
+- **Test-suite refactor for the cyrius 5.10.x assert-nested-call
+  parser quirk** (bote 2.7.1 CONTRIBUTING). Not triggered in
+  t-ron's current test files at 2.1.0; documented in 2.1.x for
+  re-investigation if it surfaces on a future test add.
+
 ## [2.0.0] — 2026-04-14 · Cyrius port complete
 
 ### Breaking
@@ -66,7 +211,7 @@ No performance regression (all benchmarks within noise).
 
 ### Fixed (upstream patches carried in-tree)
 
-- Vendored patch to `lib/libro_entry.cyr::_cjh_hash_object` — upstream libro 1.0.3 passed a cstring to `json_get` (which wants a `Str`), causing SEGV on any non-empty details JSON. See memory note; drop the patch when libro ships a newer tag.
+- Vendored patch to `lib/libro_entry.cyr::_cjh_hash_object` — upstream libro 1.0.3 passed a cstring to `json_get` (which wants a `Str`), causing SEGV on any non-empty details JSON. **Patch retired in 2.1.0** alongside the libro 2.6.2 bump (upstream fix included).
 
 ### Pending
 

@@ -1,7 +1,10 @@
 # t-ron — MCP security monitor (Cyrius port)
 #
-# Ported from 6611 lines of Rust. See docs/development/port-plan.md for
-# the module map and staging order.
+# 2.1.x — modernization arc. 2.1.0 lands the cyrius 5.10.34 floor
+# and swaps the per-module libro/bote include sets for the single
+# dist/<crate>.cyr bundles (libro 2.6.2 / bote 2.7.1). 2.1.x is
+# reserved for the remaining first-party-floor items — see
+# docs/development/roadmap.md.
 
 include "lib/string.cyr"
 include "lib/fmt.cyr"
@@ -23,15 +26,11 @@ include "lib/bigint.cyr"
 include "lib/json.cyr"
 include "lib/base64.cyr"
 include "lib/sigil.cyr"
+include "lib/net.cyr"
+include "lib/ct.cyr"
 
-include "lib/libro_error.cyr"
-include "lib/libro_hasher.cyr"
-include "lib/libro_entry.cyr"
-include "lib/libro_verify.cyr"
-include "lib/libro_chain.cyr"
-include "lib/libro_query.cyr"
-include "lib/libro_retention.cyr"
-include "lib/libro_review.cyr"
+include "src/_libro_compat.cyr"
+include "lib/libro.cyr"
 
 include "lib/bote_error.cyr"
 include "lib/bote_protocol.cyr"
@@ -55,8 +54,6 @@ include "src/query.cyr"
 include "src/correlation.cyr"
 include "src/tron.cyr"
 include "src/tools.cyr"
-include "lib/net.cyr"
-
 include "src/middleware.cyr"
 include "src/llm_scan.cyr"
 include "src/signing.cyr"

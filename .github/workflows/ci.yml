@@ -11,34 +11,165 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # `cyrius deps` populates ./lib/ from the version-pinned snapshot,
+  # which then shadows ~/.cyrius/versions/<V>/lib/. That's intentional
+  # (cwd lib IS the version-pinned content cyrius deps just copied)
+  # but cyrius emits an informational note about it on every build.
+  # Silence it across all CI steps — mirrors bote / libro / agnosys.
+  CYRIUS_NO_WARN_SHADOW_LIB: "1"
+  # Whole-program dead-code elimination — keeps the binary lean and
+  # matches the first-party convention.
+  CYRIUS_DCE: "1"
+
 jobs:
-  build:
-    name: Build
+  build-and-test:
+    name: Build & Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Cyrius toolchain
+        # Version-pinned layout — cc5 5.10.9+ resolves arch-peer
+        # includes (syscalls_x86_64_linux.cyr etc.) under
+        # ~/.cyrius/versions/<V>/lib/. The 5.10.x release tarball
+        # ships bin/ + deps/ only — the lib/ stdlib snapshot lives
+        # in the source archive at the version tag. Same installer
+        # body as bote / libro / agnosys post-5.10.x.
         run: |
-          CYRIUS_VERSION="${CYRIUS_VERSION:-$(cat .cyrius-toolchain | tr -d '[:space:]')}"
+          CYRIUS_VERSION="${CYRIUS_VERSION:-$(grep -E '^cyrius[[:space:]]*=' cyrius.cyml | sed -E 's/^cyrius[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/')}"
           echo "Installing Cyrius $CYRIUS_VERSION"
+
+          # Release tarball — binaries + first-party deps cache.
           curl -sLO "https://github.com/MacCracken/cyrius/releases/download/$CYRIUS_VERSION/cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz"
           tar xzf "cyrius-$CYRIUS_VERSION-x86_64-linux.tar.gz"
           CYRIUS_DIR="cyrius-$CYRIUS_VERSION-x86_64-linux"
-          mkdir -p "$HOME/.cyrius/bin" "$HOME/.cyrius/lib"
-          cp "$CYRIUS_DIR/bin/"* "$HOME/.cyrius/bin/" 2>/dev/null || true
-          cp -r "$CYRIUS_DIR/lib/"* "$HOME/.cyrius/lib/" 2>/dev/null || true
-          chmod +x "$HOME/.cyrius/bin/"* 2>/dev/null || true
+
+          # Source archive — stdlib (lib/) snapshot at the version tag.
+          curl -sL "https://github.com/MacCracken/cyrius/archive/refs/tags/$CYRIUS_VERSION.tar.gz" -o cyrius-src.tar.gz
+          tar xzf cyrius-src.tar.gz
+          CYRIUS_SRC="cyrius-$CYRIUS_VERSION"
+
+          VERSIONED="$HOME/.cyrius/versions/$CYRIUS_VERSION"
+          mkdir -p "$VERSIONED/bin" "$VERSIONED/lib"
+          cp "$CYRIUS_DIR/bin/"* "$VERSIONED/bin/" 2>/dev/null || true
+          cp "$CYRIUS_DIR/scripts/cyrius" "$VERSIONED/bin/cyrius" 2>/dev/null || true
+          cp -r "$CYRIUS_SRC/lib/"* "$VERSIONED/lib/"
+          # Prebuilt first-party deps snapshot — cyrius deps avoids
+          # cloning on every CI run.
+          if [ -d "$CYRIUS_DIR/deps" ]; then
+            mkdir -p "$HOME/.cyrius/deps"
+            cp -r "$CYRIUS_DIR/deps/"* "$HOME/.cyrius/deps/"
+          fi
+          chmod +x "$VERSIONED/bin/"* 2>/dev/null || true
+          ln -sfn "$VERSIONED/bin" "$HOME/.cyrius/bin"
+          ln -sfn "$VERSIONED/lib" "$HOME/.cyrius/lib"
+          echo "$CYRIUS_VERSION" > "$HOME/.cyrius/current"
           echo "$HOME/.cyrius/bin" >> $GITHUB_PATH
           echo "CYRIUS_HOME=$HOME/.cyrius" >> $GITHUB_ENV
 
+          # Sanity check
+          test -f "$VERSIONED/lib/syscalls_x86_64_linux.cyr" || { echo "FAIL: stdlib lib/syscalls_x86_64_linux.cyr missing — source archive extraction failed"; exit 1; }
+          test -x "$VERSIONED/bin/cc5" || { echo "FAIL: bin/cc5 missing — release tarball extraction failed"; exit 1; }
+          echo "OK: stdlib + binaries installed under $VERSIONED"
+
+      - name: Verify toolchain
+        run: cc5 --version
+
       - name: Resolve dependencies
+        # Populates ./lib/ from the version-pinned stdlib snapshot
+        # plus [deps.libro] / [deps.bote] at their tagged versions.
+        # ./lib/ is gitignored — first-party convention.
         run: cyrius deps
+
+      - name: Verify dep hashes
+        # Skip on the first push that introduces a new dep before
+        # cyrius.lock has been generated and committed. After it
+        # lands in-tree, this step starts enforcing hash match.
+        run: |
+          if [ -f cyrius.lock ]; then
+            cyrius deps --verify
+          else
+            echo "::warning::cyrius.lock not committed — skipping hash verification"
+          fi
+
+      - name: Manifest completeness ([lib] modules ⊇ main.cyr src/ includes)
+        run: |
+          # Every `include "src/<file>.cyr"` in src/main.cyr must be
+          # listed under cyrius.cyml [lib] modules. Otherwise
+          # `cyrius distlib` silently ships a bundle missing a
+          # module. Mirrors bote / libro.
+          INCLUDES=$(grep -E 'include "src/[^"]+\.cyr"' src/main.cyr \
+            | grep -v "^#" \
+            | sed -E 's/.*"(src\/[^"]+\.cyr)".*/\1/' | sort -u)
+          MANIFEST=$(awk '/^\[lib\]/{flag=1;next} /^\[/{flag=0} flag' cyrius.cyml \
+            | grep -oE '"src/[^"]+\.cyr"' | tr -d '"' | sort -u)
+          MISSING=$(comm -23 <(echo "$INCLUDES") <(echo "$MANIFEST"))
+          if [ -n "$MISSING" ]; then
+            echo "FAIL: src/ files included from main.cyr but not in cyrius.cyml [lib] modules:"
+            echo "$MISSING"
+            exit 1
+          fi
+          echo "Manifest covers all main.cyr src/ includes."
 
       - name: Build
         run: |
           mkdir -p build
-          cyrius build src/main.cyr build/${{ github.event.repository.name }}
+          cyrius build src/main.cyr build/t-ron
+          echo "t-ron: $(wc -c < build/t-ron) bytes"
+
+      - name: Verify ELF
+        run: xxd -l 4 build/t-ron | grep -q "7f45 4c46"
+
+      - name: Smoke test
+        run: |
+          out=$(./build/t-ron 2>&1 || true)
+          echo "$out" | grep -q "t-ron ready" || { echo "FAIL: t-ron smoke test"; echo "$out"; exit 1; }
+          echo "OK: t-ron smoke test"
+
+      - name: Run tests
+        run: |
+          fail=0
+          for tcyr in tests/t-ron.tcyr tests/t-ron-crypto.tcyr tests/t-ron-safety.tcyr; do
+            echo "--- $tcyr ---"
+            out=$(cyrius test "$tcyr" 2>&1)
+            tail=$(echo "$out" | tail -3)
+            echo "$tail"
+            if echo "$out" | grep -qE '^[0-9]+ passed, [^0]'; then
+              echo "FAIL: $tcyr"
+              fail=1
+            fi
+          done
+          [ $fail -eq 0 ] || exit 1
+
+      - name: Build benchmarks (non-fatal)
+        run: |
+          if [ -f tests/t-ron.bcyr ]; then
+            cyrius bench tests/t-ron.bcyr | tee bench-results.txt || exit 0
+          fi
+
+      - name: Upload binary + bench
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: t-ron-${{ github.sha }}
+          path: |
+            build/t-ron
+            bench-results.txt
+          if-no-files-found: warn
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan for dangerous patterns
+        run: |
+          WARN=0
+          if grep -rn '"/etc/' src/ 2>/dev/null; then
+            echo "WARN: hardcoded /etc paths"; WARN=1
+          fi
+          echo "security scan complete (warnings: $WARN)"
 
   docs:
     name: Documentation
@@ -47,6 +178,20 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check required docs
         run: |
-          for doc in README.md CHANGELOG.md VERSION LICENSE cyrius.toml; do
-            test -f "$doc" && echo "OK: $doc" || { echo "MISSING: $doc"; exit 1; }
+          MISSING=0
+          for doc in README.md CHANGELOG.md CLAUDE.md CONTRIBUTING.md SECURITY.md CODE_OF_CONDUCT.md LICENSE VERSION cyrius.cyml; do
+            if [ -f "$doc" ]; then echo "  OK: $doc"; else echo "  MISSING: $doc"; MISSING=1; fi
           done
+          exit $MISSING
+
+      - name: Verify version consistency
+        run: |
+          # cyrius.cyml uses ${file:VERSION} interpolation, so VERSION
+          # is the single source of truth. Assert the interpolation
+          # literal is present and VERSION appears in CHANGELOG.
+          FILE_VERSION=$(tr -d '[:space:]' < VERSION)
+          grep -q '^version = "\${file:VERSION}"' cyrius.cyml || {
+            echo "FAIL: cyrius.cyml version must be \${file:VERSION}"; exit 1; }
+          grep -q "\[$FILE_VERSION\]" CHANGELOG.md || {
+            echo "FAIL: version $FILE_VERSION not in CHANGELOG.md"; exit 1; }
+          echo "Version consistent: $FILE_VERSION (VERSION → cyrius.cyml via \${file:VERSION})"

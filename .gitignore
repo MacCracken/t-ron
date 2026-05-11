@@ -30,3 +30,8 @@ coverage/
 # Cyrius port
 /rust-old/target/
 /build/
+
+# cyrius deps populates lib/ from the version-pinned snapshot +
+# tagged dep dist bundles. The contract is the cyrius.lock pin,
+# not the bytes on disk. Same shape as bote / libro / agnosys.
+/lib/
