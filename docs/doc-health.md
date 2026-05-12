@@ -6,7 +6,7 @@ type: state
 
 # Documentation Health — t-ron
 
-> **Last refresh**: 2026-05-10 (post-2.1.2 docs pass — `CONTRIBUTING.md` + `CLAUDE.md` Cyrius-era rewrite; release-discipline rule formalized) | **Refresh cadence**: when docs are touched, update the affected row.
+> **Last refresh**: 2026-05-11 (2.1.3 release — bote 2.7.2 opt-in core flip, libro 2.6.3, cyrius 5.10.44, `_libro_compat` shim retired, `.cyrius-toolchain` removed; CONTRIBUTING/CLAUDE rewrites rode along) | **Refresh cadence**: when docs are touched, update the affected row.
 > **Scope**: This repo only (`t-ron`) — root-level files (README, CHANGELOG, CLAUDE.md, etc.) plus the entire `docs/` tree. Cross-repo dep pin drift lives in CHANGELOG entries and the [roadmap](development/roadmap.md), not here.
 
 This is a **ledger**, not a one-time audit. Rewrite-in-place as
@@ -20,10 +20,10 @@ Pattern lifted from the libro ledger ([`libro/docs/doc-health.md`](https://githu
 
 ---
 
-## At a glance — 2026-05-10 inventory
+## At a glance — 2026-05-11 inventory
 
 **~18 markdown files** total (8 root + 10 under `docs/`). Bucket
-counts after the 2.1.1 refresh:
+counts after the 2.1.3 refresh:
 
 | Bucket | Count | What it means |
 |---|---|---|
@@ -40,14 +40,14 @@ counts after the 2.1.1 refresh:
 
 | File | Last touched | Status | Notes |
 |---|---|---|---|
-| `README.md` | 2026-05-10 | ✅ Fresh | Version badge bumped 2.0.0 → 2.1.0; Rust-vs-Cyrius table now has a 2.1.0 column; cyrius / libro / bote pins refreshed; build/bench numbers and reference table refreshed. Roadmap section now points at the 2.1.x arc |
-| `CHANGELOG.md` | 2026-05-10 | ✅ Fresh | `## [Unreleased]` flow adopted (bote 2.7.0 convention); 2.1.0 entry lands the toolchain + dep floor + bote 2.0 handler-ABI observance + manifest modernization + CI installer parity + perf table (3× pipeline win) |
-| `CLAUDE.md` | 2026-05-10 | ✅ Fresh | Cyrius-era rewrite. Project Identity reflects the port (cyrius 5.10.34, `${file:VERSION}` source of truth); cleanliness check uses cyrius commands; `#[non_exhaustive]` / `#[must_use]` / `#[inline]` re-cast as cyrius-equivalent disciplines; Release Discipline section formalizes the docs-no-version-bump rule; new bote-handler-ABI + `_libro_compat.cyr` notes |
-| `CONTRIBUTING.md` | 2026-05-10 | ✅ Fresh | Cyrius-era rewrite, mirroring bote 2.7.1's shape. Drops cargo / make / MSRV refs; new Common Commands table; Release Discipline section; Adding-a-New-Security-Check / Code Style / Testing sections aligned with the 3-file test split + `[lib] modules` + `dist/t-ron.cyr` regen flow |
+| `README.md` | 2026-05-10 | 🟡 Stale | Version badge / pins reflect 2.1.0; needs a refresh for the 2.1.3 cyrius 5.10.44 / libro 2.6.3 / bote 2.7.2 (`dist/bote-core.cyr`) lineup and the new perf row. Defer to next release-worthy touch — README pins rot quickly and a single refresh covering 2.1.1 → 2.1.3 keeps the diff readable |
+| `CHANGELOG.md` | 2026-05-11 | ✅ Fresh | 2.1.3 entry lands the bote 2.7.2 opt-in `dist/bote-core.cyr` flip, libro 2.6.3 (sigil 3.1.1 / patra 1.9.4 / agnosys 1.2.6 transitive), cyrius 5.10.44, the `src/_libro_compat.cyr` shim retirement, stdlib growth (`slice` / `keccak` / `random`), `.cyrius-toolchain` removal, and the carried-over CONTRIBUTING / CLAUDE rewrites |
+| `CLAUDE.md` | 2026-05-11 | ✅ Fresh | 2.1.3 touch: cyrius pin bumped to 5.10.44; `.cyrius-toolchain` retirement noted; `src/_libro_compat.cyr` reference replaced with the parenthetical "dropped at 2.1.3" callout. Otherwise the Cyrius-era rewrite from the previous touch holds |
+| `CONTRIBUTING.md` | 2026-05-10 | ✅ Fresh | Cyrius-era rewrite, mirroring bote 2.7.1's shape. Drops cargo / make / MSRV refs; new Common Commands table; Release Discipline section; Adding-a-New-Security-Check / Code Style / Testing sections aligned with the 3-file test split + `[lib] modules` + `dist/t-ron.cyr` regen flow. No 2.1.3-specific edits needed |
 | `SECURITY.md` | 2026-04-14 | 🔵 No version-tied claims | Reporting policy + scope |
 | `CODE_OF_CONDUCT.md` | 2026-04-14 | 🔵 No version-tied claims | Standard |
-| `DEPS-PATTERN.md` | 2026-05-10 | ✅ Fresh | New in 2.1.1. Distribution contract for downstream consumers (daimon / phylax / bote middleware). Mirrors libro's pattern doc: what's-in / what's-not-in `dist/t-ron.cyr`, canonical wire-up, pre-release verification checklist |
-| `VERSION` | 2026-05-10 | ✅ Fresh | `2.1.2` — single source of truth, read into `cyrius.cyml` via `${file:VERSION}` |
+| `DEPS-PATTERN.md` | 2026-05-11 | ✅ Fresh | 2.1.3 refresh: module list 19 → 18 (compat shim retired); minimal-consumer manifest snippet bumped to libro 2.6.3 + bote 2.7.2 `dist/bote-core.cyr` + `slice` / `keccak` / `random` stdlib + t-ron tag 2.1.3 |
+| `VERSION` | 2026-05-11 | ✅ Fresh | `2.1.3` — single source of truth, read into `cyrius.cyml` via `${file:VERSION}` |
 | `LICENSE` | (initial commit) | 🔵 No version-tied claims | GPL-3.0-only |
 
 ---
@@ -56,7 +56,7 @@ counts after the 2.1.1 refresh:
 
 | File | Last touched | Status | Notes |
 |---|---|---|---|
-| `roadmap.md` | 2026-05-10 | ✅ Fresh | Forward-facing as of 2.1.0: Shipped table through 2.1.0, the 2.1.x modernization arc (2.1.1 conditional, 2.1.2 / 2.1.3 / 2.1.4 open, dist-bundle adoption blocked), 2.2.x candidates (audit-tool authorization, agnoshi intents), Phase 2 advanced detection deferred past 2.1.x, Phase 2A capability-source policy, Phase 3 hardening (policy signing + encrypted export are ✅ shipped — kept as historical "done" markers) |
+| `roadmap.md` | 2026-05-11 | ✅ Fresh | 2.1.3 refresh: Shipped table through 2.1.3; 2.1.x arc table marks 2.1.3 ✅; `code_size` row updated to reflect the 100.3 % crossover and that path (1) (cyrius cap raise) is now the first-preference response; Future row recast as "optional flip to `dist/bote.cyr`" — the previous "blocked" status closed by the bote 2.7.2 opt-in profile; cyrius-language-deps table marks both prior 🔴 / 🟡 rows ✅ Resolved |
 | `threat-model.md` | 2026-04-14 | 🟠 Read-through outstanding | Verify post-2.1.0 — the bote 2.0 handler-ABI now-observed change does not change the threat model but should land a note that audit-tool authorization (gating `tron_audit` / `tron_policy` on caller identity) is a 2.2.x candidate |
 
 ---
@@ -175,7 +175,8 @@ table.
 
 ---
 
-*Last refresh: 2026-05-10 (post-2.1.2 docs pass —
-`CONTRIBUTING.md` + `CLAUDE.md` Cyrius-era rewrites land;
-release-discipline rule formalized that docs-only commits don't
-earn a version bump). Refresh in place when docs are touched.*
+*Last refresh: 2026-05-11 (2.1.3 release — bote 2.7.2 opt-in
+`dist/bote-core.cyr` flip, libro 2.6.3, cyrius 5.10.44,
+`src/_libro_compat.cyr` shim retired, `.cyrius-toolchain`
+removed; CONTRIBUTING/CLAUDE rewrites rode along). Refresh in
+place when docs are touched.*

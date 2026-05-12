@@ -76,11 +76,10 @@ That command lands `dist/t-ron.cyr`. Run it:
 ## What's in the bundle
 
 `cyrius distlib` concatenates every file in `cyrius.cyml`'s
-`[lib] modules` array in declaration order. For t-ron 2.1.x
-that's 19 files, in this order:
+`[lib] modules` array in declaration order. For t-ron 2.1.3+
+that's 18 files, in this order:
 
 ```
-src/_libro_compat.cyr   (ct_eq shim for libro 2.6.2)
 src/error.cyr
 src/gate.cyr
 src/policy.cyr
@@ -104,6 +103,12 @@ src/safety.cyr
 The order matches `src/main.cyr` — critical for Cyrius's
 single-pass forward-reference resolution.
 
+> **Compat shim retired at 2.1.3.** 2.1.0–2.1.2 shipped
+> `src/_libro_compat.cyr` as the first module — a one-symbol
+> `ct_eq → ct_eq_bytes_lens` shim for libro 2.6.2's bundle.
+> libro 2.6.3 calls `ct_eq_bytes_lens` directly, so the shim
+> has no remaining caller and the file is gone.
+
 ## What's NOT in the bundle
 
 - **stdlib modules** (`lib/string.cyr`, `lib/sigil.cyr`, …) —
@@ -120,25 +125,29 @@ A consumer using `dist/t-ron.cyr` must therefore have at minimum:
 
 ```toml
 [deps]
-stdlib = ["string", "fmt", "alloc", "vec", "str", "syscalls", "io",
-          "tagged", "assert", "fnptr", "hashmap", "regex", "chrono",
-          "freelist", "bigint", "json", "base64", "net", "ct"]
+stdlib = ["string", "fmt", "alloc", "vec", "str", "slice", "syscalls",
+          "io", "args", "tagged", "assert", "fnptr", "hashmap", "regex",
+          "chrono", "freelist", "bigint", "json", "base64", "net",
+          # ct / keccak / random must precede sigil — sigil 3.1.1's
+          # ML-DSA + AES-GCM surfaces reference ct / keccak / random.
+          "ct", "keccak", "random"]
 
 [deps.libro]
 git = "https://github.com/MacCracken/libro.git"
-tag = "2.6.2"
+tag = "2.6.3"
 modules = ["dist/libro.cyr"]
 
 [deps.bote]
 git = "https://github.com/MacCracken/bote.git"
-tag = "2.7.1"
-modules = ["src/error.cyr", "src/protocol.cyr", "src/jsonx.cyr",
-           "src/codec.cyr", "src/registry.cyr", "src/events.cyr",
-           "src/audit.cyr", "src/dispatch.cyr", "src/schema.cyr"]
+tag = "2.7.2"
+# Opt-in transport-free profile — t-ron only needs bote's Dispatcher
+# + tool-registry surface. Keeps consumer compile-source size down.
+# Flip to "dist/bote.cyr" if your consumer also wires bote transports.
+modules = ["dist/bote-core.cyr"]
 
 [deps.t-ron]
 git = "https://github.com/MacCracken/t-ron.git"
-tag = "2.1.1"
+tag = "2.1.3"
 modules = ["dist/t-ron.cyr"]
 ```
 

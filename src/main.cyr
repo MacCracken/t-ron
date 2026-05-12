@@ -1,16 +1,19 @@
 # t-ron — MCP security monitor (Cyrius port)
 #
-# 2.1.x — modernization arc. 2.1.0 lands the cyrius 5.10.34 floor
-# and swaps the per-module libro/bote include sets for the single
-# dist/<crate>.cyr bundles (libro 2.6.2 / bote 2.7.1). 2.1.x is
-# reserved for the remaining first-party-floor items — see
-# docs/development/roadmap.md.
+# 2.1.x — modernization arc. 2.1.3 picks up cyrius 5.10.44 +
+# libro 2.6.3 + bote 2.7.2 and flips [deps.bote] to the opt-in
+# dist/bote-core.cyr bundle (the consumer-side fix for the
+# 2 MB compile-source cap that previously blocked the dist
+# adoption). The src/_libro_compat.cyr shim retires here —
+# libro 2.6.3's dist bundle calls ct_eq_bytes_lens directly.
+# See docs/development/roadmap.md.
 
 include "lib/string.cyr"
 include "lib/fmt.cyr"
 include "lib/alloc.cyr"
 include "lib/vec.cyr"
 include "lib/str.cyr"
+include "lib/slice.cyr"
 include "lib/syscalls.cyr"
 include "lib/io.cyr"
 include "lib/args.cyr"
@@ -25,22 +28,22 @@ include "lib/sakshi.cyr"
 include "lib/bigint.cyr"
 include "lib/json.cyr"
 include "lib/base64.cyr"
-include "lib/sigil.cyr"
 include "lib/net.cyr"
+# ct / keccak / random must precede sigil — sigil 3.1.1's
+# ML-DSA + AES-GCM surfaces reference ct_eq_bytes_lens /
+# ct_select / _keccak_* / shake256 / random_bytes, and cyrius
+# is single-pass.
 include "lib/ct.cyr"
+include "lib/keccak.cyr"
+include "lib/random.cyr"
+include "lib/sigil.cyr"
 
-include "src/_libro_compat.cyr"
 include "lib/libro.cyr"
 
-include "lib/bote_error.cyr"
-include "lib/bote_protocol.cyr"
-include "lib/bote_jsonx.cyr"
-include "lib/bote_codec.cyr"
-include "lib/bote_registry.cyr"
-include "lib/bote_events.cyr"
-include "lib/bote_audit.cyr"
-include "lib/bote_dispatch.cyr"
-include "lib/bote_schema.cyr"
+# bote opt-in core bundle — 9 transport-free modules. Replaces the
+# per-module cherry-pick shipped at 2.1.0–2.1.2 with a single
+# include. See cyrius.cyml [deps.bote] for the rationale.
+include "lib/bote-core.cyr"
 
 include "src/error.cyr"
 include "src/gate.cyr"

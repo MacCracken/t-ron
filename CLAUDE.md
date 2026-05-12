@@ -9,8 +9,9 @@ detection, anomaly analysis.
 - **Type**: Flat Cyrius library crate (consumed via
   `dist/t-ron.cyr` per `DEPS-PATTERN.md`).
 - **Language**: Cyrius (pin in `cyrius.cyml`,
-  `cyrius = "5.10.34"` as of 2.1.x). The `.cyrius-toolchain`
-  file is kept for local-dev; CI reads the pin from `cyrius.cyml`.
+  `cyrius = "5.10.44"` as of 2.1.3). `cyrius.cyml
+  [package].cyrius` is the single source of truth — the legacy
+  `.cyrius-toolchain` file was retired at 2.1.3.
 - **License**: GPL-3.0-only.
 - **Version**: SemVer (2.x line, stable post-Cyrius-port). Source
   of truth is `VERSION`; `cyrius.cyml` reads it via
@@ -135,9 +136,9 @@ intelligence.
   proper tracing lands upstream.
 - **Constant-time compares** for any token / signature / secret
   material. Use `ct_eq_bytes` / `ct_eq_bytes_lens` from
-  `lib/ct.cyr`. The `src/_libro_compat.cyr` shim aliases the
-  retired `ct_eq` name for libro 2.6.2's bundle internals — do
-  not rename it without retiring the compat hook.
+  `lib/ct.cyr`. (The `src/_libro_compat.cyr` shim that wrapped
+  the retired `ct_eq` for libro 2.6.2 was dropped at 2.1.3 —
+  libro 2.6.3's dist bundle calls `ct_eq_bytes_lens` directly.)
 - **Bote handler ABI**: tool handlers are
   `fn h(args, claims)` per bote 2.0; pipe `claims` through even
   if the handler ignores it today.

@@ -14,12 +14,121 @@ top. Mirrors bote 2.7.0's flow.
 
 ## [Unreleased]
 
-> Note: docs-only changes don't earn a version bump in t-ron;
-> they accumulate here until the next release-worthy patch (code,
-> CI, release-flow, dep-pin, manifest, tests) ships and the notes
-> ride along.
+_(empty)_
 
-### Changed (docs)
+## [2.1.3] — 2026-05-11 · bote 2.7.2 opt-in dist + cyrius 5.10.44 + libro 2.6.3 + libro_compat retired
+
+Fourth patch of the **2.1.x modernization arc**. Two unblocks
+land at once: bote 2.7.2 ships the opt-in `dist/bote-core.cyr`
+profile (the consumer-side fix tracked in the 2.1.0 CHANGELOG's
+"Pending / parked" block), and libro 2.6.3 calls
+`ct_eq_bytes_lens` directly inside its dist bundle, retiring the
+`src/_libro_compat.cyr` shim. The 9-module bote cherry-pick that
+shipped at 2.1.0 collapses to a single bundle include, and the
+queued CONTRIBUTING/CLAUDE rewrites ride along. No SecurityGate
+behaviour change; the four introspection tools and JSON-RPC wire
+format are byte-identical.
+
+### Breaking
+
+None at the public surface. The compat-shim retirement and bote
+include shape are internal — consumers pulling `dist/t-ron.cyr`
+see no signature change.
+
+### Changed
+
+- **Cyrius pin: 5.10.34 → 5.10.44** (`cyrius.cyml [package].cyrius`).
+  Picks up the 5.10.x stdlib + frontend deltas. New stdlib
+  surface: `lib/slice.cyr` (required by agnosys 1.2.6's slice
+  subscript lowering, pulled transitively through libro 2.6.3),
+  `lib/keccak.cyr` + `lib/random.cyr` (required by sigil 3.1.1's
+  ML-DSA + AES-GCM surfaces). Same toolchain landing as bote 2.7.2
+  / libro 2.6.3 / phylax 1.1.1.
+- **libro pin: 2.6.2 → 2.6.3** (`[deps.libro] tag`). 2.6.3 ships
+  sigil 3.1.1 / patra 1.9.4 / agnosys 1.2.6, fixes the call-site
+  for the post-5.9.20 `ct_eq_bytes_lens` rename inside
+  `dist/libro.cyr`, and migrates three `str_from(sig_alg_name(…))`
+  call sites away from the cyrius 5.10.44 dispatcher path that
+  would otherwise format the alg cstring as a decimal integer.
+- **bote pin: 2.7.1 → 2.7.2** + **module list flipped to
+  `["dist/bote-core.cyr"]`**. t-ron is the trigger consumer for
+  bote's new opt-in `[lib.core]` profile (9 transport-free
+  modules — `error`, `protocol`, `jsonx`, `codec`, `registry`,
+  `events`, `audit`, `dispatch`, `schema` — 1989 lines / 70 KB)
+  packaged via `cyrius distlib core`. Same nine modules that the
+  2.1.0 cherry-pick listed by hand, now delivered as a single
+  bundle. Excludes the transport stack (`transport_*` / `bridge`
+  / `auth` / `session` / `discovery` / `content` / `host` /
+  `audit_libro` / `events_majra`) that t-ron does not consume and
+  that previously pushed the combined `dist/libro.cyr` +
+  per-module-bote source past cyrius's 2 MB compile-source cap
+  when a single-bundle bote was attempted.
+- **`cyrius.cyml [deps].stdlib`** picks up `slice`, `keccak`,
+  `random`. Ordering note in the file: `ct` / `keccak` / `random`
+  precede `sigil`/`libro` so cyrius's single-pass resolver sees
+  the symbols before the consumers reach for them. Mirrors bote
+  2.7.2's `[deps].stdlib` comment.
+- **`src/main.cyr`** reordered to match: `lib/ct.cyr` /
+  `lib/keccak.cyr` / `lib/random.cyr` now precede `lib/sigil.cyr`
+  (was `sigil` → `net` → `ct`). Adds `lib/slice.cyr`. Drops the
+  nine `lib/bote_<module>.cyr` lines in favour of a single
+  `include "lib/bote-core.cyr"`. Drops `include "src/_libro_compat.cyr"`.
+- **`.cyrius-toolchain`** removed — old convention. The cyrius
+  pin lives only in `cyrius.cyml [package].cyrius` now, matching
+  the bote / libro / phylax 5.10.x layout.
+
+### Removed
+
+- **`src/_libro_compat.cyr`** retired. Shipped at 2.1.0 as a
+  one-symbol shim aliasing the retired `ct_eq` (cyrius 5.9.20
+  renamed it `ct_eq_bytes_lens`) for libro 2.6.2's bundle
+  internals. libro 2.6.3's `dist/libro.cyr` calls
+  `ct_eq_bytes_lens` directly (verified at line 116 of the new
+  bundle); no remaining caller. Drops from `cyrius.cyml [lib]
+  modules` (19 → 18) and `src/main.cyr`.
+
+### Performance (cyrius 5.10.44, x86_64, 2026-05-11)
+
+| Operation | 2.1.2 | 2.1.3 | Δ |
+|---|---:|---:|---:|
+| `policy_check` | 489 ns min / 1 µs avg | 489 ns min / 1 µs avg | flat |
+| `scanner_clean_text` | 4 µs | 3 µs min / 5 µs avg | within noise |
+| `scanner_sql_detect` | 978 ns min / 2 µs avg | 978 ns min / 2 µs avg | flat |
+| `audit_log` | 13 µs | 10 µs min / 14 µs avg | within noise |
+| `tron_check_allow` (full pipeline) | 17 µs | 14 µs min / 18 µs avg | within noise |
+
+390-assertion baseline holds (312 + 30 + 48), 0 failures.
+
+### Capacity utilisation (cyrius 5.10.44, 2026-05-11)
+
+| Counter | Used | Cap | % | Δ from 2.1.2 |
+|---|---:|---:|---:|---:|
+| `fn_table` | 3 286 | 4 096 | 80 % | +5 pp |
+| `identifiers` | 97 450 | 131 072 | 74 % | +5 pp |
+| `var_table` | 1 627 | 8 192 | 20 % | flat |
+| `fixup_table` | 9 957 | 262 144 | 4 % | flat |
+| `string_data` | 28 810 | 2 097 152 | 1 % | flat |
+| `code_size` | 1 052 128 | 1 048 576 | **100.3 %** | +3 pp |
+
+The bote-core flip removed bote transport surfaces but the
+sigil 3.1.1 (PQ + AES-GCM) and libro 2.6.3 cascade consumed more
+than was freed. `fn_table` and `identifiers` retain headroom; the
+95 % CI gate continues to apply to those two dimensions only.
+`code_size` crosses 100 % — the cyrius compile-time emit buffer
+auto-expands past this watermark (the build succeeds and all 390
+tests pass), so it remains informational rather than gated. Same
+posture documented in 2.1.2: the response paths are (1) upstream
+cyrius cap raise (the compile-source-size cap raise proposal
+filed 2026-05-10 covers exactly this dimension), (2) feature-gate
+`llm_scan` / `safety` / `signing`, (3) opt-in compile-unit split.
+
+### Regenerated
+
+- **`dist/t-ron.cyr`** — header stamps `# Version: 2.1.3`; 4 493
+  lines (was 4 512 at 2.1.2). 19-line drop from retiring the
+  compat shim. CI freshness gate verifies.
+
+### Docs (riding along from `## [Unreleased]`)
 
 - **`CONTRIBUTING.md`** rewritten Cyrius-era. Drops the Rust-era
   `cargo` / `make` / MSRV 1.89 / `src/lib.rs` references.
@@ -35,19 +144,19 @@ top. Mirrors bote 2.7.0's flow.
   constant-time compares, bote 2.0 handler ABI). Mirrors bote
   2.7.1's CONTRIBUTING rewrite.
 - **`CLAUDE.md`** Rust-era discipline items re-cast for cyrius.
-  Project Identity now reflects the Cyrius port (cyrius 5.10.34
-  pin, `VERSION` + `${file:VERSION}` as single source of truth);
-  cleanliness check uses `cyrius deps --verify` /
-  `cyrius distlib` / `CYRIUS_STATS=1` / `git diff --exit-code
-  dist/t-ron.cyr` rather than `cargo fmt` / `cargo clippy`;
-  `#[non_exhaustive]` / `#[must_use]` / `#[inline]` re-cast as
-  the cyrius-equivalent disciplines; `unwrap()`/`panic!()` DO-NOT
-  entries reframed as "no unguarded `syscall(60, ...)` or
-  out-of-bounds in library code"; new Release Discipline section
-  formalizes the docs-no-version-bump rule; added Bote handler
-  ABI and `src/_libro_compat.cyr` notes.
-- No code, CI, release-flow, dep-pin, manifest, or test change.
-  Emitted binary byte-identical; `dist/t-ron.cyr` unchanged.
+  Project Identity now reflects the Cyrius port (cyrius 5.10.44
+  pin via `cyrius.cyml [package].cyrius`, `VERSION` +
+  `${file:VERSION}` as single source of truth); cleanliness
+  check uses `cyrius deps --verify` / `cyrius distlib` /
+  `CYRIUS_STATS=1` / `git diff --exit-code dist/t-ron.cyr`
+  rather than `cargo fmt` / `cargo clippy`; `#[non_exhaustive]`
+  / `#[must_use]` / `#[inline]` re-cast as the cyrius-equivalent
+  disciplines; `unwrap()`/`panic!()` DO-NOT entries reframed as
+  "no unguarded `syscall(60, ...)` or out-of-bounds in library
+  code"; new Release Discipline section formalizes the
+  docs-no-version-bump rule; added Bote handler ABI notes. The
+  `src/_libro_compat.cyr` reference dropped with the shim
+  retirement in this same release.
 
 ## [2.1.2] — 2026-05-10 · CI capacity gate
 
