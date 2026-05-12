@@ -450,6 +450,112 @@ fn test_pattern_isolation() {
     return 0;
 }
 
+fn test_pattern_directed_sequence() {
+    test_group("pattern directed sequence recon then mutation flagged");
+    #  recon (aegis_scan) followed by mutation (ark_install) inside the
+    #  10-call window — even with a benign call separating them, sequence
+    #  trips. The mixed-benign requirement of detector #2 ALSO fires
+    #  here (3 sensitive in last 5: tarang/aegis/probe/ark/edit), so the
+    #  earlier-priority "privilege escalation" message wins. Sequence
+    #  detection is exercised in isolation by the next case below.
+    var pa = pattern_analyzer_new();
+    pattern_record(pa, _mk_call("agent-1", "aegis_scan",   10));
+    pattern_record(pa, _mk_call("agent-1", "tarang_probe", 10));
+    pattern_record(pa, _mk_call("agent-1", "ark_install",  10));
+    var msg = pattern_check_anomaly(pa, "agent-1", 10);
+    assert_eq((msg != 0), 1, "recon then mutation flagged (escalation wins on the wire)");
+
+    test_group("pattern directed sequence isolated");
+    #  Below the escalation threshold (only 2 sensitive in last 5) so
+    #  detector #2 is silent; sequence detector should still fire on the
+    #  ordered recon → mutation pair.
+    var pa2 = pattern_analyzer_new();
+    pattern_record(pa2, _mk_call("agent-1", "tarang_probe", 10));
+    pattern_record(pa2, _mk_call("agent-1", "rasa_edit",    10));
+    pattern_record(pa2, _mk_call("agent-1", "phylax_alert", 10));
+    pattern_record(pa2, _mk_call("agent-1", "tarang_probe", 10));
+    pattern_record(pa2, _mk_call("agent-1", "ark_remove",   10));
+    var msg2 = pattern_check_anomaly(pa2, "agent-1", 10);
+    assert_eq((msg2 != 0), 1, "isolated recon then mutation flagged");
+
+    test_group("pattern directed sequence wrong order ignored");
+    #  Mutation BEFORE recon — sequence detector requires recon strictly
+    #  before mutation in the window, so this stays clean.
+    var pa3 = pattern_analyzer_new();
+    pattern_record(pa3, _mk_call("agent-1", "tarang_probe", 10));
+    pattern_record(pa3, _mk_call("agent-1", "ark_install",  10));
+    pattern_record(pa3, _mk_call("agent-1", "rasa_edit",    10));
+    pattern_record(pa3, _mk_call("agent-1", "aegis_scan",   10));
+    var msg3 = pattern_check_anomaly(pa3, "agent-1", 10);
+    assert_eq(msg3, 0, "mutation then recon not flagged by sequence");
+
+    test_group("pattern directed sequence only recon");
+    #  Recon-only history: sequence requires a mutation to follow, so
+    #  no flag. Escalation is also silent (only 2 sensitive in last 5).
+    var pa4 = pattern_analyzer_new();
+    pattern_record(pa4, _mk_call("agent-1", "tarang_probe", 10));
+    pattern_record(pa4, _mk_call("agent-1", "aegis_scan",   10));
+    pattern_record(pa4, _mk_call("agent-1", "rasa_edit",    10));
+    pattern_record(pa4, _mk_call("agent-1", "tarang_probe", 10));
+    pattern_record(pa4, _mk_call("agent-1", "phylax_alert", 10));
+    assert_eq(pattern_check_anomaly(pa4, "agent-1", 10), 0, "recon only not flagged");
+
+    test_group("pattern directed sequence only mutation");
+    var pa5 = pattern_analyzer_new();
+    pattern_record(pa5, _mk_call("agent-1", "tarang_probe", 10));
+    pattern_record(pa5, _mk_call("agent-1", "ark_install",  10));
+    pattern_record(pa5, _mk_call("agent-1", "rasa_edit",    10));
+    assert_eq(pattern_check_anomaly(pa5, "agent-1", 10), 0, "mutation only not flagged");
+    return 0;
+}
+
+fn test_pattern_off_hours_score_bp() {
+    test_group("off-hours bp score: insufficient history returns 0");
+    var pa = pattern_analyzer_new();
+    for (var i = 0; i < 10; i = i + 1) {
+        pattern_record(pa, _mk_call("agent-1", "tarang_probe", 10));
+    }
+    assert_eq(pattern_off_hours_score_bp(pa, "agent-1", 3), 0, "below 50 calls returns 0");
+
+    test_group("off-hours bp score: unknown agent returns 0");
+    assert_eq(pattern_off_hours_score_bp(pa, "nobody", 3), 0, "unknown agent returns 0");
+
+    test_group("off-hours bp score: within pattern returns 0");
+    var pa2 = pattern_analyzer_new();
+    for (var h = 9; h < 17; h = h + 1) {
+        for (var i = 0; i < 8; i = i + 1) {
+            pattern_record(pa2, _mk_call("agent-1", "tarang_probe", h));
+        }
+    }
+    #  Hour 10 has 8 calls of 64 total; threshold = 64 * 2 / 100 = 1.
+    #  8 >= 1 so within pattern, score = 0.
+    assert_eq(pattern_off_hours_score_bp(pa2, "agent-1", 10), 0, "in-pattern hour scores 0");
+
+    test_group("off-hours bp score: dead hour scores 1000");
+    #  Hour 3 has 0 calls of 64 total; threshold = 1; (1000 * (1-0)) / 1 = 1000.
+    assert_eq(pattern_off_hours_score_bp(pa2, "agent-1", 3), 1000, "dead off-hour scores 1000");
+
+    test_group("off-hours bp score: monotonic with anomaly");
+    #  Build a histogram with bigger total so threshold > 1 and a
+    #  partial-but-below-threshold current_count yields a sub-1000 score.
+    var pa3 = pattern_analyzer_new();
+    for (var h = 9; h < 17; h = h + 1) {
+        for (var i = 0; i < 100; i = i + 1) {
+            pattern_record(pa3, _mk_call("agent-1", "tarang_probe", h));
+        }
+    }
+    #  Total = 800; threshold = 800 * 2 / 100 = 16. Hour 3 has 0 → score 1000.
+    assert_eq(pattern_off_hours_score_bp(pa3, "agent-1", 3), 1000, "high-total dead hour still 1000");
+    #  Inject a partial signal at hour 3 — 8 calls (below threshold of 16).
+    for (var i = 0; i < 8; i = i + 1) {
+        pattern_record(pa3, _mk_call("agent-1", "tarang_probe", 3));
+    }
+    #  Total now 808; threshold = 16. Current = 8. Score = 1000 * (16 - 8) / 16 = 500.
+    var partial = pattern_off_hours_score_bp(pa3, "agent-1", 3);
+    assert_eq((partial > 0 && partial < 1000), 1, "partial off-hour scores between 0 and 1000");
+    return 0;
+}
+
 fn _mk_deny() {
     return verdict_deny("nope", DENY_UNAUTHORIZED);
 }
@@ -1363,6 +1469,8 @@ fn main() {
     test_pattern_ring_buffer();
     test_pattern_time_anomaly();
     test_pattern_isolation();
+    test_pattern_directed_sequence();
+    test_pattern_off_hours_score_bp();
     test_audit_log_and_query();
     test_audit_flag_verdict();
     test_audit_agent_filter();

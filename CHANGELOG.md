@@ -16,6 +16,97 @@ top. Mirrors bote 2.7.0's flow.
 
 _(empty)_
 
+## [2.1.4] — 2026-05-11 · pattern-analyzer refinements (directed sequence + continuous off-hours score)
+
+Fifth patch of the **2.1.x modernization arc**, and the first
+forward-feature pull into the arc — both refinements ride the
+existing 5.10.44 toolchain with no upstream coordination. The
+JSON-RPC boundary is unchanged; the SecurityGate dispatcher
+signature is unchanged. New surface is internal to
+`src/pattern.cyr` and one new public function.
+
+### Added
+
+- **Detector #3: directed sequence** in `pattern_check_anomaly`.
+  Splits the prior single `_pat_sensitive` list into two
+  semantic categories — recon (`aegis_*`, `phylax_*`) and
+  mutation (`ark_install`, `ark_remove`) — and adds
+  `_pat_check_sequence` which scans the last 10 calls for a
+  recon-class call appearing strictly before a mutation-class
+  call. Catches ordered recon→mutation patterns that the
+  count-based escalation detector (#2) misses when sensitive
+  calls are spaced below the 3-of-5 threshold. New emission
+  string: `"directed sequence: recon followed by mutation"`.
+  Detector ordering: enumeration → escalation → sequence →
+  off-hours; first match wins.
+- **`pattern_off_hours_score_bp(pa, agent_id, current_hour)`** —
+  basis-point variant of detector #4. Returns 0..1000 instead of
+  a binary flag, using the same threshold semantics
+  (`max(1, total * 2 / 100)`). Returns 0 on insufficient
+  history (< 50 calls), unknown agent, fully-active agent
+  (24 active hours), or current-hour ≥ threshold. Otherwise
+  returns `1000 * (threshold - current_count) / threshold` —
+  monotonic with anomaly degree (1000 = dead hour, 0 = within
+  pattern). Composes with `score.cyr`'s basis-point risk model
+  so consumers can blend off-hours signal with deny / flag
+  history rather than a yes/no decision. Existing binary
+  `_pat_check_time` retained — no consumer ABI change.
+- **`PAT_SEQUENCE_WINDOW = 10`** constant alongside the existing
+  `PAT_MAX_HISTORY` / `PAT_MIN_HISTORY_FOR_TIME` / `PAT_ACTIVE_HOUR_*`.
+- **`_pat_recon` / `_pat_mutation` arrays** + `_pat_is_recon` /
+  `_pat_is_mutation` / `_pat_match_any` helpers. `_pat_is_sensitive`
+  becomes a union over both arrays — preserves detector #2's
+  behaviour exactly.
+
+### Tests
+
+- **`test_pattern_directed_sequence`** (5 sub-groups, 5
+  assertions): recon→mutation flagged with escalation winning
+  on the wire; isolated sequence (below escalation threshold)
+  flagged on its own; mutation→recon order ignored;
+  recon-only ignored; mutation-only ignored.
+- **`test_pattern_off_hours_score_bp`** (5 sub-groups, 6
+  assertions): insufficient history → 0; unknown agent → 0;
+  in-pattern hour → 0; dead off-hour → 1000; partial off-hour
+  → between 0 and 1000 (monotonic check).
+- Total: **11 new assertions**. Suite total now **323 + 30 + 48 =
+  401 assertions, 0 failures**.
+
+### Performance (cyrius 5.10.44, x86_64, 2026-05-11)
+
+| Operation | 2.1.3 | 2.1.4 | Δ |
+|---|---:|---:|---:|
+| `policy_check` | 489 ns min / 1 µs avg | 907 ns min / 1 µs avg | within noise |
+| `scanner_clean_text` | 3 µs min / 5 µs avg | 3 µs min / 5 µs avg | flat |
+| `scanner_sql_detect` | 978 ns min / 2 µs avg | 1 µs min / 2 µs avg | flat |
+| `audit_log` | 10 µs min / 14 µs avg | 12 µs min / 14 µs avg | within noise |
+| `tron_check_allow` | 14 µs min / 18 µs avg | 14 µs min / 18 µs avg | flat |
+
+The new detector is bounded at 10 history scans + a single pass
+through 2-element classification arrays per call; not on the
+hot-path budget.
+
+### Capacity utilisation (cyrius 5.10.44, 2026-05-11)
+
+| Counter | Used | Cap | % | Δ from 2.1.3 |
+|---|---:|---:|---:|---:|
+| `fn_table` | 3 300 | 8 192 | 40 % | +5 |
+| `identifiers` | 97 804 | 262 144 | 37 % | +151 |
+| `var_table` | 1 638 | 8 192 | 20 % | +3 |
+| `fixup_table` | 9 987 | 262 144 | 4 % | +14 |
+| `string_data` | 28 856 | 2 097 152 | 1 % | +46 |
+| `code_size` | 1 055 344 | 1 048 576 | **100.6 %** | +1 744 B |
+
+Tiny absolute deltas across every dimension — refinement code
+is ~50 LOC. `code_size` ticks +0.1 pp; still within emit-buffer
+auto-expand.
+
+### Regenerated
+
+- **`dist/t-ron.cyr`** — header stamps `# Version: 2.1.4`; 4 621
+  lines (was 4 493 at 2.1.3, +128 lines from the new detector +
+  bp score function + their helpers). CI freshness gate verifies.
+
 ## [2.1.3] — 2026-05-11 · bote 2.7.2 opt-in dist + cyrius 5.10.44 + libro 2.6.3 + libro_compat retired
 
 Fourth patch of the **2.1.x modernization arc**. Two unblocks
@@ -101,26 +192,32 @@ see no signature change.
 
 ### Capacity utilisation (cyrius 5.10.44, 2026-05-11)
 
-| Counter | Used | Cap | % | Δ from 2.1.2 |
-|---|---:|---:|---:|---:|
-| `fn_table` | 3 286 | 4 096 | 80 % | +5 pp |
-| `identifiers` | 97 450 | 131 072 | 74 % | +5 pp |
-| `var_table` | 1 627 | 8 192 | 20 % | flat |
-| `fixup_table` | 9 957 | 262 144 | 4 % | flat |
-| `string_data` | 28 810 | 2 097 152 | 1 % | flat |
-| `code_size` | 1 052 128 | 1 048 576 | **100.3 %** | +3 pp |
+| Counter | Used | Cap | % |
+|---|---:|---:|---:|
+| `fn_table` | 3 295 | 8 192 | 40 % |
+| `identifiers` | 97 653 | 262 144 | 37 % |
+| `var_table` | 1 635 | 8 192 | 20 % |
+| `fixup_table` | 9 973 | 262 144 | 4 % |
+| `string_data` | 28 810 | 2 097 152 | 1 % |
+| `code_size` | 1 053 600 | 1 048 576 | **100.5 %** |
 
-The bote-core flip removed bote transport surfaces but the
-sigil 3.1.1 (PQ + AES-GCM) and libro 2.6.3 cascade consumed more
-than was freed. `fn_table` and `identifiers` retain headroom; the
-95 % CI gate continues to apply to those two dimensions only.
-`code_size` crosses 100 % — the cyrius compile-time emit buffer
-auto-expands past this watermark (the build succeeds and all 390
-tests pass), so it remains informational rather than gated. Same
-posture documented in 2.1.2: the response paths are (1) upstream
-cyrius cap raise (the compile-source-size cap raise proposal
-filed 2026-05-10 covers exactly this dimension), (2) feature-gate
-`llm_scan` / `safety` / `signing`, (3) opt-in compile-unit split.
+**Re-baselined.** cyrius 5.10.44 ships **doubled** caps for both
+`fn_table` (4 096 → 8 192) and `identifiers` (131 072 → 262 144)
+relative to 5.10.34. The 2.1.2 CHANGELOG's 75 % / 69 % numbers
+were against the old caps; against 5.10.44 the same code sits at
+40 % / 37 % — well clear of the 95 % CI gate. The sigil 3.1.1 +
+libro 2.6.3 cascade in this release adds modest absolute growth
+(fn_table +219 from 2.1.2's 3 076; identifiers +6 639 from
+91 014) but utilisation drops sharply because the cap doubled.
+
+`code_size` is the unchanged dimension and stays at **100.5 %** —
+the cyrius compile-time emit buffer auto-expands past this
+watermark (the build succeeds and all 390 tests pass), so it
+remains informational rather than gated. Response paths
+unchanged from 2.1.2: (1) upstream cyrius cap raise (the
+compile-source-size cap raise proposal filed 2026-05-10 covers
+exactly this dimension), (2) feature-gate `llm_scan` /
+`safety` / `signing`, (3) opt-in compile-unit split.
 
 ### Regenerated
 

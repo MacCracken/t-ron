@@ -6,7 +6,7 @@ type: state
 
 # Documentation Health — t-ron
 
-> **Last refresh**: 2026-05-11 (2.1.3 release — bote 2.7.2 opt-in core flip, libro 2.6.3, cyrius 5.10.44, `_libro_compat` shim retired, `.cyrius-toolchain` removed; CONTRIBUTING/CLAUDE rewrites rode along) | **Refresh cadence**: when docs are touched, update the affected row.
+> **Last refresh**: 2026-05-11 (2.1.4 release — pattern-analyzer refinements: directed-sequence detector + continuous off-hours bp score; +11 test assertions to 401 total; capacity baselines re-stated against the 5.10.44 doubled `fn_table`/`identifiers` caps that the 2.1.3 entry had wrong) | **Refresh cadence**: when docs are touched, update the affected row.
 > **Scope**: This repo only (`t-ron`) — root-level files (README, CHANGELOG, CLAUDE.md, etc.) plus the entire `docs/` tree. Cross-repo dep pin drift lives in CHANGELOG entries and the [roadmap](development/roadmap.md), not here.
 
 This is a **ledger**, not a one-time audit. Rewrite-in-place as
@@ -23,7 +23,7 @@ Pattern lifted from the libro ledger ([`libro/docs/doc-health.md`](https://githu
 ## At a glance — 2026-05-11 inventory
 
 **~18 markdown files** total (8 root + 10 under `docs/`). Bucket
-counts after the 2.1.3 refresh:
+counts after the 2.1.4 refresh:
 
 | Bucket | Count | What it means |
 |---|---|---|
@@ -41,13 +41,13 @@ counts after the 2.1.3 refresh:
 | File | Last touched | Status | Notes |
 |---|---|---|---|
 | `README.md` | 2026-05-10 | 🟡 Stale | Version badge / pins reflect 2.1.0; needs a refresh for the 2.1.3 cyrius 5.10.44 / libro 2.6.3 / bote 2.7.2 (`dist/bote-core.cyr`) lineup and the new perf row. Defer to next release-worthy touch — README pins rot quickly and a single refresh covering 2.1.1 → 2.1.3 keeps the diff readable |
-| `CHANGELOG.md` | 2026-05-11 | ✅ Fresh | 2.1.3 entry lands the bote 2.7.2 opt-in `dist/bote-core.cyr` flip, libro 2.6.3 (sigil 3.1.1 / patra 1.9.4 / agnosys 1.2.6 transitive), cyrius 5.10.44, the `src/_libro_compat.cyr` shim retirement, stdlib growth (`slice` / `keccak` / `random`), `.cyrius-toolchain` removal, and the carried-over CONTRIBUTING / CLAUDE rewrites |
+| `CHANGELOG.md` | 2026-05-11 | ✅ Fresh | 2.1.4 entry lands the pattern-analyzer refinements (directed-sequence detector #3 + `pattern_off_hours_score_bp` continuous basis-point scoring); 2.1.3 entry's capacity table re-baselined against the actual 5.10.44 doubled caps (8 192 / 262 144) that the original entry had wrong (numbers came from a stale-cap 5.11.18 binary) |
 | `CLAUDE.md` | 2026-05-11 | ✅ Fresh | 2.1.3 touch: cyrius pin bumped to 5.10.44; `.cyrius-toolchain` retirement noted; `src/_libro_compat.cyr` reference replaced with the parenthetical "dropped at 2.1.3" callout. Otherwise the Cyrius-era rewrite from the previous touch holds |
 | `CONTRIBUTING.md` | 2026-05-10 | ✅ Fresh | Cyrius-era rewrite, mirroring bote 2.7.1's shape. Drops cargo / make / MSRV refs; new Common Commands table; Release Discipline section; Adding-a-New-Security-Check / Code Style / Testing sections aligned with the 3-file test split + `[lib] modules` + `dist/t-ron.cyr` regen flow. No 2.1.3-specific edits needed |
 | `SECURITY.md` | 2026-04-14 | 🔵 No version-tied claims | Reporting policy + scope |
 | `CODE_OF_CONDUCT.md` | 2026-04-14 | 🔵 No version-tied claims | Standard |
 | `DEPS-PATTERN.md` | 2026-05-11 | ✅ Fresh | 2.1.3 refresh: module list 19 → 18 (compat shim retired); minimal-consumer manifest snippet bumped to libro 2.6.3 + bote 2.7.2 `dist/bote-core.cyr` + `slice` / `keccak` / `random` stdlib + t-ron tag 2.1.3 |
-| `VERSION` | 2026-05-11 | ✅ Fresh | `2.1.3` — single source of truth, read into `cyrius.cyml` via `${file:VERSION}` |
+| `VERSION` | 2026-05-11 | ✅ Fresh | `2.1.4` — single source of truth, read into `cyrius.cyml` via `${file:VERSION}` |
 | `LICENSE` | (initial commit) | 🔵 No version-tied claims | GPL-3.0-only |
 
 ---
@@ -56,7 +56,7 @@ counts after the 2.1.3 refresh:
 
 | File | Last touched | Status | Notes |
 |---|---|---|---|
-| `roadmap.md` | 2026-05-11 | ✅ Fresh | 2.1.3 refresh: Shipped table through 2.1.3; 2.1.x arc table marks 2.1.3 ✅; `code_size` row updated to reflect the 100.3 % crossover and that path (1) (cyrius cap raise) is now the first-preference response; Future row recast as "optional flip to `dist/bote.cyr`" — the previous "blocked" status closed by the bote 2.7.2 opt-in profile; cyrius-language-deps table marks both prior 🔴 / 🟡 rows ✅ Resolved. **Second pass:** dropped the speculative 2.1.4/2.1.5 priv-esc/time-of-day rows after `src/pattern.cyr` review showed both detectors already ship at 2.0.0; added a "Correction" callout in the Phase 2 section and a "Pattern-analyzer refinements" 🟢 Optional row in the arc table for the directed-sequence / continuous-scoring deltas that remain |
+| `roadmap.md` | 2026-05-11 | ✅ Fresh | 2.1.4 refresh: 2.1.4 row added to Shipped table and 2.1.x arc table (pattern-analyzer refinements: directed-sequence detector + continuous bp scoring); Phase 2 entries updated in place to mark the two refinement deltas as ✅ shipped at 2.1.4; preamble re-stated against the 5.10.44 doubled caps. **Prior 2.1.3 pass:** Shipped table through 2.1.3, cyrius-language-deps table marks both prior 🔴 / 🟡 rows ✅ Resolved, Future row recast as "optional flip to `dist/bote.cyr`" |
 | `threat-model.md` | 2026-04-14 | 🟠 Read-through outstanding | Verify post-2.1.0 — the bote 2.0 handler-ABI now-observed change does not change the threat model but should land a note that audit-tool authorization (gating `tron_audit` / `tron_policy` on caller identity) is a 2.2.x candidate |
 
 ---
@@ -175,8 +175,8 @@ table.
 
 ---
 
-*Last refresh: 2026-05-11 (2.1.3 release — bote 2.7.2 opt-in
-`dist/bote-core.cyr` flip, libro 2.6.3, cyrius 5.10.44,
-`src/_libro_compat.cyr` shim retired, `.cyrius-toolchain`
-removed; CONTRIBUTING/CLAUDE rewrites rode along). Refresh in
-place when docs are touched.*
+*Last refresh: 2026-05-11 (2.1.4 release — pattern-analyzer
+refinements: directed-sequence detector + continuous off-hours
+bp score; +11 test assertions to 401 total; 2.1.3 capacity
+baselines re-stated against the actual 5.10.44 doubled caps).
+Refresh in place when docs are touched.*

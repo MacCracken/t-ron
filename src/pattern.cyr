@@ -6,18 +6,37 @@
 #    * history     -- ring buffer of the last 100 tool names (cstring)
 #    * hour_hist   -- 24-element count array indexed by hour-of-day UTC
 #
-#  Detectors:
-#    1. Tool enumeration     -- 15+ distinct tools in the last 20 calls
-#    2. Privilege escalation -- 3+ of last 5 calls target sensitive tools
-#                               AND at least one benign call mixed in
-#    3. Off-hours activity   -- current hour below 2% of total calls once
-#                               >= 50 calls observed, and agent is not
-#                               already active in all 24 hours
+#  Detectors (checked in order; first match wins):
+#    1. Tool enumeration       -- 15+ distinct tools in the last 20 calls
+#    2. Privilege escalation   -- 3+ of last 5 calls target sensitive tools
+#                                 AND at least one benign call mixed in
+#    3. Directed sequence      -- a recon-class sensitive call (aegis_*,
+#                                 phylax_*) appears in the last 10 calls
+#                                 followed by a mutation-class sensitive
+#                                 call (ark_install, ark_remove). Catches
+#                                 ordered recon→mutation patterns that
+#                                 the count-based escalation detector
+#                                 misses when sensitive calls are spaced
+#                                 below the 3-of-5 threshold. Added at
+#                                 2.1.4.
+#    4. Off-hours activity     -- current hour below 2% of total calls
+#                                 once >= 50 calls observed, and agent
+#                                 is not already active in all 24 hours
+#
+#  Continuous scoring:
+#    * pattern_off_hours_score_bp -- basis-point variant of the off-hours
+#                                    detector; returns 0..1000 instead of
+#                                    a binary flag. Same threshold logic
+#                                    as detector #4 above. Added at 2.1.4
+#                                    so consumers can compose with the
+#                                    score.cyr basis-point risk model
+#                                    rather than a binary decision.
 
 var PAT_MAX_HISTORY              = 100;
 var PAT_MIN_HISTORY_FOR_TIME     = 50;
 var PAT_ACTIVE_HOUR_NUMERATOR    = 2;        #  threshold = total * 2 / 100
 var PAT_ACTIVE_HOUR_DENOMINATOR  = 100;
+var PAT_SEQUENCE_WINDOW          = 10;       #  scan last 10 calls for recon→mutation
 
 #  ============================================================
 #  PatternAnalyzer  --  two hashmaps of per-agent state
@@ -110,20 +129,31 @@ fn _pat_check_enumeration(hist) {
 }
 
 #  ============================================================
-#  Detector 2: privilege escalation (sensitive burst)
+#  Sensitive-tool classification
 #  ============================================================
+#
+#  2.1.4: split the prior single _pat_sensitive list into two
+#  semantic categories so the directed-sequence detector can
+#  distinguish read-only recon (aegis_/phylax_) from irreversible
+#  mutation (ark_install/ark_remove). _pat_is_sensitive remains a
+#  union over both, preserving the count-based escalation
+#  detector's behaviour at the wire level.
 
-var _pat_sensitive = 0;
-var _pat_sensitive_n = 4;
+var _pat_recon       = 0;
+var _pat_recon_n     = 2;
+var _pat_mutation    = 0;
+var _pat_mutation_n  = 2;
 
 fn _pat_init_sensitive() {
-    if (_pat_sensitive != 0) { return 0; }
-    var a = alloc(_pat_sensitive_n * 8);
-    store64(a +  0, "aegis_");
-    store64(a +  8, "phylax_");
-    store64(a + 16, "ark_install");
-    store64(a + 24, "ark_remove");
-    _pat_sensitive = a;
+    if (_pat_recon != 0) { return 0; }
+    var r = alloc(_pat_recon_n * 8);
+    store64(r +  0, "aegis_");
+    store64(r +  8, "phylax_");
+    _pat_recon = r;
+    var m = alloc(_pat_mutation_n * 8);
+    store64(m +  0, "ark_install");
+    store64(m +  8, "ark_remove");
+    _pat_mutation = m;
     return 0;
 }
 
@@ -133,15 +163,34 @@ fn _pat_starts_with(s, prefix) {
     return memeq(s, prefix, pn);
 }
 
-fn _pat_is_sensitive(tool_name) {
-    _pat_init_sensitive();
+fn _pat_match_any(tool_name, table, n) {
     var i = 0;
-    while (i < _pat_sensitive_n) {
-        if (_pat_starts_with(tool_name, load64(_pat_sensitive + i * 8)) == 1) { return 1; }
+    while (i < n) {
+        if (_pat_starts_with(tool_name, load64(table + i * 8)) == 1) { return 1; }
         i = i + 1;
     }
     return 0;
 }
+
+fn _pat_is_recon(tool_name) {
+    _pat_init_sensitive();
+    return _pat_match_any(tool_name, _pat_recon, _pat_recon_n);
+}
+
+fn _pat_is_mutation(tool_name) {
+    _pat_init_sensitive();
+    return _pat_match_any(tool_name, _pat_mutation, _pat_mutation_n);
+}
+
+fn _pat_is_sensitive(tool_name) {
+    if (_pat_is_recon(tool_name) == 1) { return 1; }
+    if (_pat_is_mutation(tool_name) == 1) { return 1; }
+    return 0;
+}
+
+#  ============================================================
+#  Detector 2: privilege escalation (sensitive burst)
+#  ============================================================
 
 fn _pat_check_escalation(hist) {
     var n = vec_len(hist);
@@ -159,7 +208,37 @@ fn _pat_check_escalation(hist) {
 }
 
 #  ============================================================
-#  Detector 3: off-hours activity
+#  Detector 3: directed sequence (recon → mutation)
+#  ============================================================
+#
+#  Scans the last PAT_SEQUENCE_WINDOW calls for a recon-class
+#  sensitive call appearing strictly before a mutation-class
+#  sensitive call. The two need not be adjacent — an attacker
+#  spacing recon and mutation across benign filler still trips
+#  the detector once both land inside the same window.
+#
+#  Returns 1 if such an ordered pair exists in the window,
+#  otherwise 0. Insufficient history (< 2 calls) returns 0.
+
+fn _pat_check_sequence(hist) {
+    var n = vec_len(hist);
+    if (n < 2) { return 0; }
+    var start = n - PAT_SEQUENCE_WINDOW;
+    if (start < 0) { start = 0; }
+
+    var saw_recon = 0;
+    var i = start;
+    while (i < n) {
+        var t = vec_get(hist, i);
+        if (saw_recon == 1 && _pat_is_mutation(t) == 1) { return 1; }
+        if (_pat_is_recon(t) == 1) { saw_recon = 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+#  ============================================================
+#  Detector 4: off-hours activity (binary)
 #  ============================================================
 #
 #  threshold = max(1, total * 2 / 100). If the current hour's count is
@@ -190,6 +269,52 @@ fn _pat_check_time(hist_24, current_hour) {
 }
 
 #  ============================================================
+#  Continuous off-hours scoring (basis points)
+#  ============================================================
+#
+#  Same threshold semantics as _pat_check_time but emits a 0..1000
+#  score instead of a binary flag. Composes with score.cyr's
+#  basis-point risk model so consumers can blend off-hours signal
+#  with deny / flag history rather than a yes/no decision.
+#
+#  Returns 0 if the agent has no histogram, has < PAT_MIN_HISTORY_FOR_TIME
+#  total calls, is active in all 24 hours, or the current hour is at or
+#  above the active-hour threshold (i.e. inside the established pattern).
+#  Otherwise returns 1000 * (threshold - current_count) / threshold,
+#  monotonic in anomaly degree:
+#    * current_count = 0          -> 1000  (dead hour, max anomaly)
+#    * current_count = threshold-1 -> 1000 / threshold (just below pattern)
+
+fn pattern_off_hours_score_bp(pa, agent_id, current_hour) {
+    var hh = load64(pa + 8);
+    if (map_has(hh, agent_id) == 0) { return 0; }
+    var hist_24 = map_get(hh, agent_id);
+
+    var total = 0;
+    var i = 0;
+    while (i < 24) {
+        total = total + load64(hist_24 + i * 8);
+        i = i + 1;
+    }
+    if (total < PAT_MIN_HISTORY_FOR_TIME) { return 0; }
+
+    var threshold = (total * PAT_ACTIVE_HOUR_NUMERATOR) / PAT_ACTIVE_HOUR_DENOMINATOR;
+    if (threshold < 1) { threshold = 1; }
+
+    var active = 0;
+    i = 0;
+    while (i < 24) {
+        if (load64(hist_24 + i * 8) >= threshold) { active = active + 1; }
+        i = i + 1;
+    }
+    if (active >= 24) { return 0; }
+
+    var current = load64(hist_24 + current_hour * 8);
+    if (current >= threshold) { return 0; }
+    return (1000 * (threshold - current)) / threshold;
+}
+
+#  ============================================================
 #  Public surface
 #  ============================================================
 
@@ -205,6 +330,9 @@ fn pattern_check_anomaly(pa, agent_id, current_hour) {
     }
     if (_pat_check_escalation(hist) == 1) {
         return "privilege escalation: sensitive tool burst after benign calls";
+    }
+    if (_pat_check_sequence(hist) == 1) {
+        return "directed sequence: recon followed by mutation";
     }
 
     var hh = load64(pa + 8);
