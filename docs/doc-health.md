@@ -56,7 +56,7 @@ counts after the 2.1.3 refresh:
 
 | File | Last touched | Status | Notes |
 |---|---|---|---|
-| `roadmap.md` | 2026-05-11 | ✅ Fresh | 2.1.3 refresh: Shipped table through 2.1.3; 2.1.x arc table marks 2.1.3 ✅; `code_size` row updated to reflect the 100.3 % crossover and that path (1) (cyrius cap raise) is now the first-preference response; Future row recast as "optional flip to `dist/bote.cyr`" — the previous "blocked" status closed by the bote 2.7.2 opt-in profile; cyrius-language-deps table marks both prior 🔴 / 🟡 rows ✅ Resolved |
+| `roadmap.md` | 2026-05-11 | ✅ Fresh | 2.1.3 refresh: Shipped table through 2.1.3; 2.1.x arc table marks 2.1.3 ✅; `code_size` row updated to reflect the 100.3 % crossover and that path (1) (cyrius cap raise) is now the first-preference response; Future row recast as "optional flip to `dist/bote.cyr`" — the previous "blocked" status closed by the bote 2.7.2 opt-in profile; cyrius-language-deps table marks both prior 🔴 / 🟡 rows ✅ Resolved. **Second pass:** dropped the speculative 2.1.4/2.1.5 priv-esc/time-of-day rows after `src/pattern.cyr` review showed both detectors already ship at 2.0.0; added a "Correction" callout in the Phase 2 section and a "Pattern-analyzer refinements" 🟢 Optional row in the arc table for the directed-sequence / continuous-scoring deltas that remain |
 | `threat-model.md` | 2026-04-14 | 🟠 Read-through outstanding | Verify post-2.1.0 — the bote 2.0 handler-ABI now-observed change does not change the threat model but should land a note that audit-tool authorization (gating `tron_audit` / `tron_policy` on caller identity) is a 2.2.x candidate |
 
 ---
