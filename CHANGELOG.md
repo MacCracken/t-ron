@@ -30,10 +30,22 @@ and is the reference consumer for the pattern.
 ### Changed
 
 - **Cyrius pin `5.10.44` → `6.1.24`** (5.x → 6.x major crossing).
-  The 6.0.0 cycle renamed the compiler binary (`cc5` → `cycc`);
-  t-ron's scaffolding only ever shells the `cyrius` wrapper, so no
-  CI/script edits were needed. `cyrius.cyml` remains the single
-  pin source (`${file:VERSION}` for the package version).
+  `cyrius.cyml` remains the single pin source (`${file:VERSION}`
+  for the package version).
+- **CI/release toolchain install rewritten** (`ci.yml` +
+  `release.yml`). The hand-rolled two-tarball extraction probed
+  for `bin/cc5` and ran `cc5 --version` — but the 6.0.0 cycle
+  renamed the compiler binary `cc5` → `cycc`, so the install gate
+  failed outright on 6.1.24 (`FAIL: bin/cc5 missing`). Both
+  workflows now delegate to the upstream `scripts/install.sh`
+  keyed on the `cyrius.cyml` pin (lays out `$HOME/.cyrius/{bin,
+  lib}` with `cycc`/`cyrius`/`cyrfmt`/`cyrlint` + the stdlib
+  snapshot), and the verify step uses `cyrius --version`. Same
+  installer body as patra / bote / agnosys on the 6.x toolchain.
+  All other CI steps already shell the `cyrius` wrapper
+  (`build`/`test`/`deps`/`distlib`/`bench`), so nothing else moved;
+  the `CYRIUS_STATS=1` capacity gate parses the unchanged `cyrius
+  stats:` block.
 - **libro `2.6.3` → `2.7.2`** (`dist/libro.cyr`) and **bote
   `2.7.2` → `2.7.3`** (`dist/bote-core.cyr` opt-in core profile,
   unchanged shape). Transitive pins advance: **sigil 3.1.1 →
