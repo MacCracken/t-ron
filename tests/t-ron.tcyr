@@ -20,6 +20,11 @@ include "lib/sakshi.cyr"
 include "lib/bigint.cyr"
 include "lib/json.cyr"
 include "lib/base64.cyr"
+# atomic/thread/thread_local before sigil — sigil 3.7.8's serial hash
+# path self-installs a TLS scratch bank (thread_local_get). (2.1.5)
+include "lib/atomic.cyr"
+include "lib/thread.cyr"
+include "lib/thread_local.cyr"
 include "lib/sigil.cyr"
 
 include "lib/net.cyr"

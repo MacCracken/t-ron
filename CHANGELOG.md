@@ -16,6 +16,109 @@ top. Mirrors bote 2.7.0's flow.
 
 _(empty)_
 
+## [2.1.5] — 2026-06-10 · cyrius major-toolchain jump (5.10.44 → 6.1.24) + libro 2.7.2 + bote 2.7.3
+
+Sixth patch of the **2.1.x modernization arc** and its largest
+single step: the **cyrius major-version crossing (5.10.44 →
+6.1.24)** the arc had earmarked as its closing move. The arc
+absorbs the jump as a final 2.1.x patch rather than cutting
+2.2.x — the JSON-RPC boundary and the SecurityGate dispatcher
+signature are untouched; this is a pure toolchain + dependency
+refresh. Mirrors **bote 2.7.3**, which made the identical jump
+and is the reference consumer for the pattern.
+
+### Changed
+
+- **Cyrius pin `5.10.44` → `6.1.24`** (5.x → 6.x major crossing).
+  The 6.0.0 cycle renamed the compiler binary (`cc5` → `cycc`);
+  t-ron's scaffolding only ever shells the `cyrius` wrapper, so no
+  CI/script edits were needed. `cyrius.cyml` remains the single
+  pin source (`${file:VERSION}` for the package version).
+- **libro `2.6.3` → `2.7.2`** (`dist/libro.cyr`) and **bote
+  `2.7.2` → `2.7.3`** (`dist/bote-core.cyr` opt-in core profile,
+  unchanged shape). Transitive pins advance: **sigil 3.1.1 →
+  3.7.8**, **patra 1.9.4 → 1.11.0**, **agnosys 1.2.6 → 1.4.1**,
+  **majra → 2.4.5**, **sakshi → 2.2.10**.
+- **`cyrius.lock` now records 48 hashes** (t-ron's full
+  dependency closure under the 6.0.x lock model — stdlib modules
+  + dep bundles) instead of the prior 7 git-dep-bundle entries.
+  `cyrius deps --verify` passes (48 verified, 0 failed); the count
+  is reproducible from an empty `./lib` (CI regenerates it).
+- **Refreshed the committed `./lib` stdlib from 5.10.44 → 6.1.24
+  content.** The repo tracks a subset of `./lib` (a legacy of
+  pre-`.gitignore` history); those files had gone stale and were
+  shadowing the version-matched 6.1.24 toolchain snapshot at build
+  time. Regenerated `./lib` clean so the build compiles against
+  genuine 6.1.24 stdlib (12 tracked stdlib modules updated; the
+  `sigil`/`patra`/`sakshi` entries flipped from `…/3.1.1` symlinks
+  to real 6.x files).
+
+### Added
+
+- **`atomic` / `thread` / `thread_local` stdlib modules** added to
+  `[deps].stdlib` and the `src/main.cyr` + all three test-suite
+  include lists, ordered **before `sigil`**. Required by sigil
+  3.7.8: its crypto path self-installs a per-thread TLS scratch
+  bank on the **serial** hash path (`cbank()` → `thread_local_get`,
+  cyrius ≥ 6.0.52), and its parallel `sv_verify_batch` spawns
+  `thread_create`/`thread_join` workers (`thread` builds on the
+  lock-free `atomic` queue). Without these, the SHA-256 inside
+  libro's `chain_append` lands on a DCE-NOPed trap and the audit
+  chain crashes with **SIGILL** on first append. This was the only
+  source-level breakage from the major jump; it surfaced as the
+  `t-ron` and `t-ron-crypto` suites trapping in their audit tests
+  while `t-ron-safety` (no chain path) stayed green. Mirrors bote
+  2.7.3's `thread` addition.
+
+### Notes
+
+- **Two new cross-module `duplicate fn` warnings** (benign): sigil
+  3.7.8 now ships its own `chacha20_xor`, and majra 2.4.5 a
+  `circuit_breaker_new` (different signature). t-ron's `src/`
+  definitions are included **after** the dep bundles, so they win
+  ("last definition wins") — confirmed by the passing RFC-7539
+  ChaCha20 vector and safety circuit-breaker tests.
+- **Consumer note**: downstreams that include `dist/t-ron.cyr` and
+  exercise the audit chain must now carry `atomic` / `thread` /
+  `thread_local` in their own `[deps].stdlib` (consumers already on
+  bote 2.7.3 list `thread`). The dist bundle is unchanged apart
+  from the version header — t-ron's bundled `src/` modules did not
+  move; `main.cyr` (entry, not in `[lib]`) holds the new includes.
+
+### Tests
+
+- All three suites green under cyrius 6.1.24: **401 assertions, 0
+  failures** (`t-ron` + `t-ron-crypto` restored from the SIGILL
+  trap; `t-ron-safety` 48/48). No assertion-count change — this is
+  a toolchain refresh, not new surface.
+
+### Performance (cyrius 6.1.24, x86_64, 2026-06-10)
+
+Flat across the major jump — within run-to-run noise, no
+regression.
+
+| Operation | 2.1.4 | 2.1.5 | Δ |
+|---|---:|---:|---:|
+| `policy_check` | 907 ns min / 1 µs avg | 907 ns min / 1 µs avg | flat |
+| `scanner_clean_text` | 3 µs min / 5 µs avg | 3 µs min / 4 µs avg | within noise |
+| `scanner_sql_detect` | — | 978 ns min / 2 µs avg | — |
+| `audit_log` | — | 10 µs min / 13 µs avg | — |
+| `tron_check_allow` (full pipeline) | 14 µs min / 18 µs avg | 12 µs min / 18 µs avg | within noise |
+
+### Capacity (`CYRIUS_STATS=1`, cyrius 6.1.24)
+
+| Dimension | 2.1.4 | 2.1.5 | Cap |
+|---|---:|---:|---:|
+| `fn_table` | ~40 % | 3 735 (46 %) | 8 192 |
+| `identifiers` | ~37 % | 114 094 (44 %) | 262 144 |
+| `code_size` | 100.6 % | 1 257 400 (120 %) | 1 048 576 |
+
+`code_size` grew with the larger 6.x stdlib bundle and sits
+further over the 1 MB watermark — still the informational,
+**non-gated** dimension (per the 2.1.2 CI capacity gate, only
+`fn_table` / `identifiers` fail-gate at ≥ 95 %). It continues to
+want the upstream compile-source-size cap raise.
+
 ## [2.1.4] — 2026-05-11 · pattern-analyzer refinements (directed sequence + continuous off-hours score)
 
 Fifth patch of the **2.1.x modernization arc**, and the first

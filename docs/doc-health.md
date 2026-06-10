@@ -6,7 +6,7 @@ type: state
 
 # Documentation Health — t-ron
 
-> **Last refresh**: 2026-05-11 (2.1.4 release — pattern-analyzer refinements: directed-sequence detector + continuous off-hours bp score; +11 test assertions to 401 total; capacity baselines re-stated against the 5.10.44 doubled `fn_table`/`identifiers` caps that the 2.1.3 entry had wrong) | **Refresh cadence**: when docs are touched, update the affected row.
+> **Last refresh**: 2026-06-10 (2.1.5 release — cyrius major-toolchain jump 5.10.44 → 6.1.24 + libro 2.7.2 + bote 2.7.3; transitive sigil 3.7.8 / patra 1.11.0 / agnosys 1.4.1 / majra 2.4.5 / sakshi 2.2.10; `atomic`/`thread`/`thread_local` added to stdlib + includes to clear the libro `chain_append` SIGILL on sigil 3.7.8's TLS-scratch hash path; 401 assertions hold; `code_size` 100.6 % → 120 % on the larger 6.x stdlib bundle. CHANGELOG + roadmap refreshed in place). Prior 2026-05-11 (2.1.4 — pattern-analyzer refinements) | **Refresh cadence**: when docs are touched, update the affected row.
 > **Scope**: This repo only (`t-ron`) — root-level files (README, CHANGELOG, CLAUDE.md, etc.) plus the entire `docs/` tree. Cross-repo dep pin drift lives in CHANGELOG entries and the [roadmap](development/roadmap.md), not here.
 
 This is a **ledger**, not a one-time audit. Rewrite-in-place as
@@ -28,7 +28,7 @@ counts after the 2.1.4 refresh:
 | Bucket | Count | What it means |
 |---|---|---|
 | ✅ **Fresh — touched in the 2.1.x cycle** | 13 | CHANGELOG, README, roadmap, doc-health (this file), `DEPS-PATTERN.md` (new in 2.1.1), CONTRIBUTING.md (Cyrius-era rewrite, post-2.1.2 docs commit), CLAUDE.md (Cyrius-era discipline rewrite, post-2.1.2 docs commit), `docs/examples/01..04-*.cyr` (all four rewritten + verified end-to-end at 2.1.0), `docs/examples/README.md` (no edit needed) |
-| 🟡 **Stale — refresh in place** | 1 | docs/guides/integration.md + testing.md (last touched at 2.0.0 — verify code samples still build against 5.10.34 stdlib + libro 2.6.2 + bote 2.7.1 surface). Bundled count because they're a related pair |
+| 🟡 **Stale — refresh in place** | 1 | docs/guides/integration.md + testing.md (last touched at 2.0.0 — verify code samples still build against the **2.1.5 floor**: cyrius 6.1.24 stdlib + libro 2.7.2 + bote 2.7.3, and that any sigil-using sample carries the `atomic`/`thread`/`thread_local` includes before `sigil`). Bundled count because they're a related pair |
 | 🟠 **Read-through outstanding** | 1 | docs/architecture/overview.md (last touched 2.0.0 — verify module map matches src/ post-2.1.x; no shape change is expected but the pre-2.1.0 ABI prose for handlers needs a "see 2.1.0" note, and the 2.1.1 `dist/t-ron.cyr` distribution surface should land a one-sentence reference) |
 | 🔵 **No version-tied claims today** | 3 | `SECURITY.md`, `CODE_OF_CONDUCT.md`, `LICENSE`. None reference current version numbers or moving APIs |
 | 📦 **Date-stamped historical record** | 1 | `docs/audit/2026-04-14.md` (2.0.0 audit). Point-in-time report; the date is in the filename |

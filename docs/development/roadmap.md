@@ -1,19 +1,21 @@
 # t-ron Roadmap
 
-> **Current**: `2.1.4` (cyrius 5.10.44, libro 2.6.3, bote 2.7.2
-> via `dist/bote-core.cyr` opt-in profile). Full pipeline ~18 µs
-> avg / 14 µs min (was 52 µs at 2.0.0), **401 assertions** across
-> three test suites (390 + 11 from the 2.1.4 pattern-analyzer
-> refinements), ChaCha20+Ed25519 encrypted audit export,
-> 6-pattern prompt-injection detector, 5 default AGNOS safety
-> policies, `dist/t-ron.cyr` single-file consumer bundle (4 621
-> lines, 18 modules), CI capacity gate (fn_table 40 % / identifiers
-> 37 % / code_size 100.6 %). Note: cyrius 5.10.44 doubled the
-> `fn_table` and `identifiers` caps (4 096 → 8 192 / 131 072 →
-> 262 144), so the 2.1.2 CHANGELOG's pre-bump 75 %/69 % numbers
-> are not directly comparable. `code_size` is the unchanged
-> dimension — it still sits over the 1 MB watermark and actively
-> wants the upstream compile-source-size cap raise.
+> **Current**: `2.1.5` (cyrius 6.1.24, libro 2.7.2, bote 2.7.3
+> via `dist/bote-core.cyr` opt-in profile; sigil 3.7.8 / patra
+> 1.11.0 / agnosys 1.4.1 / majra 2.4.5 / sakshi 2.2.10
+> transitively). Full pipeline ~18 µs avg / 12 µs min (was 52 µs
+> at 2.0.0), **401 assertions** across three test suites,
+> ChaCha20+Ed25519 encrypted audit export, 6-pattern
+> prompt-injection detector, 5 default AGNOS safety policies,
+> `dist/t-ron.cyr` single-file consumer bundle (4 621 lines, 18
+> modules), CI capacity gate (fn_table 46 % / identifiers 44 % /
+> code_size 120 %). Note: the 6.1.24 jump carries a larger
+> version-matched stdlib bundle (the 6.0.x lock model now records
+> 83 stdlib hashes), so `code_size` — the informational,
+> non-gated dimension — climbed from 100.6 % to 120 % over the
+> 1 MB watermark and still actively wants the upstream
+> compile-source-size cap raise. `fn_table` / `identifiers` caps
+> stay at the 5.10.44-doubled values (8 192 / 262 144).
 >
 > **Full release history**: [CHANGELOG.md](../../CHANGELOG.md).
 > Rust archive preserved at git tag `0.90.0` under `rust-old/`.
@@ -23,16 +25,17 @@ SecurityGate ABI and the four introspection tools; patch releases
 add capabilities and modernization, not shape changes at the
 JSON-RPC boundary.
 
-**2.1.x is the modernization arc — and it stays open past 2.1.3.**
-The 2.1.3 release cleared both upstream blockers from the 2.1.x
-pause (libro 2.6.3 retag + bote 2.7.2 opt-in core), so the arc
-can now absorb forward items that don't require a toolchain
-jump. The natural close of 2.1.x is the cyrius **5.11.x** bump
-— first-party crates have not crossed yet, so a 5.11.x landing
-is the moment to cut 2.2.x. **Items code-doable on the current
-5.10.44 floor can land in 2.1.x;** items needing 5.11.x or
-upstream-schema coordination defer to 2.2.x+ (see the Forward
-section after the arc table).
+**2.1.x is the modernization arc — and it absorbed the cyrius
+major jump rather than closing on it.** The arc had earmarked
+the cyrius toolchain crossing as its 2.2.x trigger, but when the
+ecosystem moved (bote 2.7.3 made the 5.10.44 → 6.1.24 jump),
+t-ron took it as the final 2.1.x patch (**2.1.5**) — the
+JSON-RPC boundary and SecurityGate dispatcher signature never
+moved, so SemVer-wise it stays a patch. The arc now closes on
+its remaining feature item (real-time alerts via daimon) rather
+than on a toolchain version. Items that change the wire shape or
+need upstream-schema coordination still defer to 2.2.x+ (see the
+Forward section after the arc table).
 
 ---
 
@@ -50,6 +53,7 @@ section after the arc table).
 | **2.1.2** | **CI capacity gate.** `CYRIUS_STATS=1` at build + parser step in `ci.yml`; fail at ≥95 % on `fn_table` or `identifiers`. Current util fn_table 75 % / identifiers 69 %. Surfaces `code_size` (97 %, the most-constrained dimension) as an informational warning — not gated to avoid an immediately-firing CI |
 | **2.1.3** | **bote 2.7.2 opt-in core + cyrius 5.10.44 + libro 2.6.3.** Flips `[deps.bote]` to `dist/bote-core.cyr` (consumer-side unblock; t-ron is the trigger consumer per bote 2.7.2 CHANGELOG). Retires `src/_libro_compat.cyr` (libro 2.6.3 calls `ct_eq_bytes_lens` directly). Picks up sigil 3.1.1 / patra 1.9.4 / agnosys 1.2.6 transitively; adds `slice` / `keccak` / `random` to stdlib. CONTRIBUTING/CLAUDE rewrites ride along. `.cyrius-toolchain` retired — `cyrius.cyml` is the only pin source |
 | **2.1.4** | **Pattern-analyzer refinements.** New detector #3 (directed sequence: ordered recon→mutation in last 10 calls; catches what the count-based escalation detector misses when sensitive calls are spaced below 3-of-5); new public `pattern_off_hours_score_bp(pa, agent_id, hour)` returning 0..1000 instead of binary flag (composes with `score.cyr`). Existing detectors unchanged at the wire level; +11 test assertions (390 → 401) |
+| **2.1.5** | **cyrius major jump 5.10.44 → 6.1.24 + libro 2.7.2 + bote 2.7.3.** The toolchain crossing the arc had earmarked, absorbed as a patch (JSON-RPC + dispatcher unchanged). Transitive: sigil 3.7.8 / patra 1.11.0 / agnosys 1.4.1 / majra 2.4.5 / sakshi 2.2.10. Adds `atomic` / `thread` / `thread_local` to stdlib + includes (before sigil) — sigil 3.7.8's hash path self-installs a TLS scratch bank (`thread_local_get`), so libro `chain_append`'s SHA-256 SIGILL-trapped without them. Mirrors bote 2.7.3. 401 assertions hold; benches flat; `code_size` 100.6 % → 120 % on the larger 6.x stdlib bundle |
 
 See [CHANGELOG.md](../../CHANGELOG.md) for the full detail per release.
 
@@ -57,12 +61,13 @@ See [CHANGELOG.md](../../CHANGELOG.md) for the full detail per release.
 
 ## 2.1.x modernization arc
 
-The 2.1.x line catches t-ron up to the first-party Cyrius floor
-and stays open for forward items doable on the current 5.10.44
-toolchain before the 5.11.x bump triggers a 2.2.x minor cut.
-The JSON-RPC boundary and SecurityGate dispatcher signature stay
-stable through this arc — any added emissions ride the same
-wire shape rather than changing it.
+The 2.1.x line catches t-ron up to the first-party Cyrius floor.
+It tracked the toolchain all the way across the **6.x major
+crossing** (2.1.5: cyrius 6.1.24) and stays open for its
+remaining feature item. The JSON-RPC boundary and SecurityGate
+dispatcher signature stay stable through this arc — even the
+major toolchain jump rode the same wire shape rather than
+changing it.
 
 | Patch | Bite | Status |
 |---|---|---|
@@ -71,10 +76,11 @@ wire shape rather than changing it.
 | **2.1.2** | CI capacity gate — `CYRIUS_STATS=1` + 95 % `fn_table` / `identifiers` threshold. Modeled on bote 2.6.4. `code_size` (97 %) surfaced as informational warning | ✅ Shipped |
 | **2.1.3** | bote 2.7.2 opt-in `dist/bote-core.cyr` flip + cyrius 5.10.44 + libro 2.6.3 (sigil 3.1.1 / patra 1.9.4 / agnosys 1.2.6 transitive); `src/_libro_compat.cyr` retired; `slice` / `keccak` / `random` added to stdlib; `.cyrius-toolchain` removed; CONTRIBUTING / CLAUDE rewrites ride along | ✅ Shipped |
 | **2.1.4** | **Pattern-analyzer refinements.** Detector #3 (directed sequence): splits `_pat_sensitive` into recon (`aegis_*`, `phylax_*`) vs mutation (`ark_install`, `ark_remove`); `_pat_check_sequence` flags ordered recon→mutation in the last 10 calls. Catches what the count-based escalation detector misses when sensitive calls are spaced below the 3-of-5 threshold. New public surface: `pattern_off_hours_score_bp(pa, agent_id, hour)` returns 0..1000 instead of binary flag — same threshold semantics, composes with `score.cyr` basis-point risk model. Existing detectors unchanged at the wire level. +11 test assertions (390 → 401) | ✅ Shipped |
+| **2.1.5** | **cyrius major-toolchain jump 5.10.44 → 6.1.24 + libro 2.7.2 + bote 2.7.3.** Transitive sigil 3.7.8 / patra 1.11.0 / agnosys 1.4.1 / majra 2.4.5 / sakshi 2.2.10. The one source-level fix: `atomic` / `thread` / `thread_local` added to `[deps].stdlib` + the `main.cyr` and three test-suite includes (before `sigil`) — sigil 3.7.8's serial hash path self-installs a per-thread TLS scratch bank (`cbank()` → `thread_local_get`, cyrius ≥ 6.0.52), so libro `chain_append`'s SHA-256 trapped with **SIGILL** without them. Two benign cross-module `duplicate fn` warnings noted (sigil now ships `chacha20_xor`; majra ships `circuit_breaker_new` — t-ron's tested `src/` definitions win). Lock now records 48 hashes (6.0.x model, reproducible from empty `./lib`); committed `./lib` stdlib refreshed 5.10.44 → 6.1.24 (it had been stale-shadowing the snapshot). 401 assertions hold; benches flat; `code_size` 100.6 % → 120 %. Mirrors bote 2.7.3 | ✅ Shipped |
 | **2.1.x** | **Real-time alerts via daimon event bus** — daimon exposes `msg_bus_publish` today (`daimon/src/main.cyr:2635`). Wire `audit_log` to publish on the agreed majra topics. Conditional on confirming daimon's topic schema is settled before the patch. This is the next clear "doable on 5.10.44, no upstream blocker, real user-visible delta" candidate | 🟡 Conditional |
-| **2.1.x** | **`code_size` headroom** — at **100.6 %** at 2.1.4 (was 100.5 % at 2.1.3 with the libro 2.6.3 + sigil 3.1.1 cascade; +0.1 pp from the 2.1.4 refinements). Build holds because cyrius's emit buffer auto-expands past the watermark, but the dimension now actively wants relief. Response paths: (1) **cyrius compile-source-size cap raise — preferred, the upstream proposal already exists** (see Future row note), (2) feature-gate `llm_scan` / `safety` / `signing` behind `#ifdef`, (3) opt-in compile-unit split (bote's `libro_tools.cyr` pattern). Patch number assigned when path chosen | 🟡 Watching — first preference shifts to (1) post-2.1.3 |
+| **2.1.x** | **`code_size` headroom** — jumped to **120 %** at 2.1.5 (was 100.6 % at 2.1.4) when the 6.1.24 toolchain brought a larger version-matched stdlib bundle. Build holds because cyrius's emit buffer auto-expands past the watermark, but the dimension now wants relief more than ever. Response paths: (1) **cyrius compile-source-size cap raise — preferred, the upstream proposal already exists** (see Future row note), (2) feature-gate `llm_scan` / `safety` / `signing` behind `#ifdef`, (3) opt-in compile-unit split (bote's `libro_tools.cyr` pattern). Patch number assigned when path chosen | 🟡 Watching — preference (1), pressure raised at 2.1.5 |
 | **Watching** | **Test-file refactor for the cyrius 5.10.x assert-nested-call parser quirk** — bote 2.7.1 hit it; t-ron has not surfaced it today. Lands as a patch only if a future test add trips the pattern | 🟡 Conditional |
-| **Arc close** | **cyrius 5.11.x toolchain bump** — when first-party crates start crossing onto the 5.11.x line, that's the moment to cut **2.2.x** and close this arc. Don't ship a 5.11.x bump inside 2.1.x — minor-cut discipline. cyrius is locally on 5.11.18 today; no first-party consumer has crossed yet | 🔮 Trigger for 2.2.x |
+| **Arc close** | **Remaining feature item (daimon real-time alerts), not a toolchain version.** The original plan was to close 2.1.x on the cyrius toolchain crossing and cut 2.2.x — but the ecosystem made the 5.10.44 → 6.1.24 jump and t-ron absorbed it as a patch (2.1.5) since the wire shape never moved. The arc now closes when its last feature item lands; **2.2.x is reserved for the next change that actually moves the JSON-RPC / dispatcher shape**, not a routine toolchain bump | 🔮 Trigger for 2.2.x = wire-shape change |
 | **Future** | **Optional flip to `dist/bote.cyr` (full bundle, transport stack included).** The 2.1.3 bote-core flip closed the consumer-side blocker; the cyrius cap raise track ([cyrius compile-source-size cap 2 MB → 4 MB proposal](https://github.com/MacCracken/cyrius/blob/main/docs/development/proposals/2026-05-10-raise-compile-source-cap.md)) remains open and would let consumers that also want bote transports switch from `dist/bote-core.cyr` → `dist/bote.cyr`. t-ron itself never wires bote transports so bote-core stays the recommended pull regardless; this row only flips if a future t-ron feature reaches for a transport-side bote surface | 🟢 Optional |
 
 > **Release discipline.** Docs-only work (`.md` / `docs/` /

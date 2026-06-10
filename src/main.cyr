@@ -29,7 +29,16 @@ include "lib/bigint.cyr"
 include "lib/json.cyr"
 include "lib/base64.cyr"
 include "lib/net.cyr"
-# ct / keccak / random must precede sigil — sigil 3.1.1's
+# atomic / thread / thread_local must precede sigil — sigil 3.7.8's
+# crypto path self-installs a per-thread TLS scratch bank on the
+# serial hash path (`cbank()` -> `thread_local_get`, cyrius >= 6.0.52)
+# and its parallel batch verify spawns `thread_create`/`thread_join`
+# workers; `thread` builds on `atomic`. Missing these, the SHA-256 in
+# libro's `chain_append` traps with SIGILL. (2.1.5, cyrius 6.1.24)
+include "lib/atomic.cyr"
+include "lib/thread.cyr"
+include "lib/thread_local.cyr"
+# ct / keccak / random must precede sigil — sigil 3.7.8's
 # ML-DSA + AES-GCM surfaces reference ct_eq_bytes_lens /
 # ct_select / _keccak_* / shake256 / random_bytes, and cyrius
 # is single-pass.
