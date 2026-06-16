@@ -7,8 +7,10 @@ include "lib/fmt.cyr"
 include "lib/alloc.cyr"
 include "lib/vec.cyr"
 include "lib/str.cyr"
+include "lib/slice.cyr"
 include "lib/syscalls.cyr"
 include "lib/io.cyr"
+include "lib/args.cyr"
 include "lib/tagged.cyr"
 include "lib/assert.cyr"
 include "lib/fnptr.cyr"
@@ -17,31 +19,29 @@ include "lib/regex.cyr"
 include "lib/chrono.cyr"
 include "lib/freelist.cyr"
 include "lib/sakshi.cyr"
-include "lib/bigint.cyr"
-include "lib/json.cyr"
-include "lib/base64.cyr"
-# atomic/thread/thread_local before sigil — sigil 3.7.8's serial hash
-# path self-installs a TLS scratch bank (thread_local_get). (2.1.5)
+# bayan — consolidated json/base64/bigint stdlib bundle (cyrius 6.1.25
+# carve; standalone modules retired from the 6.1.35+ snapshot). (2.1.6)
+include "lib/bayan.cyr"
+include "lib/net.cyr"
+# atomic/thread/thread_local before sigil — sigil 3.7.14's serial hash
+# path self-installs a TLS scratch bank (thread_local_get) and its
+# parallel batch verify spawns thread workers; missing these, libro's
+# chain_append SHA-256 SIGILLs at first crypto use. (2.1.5; reaffirmed 2.1.6)
 include "lib/atomic.cyr"
 include "lib/thread.cyr"
 include "lib/thread_local.cyr"
+# ct/keccak/random before sigil — sigil 3.7.14 ML-DSA + AES-GCM
+# reference ct_eq_bytes_lens / _keccak_* / random_bytes; cyrius is single-pass.
+include "lib/ct.cyr"
+include "lib/keccak.cyr"
+include "lib/random.cyr"
 include "lib/sigil.cyr"
 
-include "lib/net.cyr"
-include "lib/ct.cyr"
-
-include "src/_libro_compat.cyr"
 include "lib/libro.cyr"
 
-include "lib/bote_error.cyr"
-include "lib/bote_protocol.cyr"
-include "lib/bote_jsonx.cyr"
-include "lib/bote_codec.cyr"
-include "lib/bote_registry.cyr"
-include "lib/bote_events.cyr"
-include "lib/bote_audit.cyr"
-include "lib/bote_dispatch.cyr"
-include "lib/bote_schema.cyr"
+# bote opt-in core bundle — replaces the per-module cherry-pick.
+# Mirrors src/main.cyr / cyrius.cyml [deps.bote]. (2.1.6)
+include "lib/bote-core.cyr"
 
 include "src/error.cyr"
 include "src/gate.cyr"
@@ -787,7 +787,7 @@ fn _echo_handler(args) {
 
 fn _make_gate(config) {
     var tron = tron_new(config);
-    var reg = registry_new();
+    var reg = tool_registry_new();
     var defs = tron_tool_defs();
     for (var i = 0; i < vec_len(defs); i = i + 1) {
         registry_register(reg, vec_get(defs, i));

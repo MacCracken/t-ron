@@ -4,7 +4,7 @@ version = "${file:VERSION}"
 description = "MCP security monitor — tool call auditing, rate limiting, injection detection, anomaly analysis"
 license = "GPL-3.0-only"
 language = "cyrius"
-cyrius = "6.1.24"
+cyrius = "6.2.11"
 repository = "https://github.com/MacCracken/t-ron"
 
 [build]
@@ -52,7 +52,7 @@ modules = [
 [deps]
 # Pure cyrius-stdlib modules. `sigil` and `sakshi` are intentionally
 # NOT listed here even though src/main.cyr includes them — libro
-# 2.7.2 pulls both transitively via [deps.sigil] (tag 3.7.8) and
+# 2.7.4 pulls both transitively via [deps.sigil] (tag 3.7.14) and
 # its own stdlib reference, so listing them here as well makes
 # `cyrius deps` attempt two writes to lib/sigil.cyr / lib/sakshi.cyr.
 # Locally the writes are byte-identical and silently succeed; in CI
@@ -82,18 +82,27 @@ stdlib = [
     "regex",
     "chrono",
     "freelist",
-    "bigint",
-    "json",
-    "base64",
+    # bayan — consolidated stdlib bundle (cyrius 6.1.25 carve). The
+    # standalone json / base64 / bigint modules no longer ship in the
+    # 6.1.35+ snapshot; bayan folds json (json_parse / json_get
+    # back-compat shims), base64 / base64url, csv and u128/u256 into
+    # one dist. t-ron makes no direct json_* / base64_* / bigint_*
+    # calls (its base64/json helpers are hand-rolled in src/safety.cyr
+    # and src/llm_scan.cyr) — the bundle is needed transitively by
+    # libro (canonical-JSON hashing) and sigil. No call-site changes.
+    # Mirrors libro 2.7.3 / bote 2.7.4's carve. (2.1.6)
+    "bayan",
     "net",
-    # atomic / thread / thread_local must precede sigil — sigil 3.7.8's
+    # atomic / thread / thread_local must precede sigil — sigil 3.7.14's
     # crypto path self-installs a per-thread TLS scratch bank
     # (`cbank()` → `thread_local_get`, cyrius ≥ 6.0.52) on the *serial*
     # hash path, and its parallel `sv_verify_batch` spawns
     # `thread_create`/`thread_join` workers. `thread` pulls `atomic`
     # (lock-free queue); without these the SHA-256 in libro's
-    # `chain_append` traps with SIGILL. Mirrors bote 2.7.3's `thread`
-    # addition. (2.1.5)
+    # `chain_append` traps with SIGILL. sigil 3.7.14's `crypto_scratch`
+    # exercises the TLS path 3.7.8/3.7.12 never hit, so the
+    # thread_local guard is load-bearing, not belt-and-suspenders —
+    # see libro 2.7.4 / bote 2.7.6 CHANGELOGs. (2.1.5; reaffirmed 2.1.6)
     "atomic",
     "thread",
     "thread_local",
@@ -114,7 +123,7 @@ stdlib = [
 [deps.libro]
 git = "https://github.com/MacCracken/libro"
 path = "../libro"
-tag = "2.7.2"
+tag = "2.7.4"
 modules = ["dist/libro.cyr"]
 
 # bote MCP core — opt-in `dist/bote-core.cyr` profile (bote 2.7.3).
@@ -139,5 +148,5 @@ modules = ["dist/libro.cyr"]
 [deps.bote]
 git = "https://github.com/MacCracken/bote"
 path = "../bote"
-tag = "2.7.3"
+tag = "2.7.6"
 modules = ["dist/bote-core.cyr"]

@@ -16,6 +16,97 @@ top. Mirrors bote 2.7.0's flow.
 
 _(empty)_
 
+## [2.1.6] — 2026-06-15 · cyrius 6.2.11 (first move onto the 6.2.x line) + libro 2.7.4 + bote 2.7.6 + the `bayan` stdlib carve
+
+Seventh patch of the **2.1.x modernization arc** — a toolchain +
+dependency refresh that steps onto the **6.2.x maintenance line** and
+finally migrates t-ron onto the **`bayan` consolidated-stdlib carve**
+(cyrius 6.1.25) that libro 2.7.3 / bote 2.7.4 already absorbed. The
+JSON-RPC boundary and the SecurityGate dispatcher signature are
+untouched; 2.2.x stays reserved for a wire-shape change, not a
+toolchain bump. Mirrors **bote 2.7.6**, the reference consumer for the
+6.2.x sweep.
+
+All **401 assertions** (323 + 30 + 48 — up from the 390 floor; the main
+suite gained 11 as the repaired dispatcher path now compiles) pass
+exit-0 on the new stack; all 5 benchmarks run clean and within run-to-run
+noise of 2.1.5; `dist/t-ron.cyr` regenerated at v2.1.6.
+
+### Changed
+
+- **Cyrius pin `6.1.24` → `6.2.11`** (`cyrius.cyml [package].cyrius`).
+  First step onto the 6.2.x line; the installed toolchain was already
+  6.2.11, so this aligns the manifest pin and clears the drift warning.
+- **Dependencies bumped to current tags:**
+  - **libro `2.7.2` → `2.7.4`** (`[deps.libro]` `dist/libro.cyr`) —
+    toolchain refresh; bundle body byte-identical apart from the version
+    header.
+  - **bote `2.7.3` → `2.7.6`** (`[deps.bote]` `dist/bote-core.cyr`
+    opt-in core profile, unchanged shape).
+  - Transitive pins advance: **sigil 3.7.8 → 3.7.14**, **patra 1.11.0 →
+    1.11.2**, **agnosys 1.4.1 → 1.4.3**, **majra 2.4.5 → 2.4.7**.
+- **`cyrius.lock` now records 47 hashes** (was 48) — the `bayan` carve
+  folds three standalone stdlib entries (`json` / `base64` / `bigint`)
+  into one. `cyrius deps --verify` passes (47 verified, 0 failed),
+  reproducible from an empty `./lib`.
+
+### Breaking (internal — test harness only, no consumer-facing API change)
+
+- **`registry_new()` → `tool_registry_new()`** in `tests/t-ron.tcyr`.
+  bote 2.7.4 renamed its `ToolRegistry` constructor to resolve a
+  symbol collision with ai-hwaccel's `registry_new`; t-ron's test gate
+  builder is the only caller. The dist bundle and the JSON-RPC surface
+  are unaffected — t-ron exports no `registry_*` symbol.
+
+### Fixed
+
+- **`bayan` stdlib carve migration (build-breaking on 6.2.11).** The
+  6.1.x toolchain consolidated the standalone `json` / `base64` /
+  `bigint` stdlib modules into one bundled **`bayan`** dist; the
+  individual modules no longer ship in the 6.1.35+ snapshot, so
+  `cyrius deps` against 6.2.11 errors on the retired names. Migrated
+  `[deps] stdlib` (`json` + `base64` + `bigint` → `bayan`) and every
+  `include "lib/{json,base64,bigint}.cyr"` → `include "lib/bayan.cyr"`
+  across `src/main.cyr` and all four test/bench harnesses. **No
+  call-site changes** — t-ron makes zero direct `json_*` / `base64_*` /
+  `bigint_*` stdlib calls (its base64/JSON heuristics in
+  `src/safety.cyr` / `src/llm_scan.cyr` are hand-rolled); `bayan` is
+  pulled transitively for libro's canonical-JSON hashing and sigil.
+  Mirrors libro 2.7.3 / bote 2.7.4's carve.
+- **Stale test/bench harnesses repaired (latent — they did not compile
+  against the post-2.1.3 deps).** `tests/t-ron.tcyr`,
+  `tests/t-ron-crypto.tcyr` and `tests/t-ron.bcyr` still `include`d
+  `src/_libro_compat.cyr` (the ct_eq shim retired at 2.1.3) and the
+  nine per-module `lib/bote_*.cyr` files (replaced by the
+  `dist/bote-core.cyr` bundle at 2.1.3) — neither exists under the
+  current deps profile, so `cyrius test` failed at the first missing
+  include. Dropped `_libro_compat`, swapped the per-module bote
+  cherry-pick for `lib/bote-core.cyr`, and re-aligned every harness's
+  lib-include block to `src/main.cyr`'s proven ordering.
+- **sigil 3.7.14 TLS-path SIGILL landmine in the bench harness
+  (CI-breaking, would only surface when *run*).** `tests/t-ron.bcyr`
+  included `lib/sigil.cyr` ahead of `lib/ct.cyr` and with **no**
+  `lib/thread_local.cyr` / `lib/keccak.cyr` / `lib/random.cyr` at all.
+  sigil 3.7.14's `crypto_scratch` exercises the thread-local-storage
+  path older sigils never hit, so the bench would link clean but
+  **SIGILL at first crypto use (exit 132)** — a build-only check misses
+  it. Added the `atomic` / `thread` / `thread_local` + `ct` / `keccak`
+  / `random` prelude ahead of `sigil` in the bench (and the matching
+  `ct`/`keccak`/`random` prelude to the crypto and safety suites). All
+  harnesses now run exit-0. This is the exact failure mode libro 2.7.4
+  / bote 2.7.6 document.
+
+### Notes
+
+- **New benign 6.2.11 linker diagnostics.** The 6.2.11 linker now warns
+  on duplicate global symbols from the bundled deps —
+  `duplicate symbol 'ERR_IO' / 'ERR_JSON'` (`lib/bote-core.cyr`,
+  `lib/sigil.cyr`, `lib/agnosys.cyr`) and `duplicate fn '_sub_new'`
+  (`lib/majra.cyr`). Pre-existing name collisions between the bundles'
+  error enums; harmless (last-definition-wins, all 401 assertions pass),
+  simply silent before 6.2.11 began diagnosing them. Not a t-ron
+  regression. Matches the note in libro 2.7.4 / bote 2.7.6.
+
 ## [2.1.5] — 2026-06-10 · cyrius major-toolchain jump (5.10.44 → 6.1.24) + libro 2.7.2 + bote 2.7.3
 
 Sixth patch of the **2.1.x modernization arc** and its largest

@@ -25,9 +25,12 @@ include "lib/regex.cyr"
 include "lib/chrono.cyr"
 include "lib/freelist.cyr"
 include "lib/sakshi.cyr"
-include "lib/bigint.cyr"
-include "lib/json.cyr"
-include "lib/base64.cyr"
+# bayan — consolidated json / base64 / bigint / u128 stdlib bundle
+# (cyrius 6.1.25 carve; standalone json.cyr / base64.cyr / bigint.cyr
+# retired from the 6.1.35+ snapshot). t-ron makes no direct stdlib
+# json_* / base64_* / bigint_* calls; bayan is pulled transitively for
+# libro's canonical-JSON hashing and sigil. (2.1.6)
+include "lib/bayan.cyr"
 include "lib/net.cyr"
 # atomic / thread / thread_local must precede sigil — sigil 3.7.8's
 # crypto path self-installs a per-thread TLS scratch bank on the

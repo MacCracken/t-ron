@@ -7,6 +7,7 @@ include "lib/fmt.cyr"
 include "lib/alloc.cyr"
 include "lib/vec.cyr"
 include "lib/str.cyr"
+include "lib/slice.cyr"
 include "lib/syscalls.cyr"
 include "lib/io.cyr"
 include "lib/tagged.cyr"
@@ -17,14 +18,20 @@ include "lib/regex.cyr"
 include "lib/chrono.cyr"
 include "lib/freelist.cyr"
 include "lib/sakshi.cyr"
-include "lib/bigint.cyr"
-include "lib/json.cyr"
-include "lib/base64.cyr"
-# atomic/thread/thread_local before sigil — sigil 3.7.8's serial hash
-# path self-installs a TLS scratch bank (thread_local_get). (2.1.5)
+# bayan — consolidated json/base64/bigint stdlib bundle (cyrius 6.1.25
+# carve; standalone modules retired from the 6.1.35+ snapshot). (2.1.6)
+include "lib/bayan.cyr"
+# atomic/thread/thread_local before sigil — sigil 3.7.14's serial hash
+# path self-installs a TLS scratch bank (thread_local_get) and its
+# parallel batch verify spawns thread workers. (2.1.5; reaffirmed 2.1.6)
 include "lib/atomic.cyr"
 include "lib/thread.cyr"
 include "lib/thread_local.cyr"
+# ct/keccak/random before sigil — sigil 3.7.14 ML-DSA + AES-GCM
+# reference ct_eq_bytes_lens / _keccak_* / random_bytes; cyrius is single-pass.
+include "lib/ct.cyr"
+include "lib/keccak.cyr"
+include "lib/random.cyr"
 include "lib/sigil.cyr"
 
 include "src/error.cyr"

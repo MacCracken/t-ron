@@ -6,6 +6,7 @@ include "lib/fmt.cyr"
 include "lib/alloc.cyr"
 include "lib/vec.cyr"
 include "lib/str.cyr"
+include "lib/slice.cyr"
 include "lib/syscalls.cyr"
 include "lib/io.cyr"
 include "lib/tagged.cyr"
@@ -15,14 +16,27 @@ include "lib/regex.cyr"
 include "lib/chrono.cyr"
 include "lib/freelist.cyr"
 include "lib/sakshi.cyr"
-include "lib/bigint.cyr"
-include "lib/json.cyr"
-include "lib/base64.cyr"
+# bayan — consolidated json/base64/bigint stdlib bundle (cyrius 6.1.25
+# carve; standalone modules retired from the 6.1.35+ snapshot). (2.1.6)
+include "lib/bayan.cyr"
+# atomic/thread/thread_local + ct/keccak/random MUST precede sigil —
+# sigil 3.7.14's serial hash path self-installs a TLS scratch bank
+# (thread_local_get) and its ML-DSA/AES-GCM surfaces reference
+# ct_eq_bytes_lens / _keccak_* / random_bytes. This bench previously
+# included sigil ahead of ct (and with no thread_local at all) — a
+# latent SIGILL landmine that stayed quiet only because the older
+# sigil's crypto_scratch never hit the TLS path. sigil 3.7.14 does, so
+# the harness would core-dump (exit 132) at first crypto use without
+# this ordering — the failure mode libro 2.7.4 / bote 2.7.6 document. (2.1.6)
+include "lib/atomic.cyr"
+include "lib/thread.cyr"
+include "lib/thread_local.cyr"
+include "lib/ct.cyr"
+include "lib/keccak.cyr"
+include "lib/random.cyr"
 include "lib/sigil.cyr"
 include "lib/bench.cyr"
-include "lib/ct.cyr"
 
-include "src/_libro_compat.cyr"
 include "lib/libro.cyr"
 
 include "src/error.cyr"
