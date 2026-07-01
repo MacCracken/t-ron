@@ -4,7 +4,7 @@ version = "${file:VERSION}"
 description = "MCP security monitor — tool call auditing, rate limiting, injection detection, anomaly analysis"
 license = "GPL-3.0-only"
 language = "cyrius"
-cyrius = "6.2.11"
+cyrius = "6.3.15"
 repository = "https://github.com/MacCracken/t-ron"
 
 [build]
@@ -82,6 +82,18 @@ stdlib = [
     "regex",
     "chrono",
     "freelist",
+    # sakshi — first-party structured-logging lib; included in
+    # src/main.cyr and required by libro's dist .deps sidecar on 6.3.x.
+    # Declared here so `cyrius deps` copies lib/sakshi.cyr (the 6.2.x
+    # transitive-via-libro resolution no longer covers it). The old
+    # double-write concern is gone under the 6.3.x sidecar model —
+    # byte-identical copies are idempotent. (migration 2.1.7)
+    "sakshi",
+    # fs / process — required by libro's dist .deps sidecar on 6.3.x
+    # (file-backed chain + subprocess audit). See src/main.cyr include
+    # comment; both must precede the libro include. (migration 2.1.7)
+    "fs",
+    "process",
     # bayan — consolidated stdlib bundle (cyrius 6.1.25 carve). The
     # standalone json / base64 / bigint modules no longer ship in the
     # 6.1.35+ snapshot; bayan folds json (json_parse / json_get
@@ -104,6 +116,13 @@ stdlib = [
     # thread_local guard is load-bearing, not belt-and-suspenders —
     # see libro 2.7.4 / bote 2.7.6 CHANGELOGs. (2.1.5; reaffirmed 2.1.6)
     "atomic",
+    # sync — patra 1.12.7 (pulled transitively via libro on the 6.3.x
+    # line) declares lib/sync.cyr as a hard stdlib dep; cyrius deps
+    # fails to find sync.cyr without it. NOTE: keep quoted strings OUT
+    # of comments inside this array — the CYML parser extracts any
+    # double-quoted token in the array region as a module name, even
+    # inside a # comment. Migration 6.3.15 (2.1.7).
+    "sync",
     "thread",
     "thread_local",
     # ct / keccak / random must precede sigil — see comment above.
@@ -123,7 +142,7 @@ stdlib = [
 [deps.libro]
 git = "https://github.com/MacCracken/libro"
 path = "../libro"
-tag = "2.7.4"
+tag = "2.7.9"
 modules = ["dist/libro.cyr"]
 
 # bote MCP core — opt-in `dist/bote-core.cyr` profile (bote 2.7.3).
@@ -148,5 +167,5 @@ modules = ["dist/libro.cyr"]
 [deps.bote]
 git = "https://github.com/MacCracken/bote"
 path = "../bote"
-tag = "2.7.6"
+tag = "2.7.7"
 modules = ["dist/bote-core.cyr"]

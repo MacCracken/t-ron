@@ -16,6 +16,36 @@ top. Mirrors bote 2.7.0's flow.
 
 _(empty)_
 
+## [2.1.7] — 2026-06-30 · cyrius 6.3.15 base-stack migration + 6.3.x dep-sidecar reconciliation
+
+Tier-4 (consumer) step of the coordinated base-security-stack migration
+to cyrius **6.3.15** (sakshi 2.4.3 → sigil 3.9.8 → majra 2.5.0 → libro
+2.7.9 → bote 2.7.7 → **t-ron 2.1.7**). Toolchain pin + dependency refresh
+plus the stdlib boundary reconciliation the 6.3.x line requires. No t-ron
+runtime *logic* changed — all 401 assertions (t-ron 323 · crypto 30 ·
+safety 48) pass on the new stack.
+
+### Changed
+
+- **Toolchain**: pinned to cyrius **6.3.15** (was 6.2.11).
+- **Dependencies**: libro **2.7.9** (was 2.7.4), bote-core **2.7.7**
+  (was 2.7.6).
+- **`[deps] stdlib`**: added `sakshi`, `fs`, `process` (libro's dist
+  bundle carries a `.deps` sidecar on 6.3.x that declares these as
+  required consumer-scope stdlib leaves — the file-backed chain +
+  subprocess-audit paths; on 6.2.x they were folded inside libro's own
+  bundle) and `sync` (patra 1.12.7's transitive `lib/sync.cyr`
+  requirement via libro). `src/main.cyr` now includes `lib/fs.cyr` +
+  `lib/process.cyr` before the sigil/libro includes (single-pass).
+
+### Notes
+
+- **CYML gotcha (documented for the next migrator)**: a `#` comment
+  placed *inside* the `stdlib = [...]` array must not contain a
+  double-quoted string — the CYML parser extracts any `"…"` token in the
+  array region as a module name, even inside a comment, yielding a bogus
+  "cannot read ./lib/<…>.cyr" during `cyrius deps`.
+
 ## [2.1.6] — 2026-06-15 · cyrius 6.2.11 (first move onto the 6.2.x line) + libro 2.7.4 + bote 2.7.6 + the `bayan` stdlib carve
 
 Seventh patch of the **2.1.x modernization arc** — a toolchain +

@@ -48,6 +48,13 @@ include "lib/thread_local.cyr"
 include "lib/ct.cyr"
 include "lib/keccak.cyr"
 include "lib/random.cyr"
+# fs / process must precede libro on the 6.3.x line: libro's dist
+# bundle's .deps sidecar declares both as required stdlib leaves (the
+# file-backed chain + subprocess-audit paths), and cyrius is single-pass.
+# On 6.2.x they were folded into libro's own bundle; 6.3.x carves them
+# back out to the consumer. (migration 2.1.7)
+include "lib/fs.cyr"
+include "lib/process.cyr"
 include "lib/sigil.cyr"
 
 include "lib/libro.cyr"
@@ -82,5 +89,5 @@ fn main() {
     return 0;
 }
 
-var r = main();
-syscall(60, r);
+fn _entry(): i64 { var r = main(); syscall(SYS_EXIT, r); return 0; }
+_entry();
