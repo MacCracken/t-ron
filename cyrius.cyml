@@ -4,7 +4,7 @@ version = "${file:VERSION}"
 description = "MCP security monitor — tool call auditing, rate limiting, injection detection, anomaly analysis"
 license = "GPL-3.0-only"
 language = "cyrius"
-cyrius = "6.3.15"
+cyrius = "6.4.66"
 repository = "https://github.com/MacCracken/t-ron"
 
 [build]
@@ -142,7 +142,7 @@ stdlib = [
 [deps.libro]
 git = "https://github.com/MacCracken/libro"
 path = "../libro"
-tag = "2.7.9"
+tag = "2.8.2"
 modules = ["dist/libro.cyr"]
 
 # bote MCP core — opt-in `dist/bote-core.cyr` profile (bote 2.7.3).
@@ -167,5 +167,24 @@ modules = ["dist/libro.cyr"]
 [deps.bote]
 git = "https://github.com/MacCracken/bote"
 path = "../bote"
-tag = "2.7.7"
+tag = "3.1.4"
 modules = ["dist/bote-core.cyr"]
+
+# sigil crypto — explicit first-party pin (added 2.1.8). Prior to 2.1.8
+# t-ron inherited sigil only transitively via libro's [deps.sigil];
+# libro 2.8.0 thinned its own transitive sigil surface to the mldsa/sha
+# folds, whose multi-module basenames do not match the dep name `sigil`,
+# so a `cyrius distlib`-generated t-ron sidecar would mis-declare each
+# fold (`sigil-mldsa`, `sigil_sha256`, …) as a required *stdlib* leaf and
+# every downstream `cyrius deps` would error `… not in the cyrius stdlib`.
+# Pinning the full `dist/sigil.cyr` bundle directly (basename `sigil` ↔
+# dep `sigil`) keeps it recognized as a named dep — excluded from the
+# sidecar — and gives t-ron the trust-layer wrappers (verify_data) its
+# signing path uses. Bloat (the x509/RSA bignum tables t-ron never calls)
+# is accepted for now; this mirrors daimon 1.4.3 / bote 3.1.4, which both
+# keep the full bundle. Thinning is a future, ecosystem-wide step. (2.1.8)
+[deps.sigil]
+git = "https://github.com/MacCracken/sigil.git"
+path = "../sigil"
+tag = "3.12.1"
+modules = ["dist/sigil.cyr"]

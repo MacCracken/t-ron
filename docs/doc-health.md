@@ -6,7 +6,7 @@ type: state
 
 # Documentation Health — t-ron
 
-> **Last refresh**: 2026-06-15 (2.1.6 release — cyrius 6.2.11 (onto the 6.2.x line) + libro 2.7.4 + bote 2.7.6 + the `bayan` consolidated-stdlib carve; transitive sigil 3.7.14 / patra 1.11.2 / agnosys 1.4.3 / majra 2.4.7. Migrated `json`+`base64`+`bigint` → `bayan` across the manifest + `src/main.cyr` + all four test/bench harnesses (no call-site changes); repaired the three stale harnesses that still referenced the retired `src/_libro_compat.cyr` + per-module `lib/bote_*.cyr` (latent non-compile since 2.1.3); `registry_new()` → `tool_registry_new()` (bote 2.7.4 rename); fixed the bench's `sigil`-before-`ct`/no-`thread_local` SIGILL ordering; lock 48 → 47. 401 assertions hold; benches flat; `code_size` 120 % → 126.6 %. CHANGELOG + roadmap refreshed in place). Prior 2026-06-10 (2.1.5 — cyrius major-toolchain jump 5.10.44 → 6.1.24) | **Refresh cadence**: when docs are touched, update the affected row.
+> **Last refresh**: 2026-07-17 (2.1.8 release — cyrius 6.3.15 → 6.4.66 + libro 2.7.9 → 2.8.2 + bote-core 2.7.7 → 3.1.4 (MAJOR, additive) + sigil 3.12.1; transitive patra 1.12.12 / majra 2.5.1 / sakshi 2.4.6. New first-party `[deps.sigil]` pin (full `dist/sigil.cyr`) insulates `dist/t-ron.deps` from libro 2.8.0's transitive sigil-thinning — sidecar byte-identical to 2.1.7, mirroring daimon 1.4.3 / bote 3.1.4. t-ron already 0 bare `ERR_*` (all `TRON_ERR_*`); banks the reciprocal `LIBRO_ERR_*` / `BOTE_ERR_*` dep renames. `scripts/bench-history.sh` rewritten float-aware for 6.4.x decimal-µs output (5 polluted CSV rows cleaned). 401 assertions hold; benches flat-to-faster; `code_size` ~118 %. CHANGELOG + roadmap (incl. the missing 2.1.7 row) refreshed in place. Prior 2026-06-15 (2.1.6 — `bayan` carve)) | **Refresh cadence**: when docs are touched, update the affected row.
 > **Scope**: This repo only (`t-ron`) — root-level files (README, CHANGELOG, CLAUDE.md, etc.) plus the entire `docs/` tree. Cross-repo dep pin drift lives in CHANGELOG entries and the [roadmap](development/roadmap.md), not here.
 
 This is a **ledger**, not a one-time audit. Rewrite-in-place as
@@ -41,13 +41,13 @@ counts after the 2.1.4 refresh:
 | File | Last touched | Status | Notes |
 |---|---|---|---|
 | `README.md` | 2026-05-10 | 🟡 Stale | Version badge / pins reflect 2.1.0; needs a refresh for the 2.1.3 cyrius 5.10.44 / libro 2.6.3 / bote 2.7.2 (`dist/bote-core.cyr`) lineup and the new perf row. Defer to next release-worthy touch — README pins rot quickly and a single refresh covering 2.1.1 → 2.1.3 keeps the diff readable |
-| `CHANGELOG.md` | 2026-06-15 | ✅ Fresh | 2.1.6 entry lands the cyrius 6.2.11 + libro 2.7.4 + bote 2.7.6 refresh, the `bayan` stdlib carve, the stale-harness repair, the `tool_registry_new` rename, and the bench SIGILL-ordering fix |
+| `CHANGELOG.md` | 2026-07-17 | ✅ Fresh | 2.1.8 entry lands the cyrius 6.4.66 + libro 2.8.2 + bote-core 3.1.4 (MAJOR) + sigil 3.12.1 refresh, the new `[deps.sigil]` first-party pin (dist-sidecar insulation), the reciprocal `LIBRO_ERR_*`/`BOTE_ERR_*` dep-rename note, and the float-aware `bench-history.sh` fix. (2.1.7 entry already present from that release) |
 | `CLAUDE.md` | 2026-05-11 | ✅ Fresh | 2.1.3 touch: cyrius pin bumped to 5.10.44; `.cyrius-toolchain` retirement noted; `src/_libro_compat.cyr` reference replaced with the parenthetical "dropped at 2.1.3" callout. Otherwise the Cyrius-era rewrite from the previous touch holds |
 | `CONTRIBUTING.md` | 2026-05-10 | ✅ Fresh | Cyrius-era rewrite, mirroring bote 2.7.1's shape. Drops cargo / make / MSRV refs; new Common Commands table; Release Discipline section; Adding-a-New-Security-Check / Code Style / Testing sections aligned with the 3-file test split + `[lib] modules` + `dist/t-ron.cyr` regen flow. No 2.1.3-specific edits needed |
 | `SECURITY.md` | 2026-04-14 | 🔵 No version-tied claims | Reporting policy + scope |
 | `CODE_OF_CONDUCT.md` | 2026-04-14 | 🔵 No version-tied claims | Standard |
 | `DEPS-PATTERN.md` | 2026-05-11 | ✅ Fresh | 2.1.3 refresh: module list 19 → 18 (compat shim retired); minimal-consumer manifest snippet bumped to libro 2.6.3 + bote 2.7.2 `dist/bote-core.cyr` + `slice` / `keccak` / `random` stdlib + t-ron tag 2.1.3 |
-| `VERSION` | 2026-06-15 | ✅ Fresh | `2.1.6` — single source of truth, read into `cyrius.cyml` via `${file:VERSION}` |
+| `VERSION` | 2026-07-17 | ✅ Fresh | `2.1.8` — single source of truth, read into `cyrius.cyml` via `${file:VERSION}` |
 | `LICENSE` | (initial commit) | 🔵 No version-tied claims | GPL-3.0-only |
 
 ---
@@ -56,7 +56,7 @@ counts after the 2.1.4 refresh:
 
 | File | Last touched | Status | Notes |
 |---|---|---|---|
-| `roadmap.md` | 2026-06-15 | ✅ Fresh | 2.1.6 refresh: 2.1.6 row added to Shipped table + 2.1.x arc table (cyrius 6.2.11 / libro 2.7.4 / bote 2.7.6 + `bayan` carve + stale-harness repair); **Current** pointer bumped to 2.1.6 + new transitive pins; `code_size` watching row updated to 126.6 %. **Prior 2.1.5 pass:** cyrius major jump 5.10.44 → 6.1.24, `atomic`/`thread`/`thread_local` SIGILL fix |
+| `roadmap.md` | 2026-07-17 | ✅ Fresh | 2.1.8 refresh: 2.1.7 (backfilled) + 2.1.8 rows added to both the Shipped table and the 2.1.x arc table (cyrius 6.4.66 / libro 2.8.2 / bote-core 3.1.4 / sigil 3.12.1 `[deps.sigil]` pin); **Current** pointer bumped to 2.1.8 + new pins; `code_size` watching row updated to ~118 % and the sigil-thinning deferred-lean-path note added. **Prior 2.1.6 pass:** `bayan` carve |
 | `threat-model.md` | 2026-04-14 | 🟠 Read-through outstanding | Verify post-2.1.0 — the bote 2.0 handler-ABI now-observed change does not change the threat model but should land a note that audit-tool authorization (gating `tron_audit` / `tron_policy` on caller identity) is a 2.2.x candidate |
 
 ---

@@ -21,37 +21,35 @@ cd "$REPO_ROOT"
 
 # Parse cyrius bench output line format:
 #   "  <name>: <n><unit> avg (min=<n><unit> max=<n><unit>) [<iters> iters]"
-# where unit is ns | us | ms | s.
-to_ns() {
-    local raw="$1"
-    local num
-    num=$(echo "$raw" | sed -E 's/[a-z]+$//')
-    local unit
-    unit=$(echo "$raw" | sed -E 's/^[0-9]+//')
-    case "$unit" in
-        ns) echo "$num" ;;
-        us) echo $((num * 1000)) ;;
-        ms) echo $((num * 1000000)) ;;
-        s)  echo $((num * 1000000000)) ;;
-        *)  echo "$num" ;;
-    esac
-}
-
+# where unit is ns | us | ms | s and <n> may be a decimal (cyrius 6.4.x
+# emits sub-µs precision, e.g. "3.569us", "33.302us"). A float-aware awk
+# pass converts every value to integer nanoseconds; the pre-6.4 integer-only
+# sed/bash parser silently dumped raw lines into the numeric columns once
+# decimal units arrived (fixed at migration 2.1.8).
 echo "Running benchmarks..."
 cyrius bench tests/t-ron.bcyr 2>/dev/null | \
-    grep -E '^\s+\w+:.*avg' | \
-    while IFS= read -r line; do
-        name=$(echo "$line" | sed -E 's/^\s*([a-z_]+):.*/\1/')
-        avg=$(echo  "$line" | sed -E 's/.*:[[:space:]]*([0-9]+(ns|us|ms|s))[[:space:]]avg.*/\1/')
-        min=$(echo  "$line" | sed -E 's/.*min=([0-9]+(ns|us|ms|s)).*/\1/')
-        max=$(echo  "$line" | sed -E 's/.*max=([0-9]+(ns|us|ms|s)).*/\1/')
-        iters=$(echo "$line" | sed -E 's/.*\[([0-9]+) iters\].*/\1/')
-        avg_ns=$(to_ns "$avg")
-        min_ns=$(to_ns "$min")
-        max_ns=$(to_ns "$max")
-        echo "${DATE},${COMMIT},${name},${avg_ns},${min_ns},${max_ns},${iters}" >> "$CSV"
-        printf "  %-25s avg=%s min=%s max=%s iters=%s\n" "$name" "$avg" "$min" "$max" "$iters"
-    done
+    awk -v date="$DATE" -v commit="$COMMIT" -v csv="$CSV" '
+        function to_ns(tok,   mul) {
+            if      (tok ~ /ns$/) { mul = 1 }
+            else if (tok ~ /us$/) { mul = 1000 }
+            else if (tok ~ /ms$/) { mul = 1000000 }
+            else if (tok ~ /s$/)  { mul = 1000000000 }
+            else return -1
+            sub(/(ns|us|ms|s)$/, "", tok)
+            return int(tok * mul + 0.5)
+        }
+        /^[[:space:]]+[a-z_]+:[[:space:]].*avg/ {
+            name = $1; sub(/:$/, "", name)          # "policy_check:" -> "policy_check"
+            avg_t = $2                              # "643ns" / "3.569us"
+            min_t = $4; sub(/^\(min=/, "", min_t)   # "(min=611ns" -> "611ns"
+            max_t = $5; gsub(/max=|\)/, "", max_t)  # "max=33.302us)" -> "33.302us"
+            iters = $6; gsub(/[^0-9]/, "", iters)   # "[100000" -> "100000"
+            avg = to_ns(avg_t); min = to_ns(min_t); max = to_ns(max_t)
+            if (avg < 0 || min < 0 || max < 0) next
+            printf "%s,%s,%s,%d,%d,%d,%s\n", date, commit, name, avg, min, max, iters >> csv
+            printf "  %-25s avg=%-9s min=%-9s max=%-10s iters=%s\n", name, avg_t, min_t, max_t, iters
+        }
+    '
 
 echo ""
 echo "Results appended to bench-history.csv"

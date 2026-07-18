@@ -41,20 +41,25 @@ include "lib/net.cyr"
 include "lib/atomic.cyr"
 include "lib/thread.cyr"
 include "lib/thread_local.cyr"
-# ct / keccak / random must precede sigil — sigil 3.7.8's
-# ML-DSA + AES-GCM surfaces reference ct_eq_bytes_lens /
-# ct_select / _keccak_* / shake256 / random_bytes, and cyrius
-# is single-pass.
+# ct / keccak / random must precede sigil — sigil 3.12.1's
+# ML-DSA surface references ct_eq_bytes_lens / ct_select / _keccak_* /
+# shake256 / random_bytes, and cyrius is single-pass.
 include "lib/ct.cyr"
 include "lib/keccak.cyr"
 include "lib/random.cyr"
-# fs / process must precede libro on the 6.3.x line: libro's dist
+# fs / process must precede libro on the 6.3.x+ line: libro's dist
 # bundle's .deps sidecar declares both as required stdlib leaves (the
 # file-backed chain + subprocess-audit paths), and cyrius is single-pass.
 # On 6.2.x they were folded into libro's own bundle; 6.3.x carves them
 # back out to the consumer. (migration 2.1.7)
 include "lib/fs.cyr"
 include "lib/process.cyr"
+# sigil — full dist/sigil.cyr bundle, now via t-ron's own [deps.sigil]
+# pin (tag 3.12.1). libro 2.8.0 thinned its *transitive* sigil surface to
+# the mldsa/sha folds; t-ron keeps the full bundle so `sigil` stays a
+# recognized named dep (basename ↔ dep name) and is excluded from the
+# generated dist sidecar — see cyrius.cyml [deps.sigil]. Carries the
+# trust-layer verify_data() the signing path uses. (migration 2.1.8)
 include "lib/sigil.cyr"
 
 include "lib/libro.cyr"

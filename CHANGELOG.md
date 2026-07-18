@@ -16,6 +16,79 @@ top. Mirrors bote 2.7.0's flow.
 
 _(empty)_
 
+## [2.1.8] — 2026-07-17 · cyrius 6.4.66 + libro 2.8.2 / bote 3.1.4 / sigil 3.12.1 refresh + `[deps.sigil]` first-party pin
+
+Ninth patch of the **2.1.x modernization arc** — the consumer step of the
+ecosystem's cyrius **6.4.66** sweep (sakshi 2.4.6 → sigil 3.12.1 → majra 2.5.1
+→ libro 2.8.2 → bote 3.1.4 → daimon 1.4.3 → **t-ron 2.1.8**). Toolchain pin +
+dependency refresh, plus a new first-party `[deps.sigil]` pin that insulates
+t-ron's dist sidecar from libro's transitive sigil-thinning. No t-ron runtime
+*logic* changed — all **401 assertions** (t-ron 323 · crypto 30 · safety 48)
+pass on the new stack; benches flat-to-faster.
+
+### Changed
+
+- **Toolchain**: pinned to cyrius **6.4.66** (was 6.3.15). The wrapper had
+  already rolled forward locally, leaving the 6.3.15-vintage `lib/` snapshot
+  stale enough that every binary failed to link with `undefined function
+  'thread_local_alloc'` — the 6.4.65 thread-local **slot allocator** that
+  sigil 3.12.x's `crypto_scratch` (`cbank()`) and patra 1.12.x's TLS slots
+  now call. `rm -rf ./lib && cyrius deps` re-vendored the snapshot (which
+  carries `thread_local_alloc` in `lib/thread_local.cyr`) and cleared the
+  drift.
+- **Dependencies**: libro **2.8.2** (was 2.7.9), bote-core **3.1.4** (was
+  2.7.7 — a MAJOR bump that is fully additive on the 2.0 handler ABI
+  `fn h(args, claims)`; the `dist/bote-core.cyr` core profile grew 9 → 11
+  modules with `prompts` / `resources`, all transport-free surface t-ron
+  does not wire). sigil **3.12.1**, sakshi **2.4.6** (transitive via bote's
+  `[deps.sakshi]`), patra **1.12.12** / majra **2.5.1** transitive.
+- **New `[deps.sigil]` first-party pin — `dist/sigil.cyr` @ 3.12.1.** Before
+  2.1.8 t-ron inherited sigil *only transitively* via libro's `[deps.sigil]`.
+  libro 2.8.0 **thinned** its transitive sigil surface to the
+  `sigil-mldsa` + `sha_ni` + `sha256` + `hex` folds — whose multi-module
+  basenames do **not** match the dep name `sigil`, so `cyrius distlib` would
+  mis-declare each fold (`sigil-mldsa`, `sigil_sha256`, …) as a required
+  *stdlib* leaf in `dist/t-ron.deps`, and every downstream `cyrius deps`
+  would error `dep t-ron requires 'sigil-mldsa' but it is not in the cyrius
+  stdlib`. Pinning the full `dist/sigil.cyr` bundle directly (basename
+  `sigil` ↔ dep `sigil`) keeps it recognized as a named dep and **excluded
+  from the sidecar** — `dist/t-ron.deps` is byte-identical to 2.1.7. Mirrors
+  **daimon 1.4.3 / bote 3.1.4**, which both keep the full bundle. The x509 /
+  RSA bignum tables t-ron never calls are accepted bloat for now
+  (`code_size` ~118 %); thinning is a future ecosystem-wide step.
+- **`scripts/bench-history.sh` parser rewritten (float-aware).** cyrius 6.4.x
+  emits sub-µs bench precision with **decimal** units (`3.569us`,
+  `33.302us`); the pre-6.4 integer-only sed/bash parser silently dumped raw
+  bench lines into the CSV's numeric columns. Replaced with a float-aware
+  `awk` pass (`to_ns` handles `ns`/`us`/`ms`/`s` decimals); five polluted
+  rows removed from `bench-history.csv`.
+
+### Notes
+
+- **Bare `ERR_*` → prefixed enums, ecosystem-wide.** t-ron's own error enum
+  has been fully `TRON_ERR_*` since the Cyrius port — **zero bare `ERR_*` in
+  `src/` or `tests/`**, so no t-ron-side migration was required. This
+  release banks the **reciprocal** rename in the dependency bundles: libro
+  2.8.2 namespaced `LibroErr` → `LIBRO_ERR_*` and bote 3.1.4 namespaced
+  `BoteErrTag` → `BOTE_ERR_*` (verified: `dist/libro.cyr`,
+  `dist/bote-core.cyr`, `dist/sigil.cyr` all carry **0 bare `ERR_`**),
+  resolving the historic `duplicate symbol 'ERR_IO' / 'ERR_JSON'` hazard
+  (bote-core vs libro) **at the source** rather than by include-order luck.
+- **Capacity** (`CYRIUS_STATS=1`): `fn_table` **3866 / 8192** (47 %),
+  `identifiers` **114767 / 262144** (44 %) — both well under the 95 % CI
+  gate; `code_size` **~118 %** over the 1 MB watermark (the full sigil
+  bundle; daimon 1.4.3 runs 173 % on the same bundle, so this is the
+  accepted ecosystem state, not a t-ron regression). The upstream
+  compile-source-size cap raise remains the preferred response path.
+- **Benches flat-to-faster** vs the 2.1.7 baseline (6.4.66 sub-µs
+  precision + codegen): `policy_check` 655 ns (was ~1 µs),
+  `scanner_sql_detect` 1.39 µs (was ~2 µs), `audit_log` 10.4 µs (was
+  ~15 µs), `tron_check_allow` 13.0 µs (was ~19 µs).
+- **Benign cross-module `duplicate fn` warnings** unchanged from 2.1.7:
+  `chacha20_xor` (sigil ships one; t-ron's tested `src/crypto_chacha20.cyr`
+  wins), `circuit_breaker_new` (majra vs t-ron's `src/safety.cyr`), and the
+  sigil ML-DSA internal duplicates — all "last definition wins".
+
 ## [2.1.7] — 2026-06-30 · cyrius 6.3.15 base-stack migration + 6.3.x dep-sidecar reconciliation
 
 Tier-4 (consumer) step of the coordinated base-security-stack migration
