@@ -115,44 +115,86 @@ single-pass forward-reference resolution.
   the consumer supplies those via their own `[deps] stdlib`
   list. Bundling stdlib would lock t-ron to one cyrius version
   for every consumer.
-- **libro / bote bundles** (`lib/libro.cyr`, `lib/bote_*.cyr`) —
-  the consumer pulls those via their own `[deps.libro]` /
-  `[deps.bote]` declarations, the same way t-ron does.
+- **libro / bote / sigil bundles** (`lib/libro.cyr`,
+  `lib/bote-core.cyr`, `lib/sigil.cyr`) — these are *named deps*,
+  declared in t-ron's own `cyrius.cyml`. On cyrius 6.5.x they are
+  resolved for the consumer automatically (see below).
 - **Tests / benches / examples** — not part of the consumer
   surface; live under `tests/` and `docs/examples/`.
 
-A consumer using `dist/t-ron.cyr` must therefore have at minimum:
+## The consumer manifest — one block is enough (6.5.x)
+
+`cyrius distlib` emits **`dist/t-ron.deps`** alongside the bundle: a
+sidecar listing the stdlib leaves the fold needs in scope. Since
+cyrius 6.5.x, `cyrius deps` reads that sidecar and resolves the whole
+tree itself — stdlib *and* t-ron's own named deps. A consumer
+therefore declares only:
 
 ```toml
-[deps]
-stdlib = ["string", "fmt", "alloc", "vec", "str", "slice", "syscalls",
-          "io", "args", "tagged", "assert", "fnptr", "hashmap", "regex",
-          "chrono", "freelist", "bigint", "json", "base64", "net",
-          # ct / keccak / random must precede sigil — sigil 3.1.1's
-          # ML-DSA + AES-GCM surfaces reference ct / keccak / random.
-          "ct", "keccak", "random"]
-
-[deps.libro]
-git = "https://github.com/MacCracken/libro.git"
-tag = "2.6.3"
-modules = ["dist/libro.cyr"]
-
-[deps.bote]
-git = "https://github.com/MacCracken/bote.git"
-tag = "2.7.2"
-# Opt-in transport-free profile — t-ron only needs bote's Dispatcher
-# + tool-registry surface. Keeps consumer compile-source size down.
-# Flip to "dist/bote.cyr" if your consumer also wires bote transports.
-modules = ["dist/bote-core.cyr"]
-
 [deps.t-ron]
 git = "https://github.com/MacCracken/t-ron.git"
-tag = "2.1.3"
+tag = "2.1.9"
 modules = ["dist/t-ron.cyr"]
 ```
 
-(sigil / sakshi come transitively from libro — do not list them
-in your stdlib alongside this dep chain, see CHANGELOG 2.1.0.)
+✅ **Verified at 2.1.9**, not assumed: a scratch project containing
+exactly the block above runs `cyrius deps` (**6 deps resolved, 0
+errors**), which vendors the full stdlib set plus `libro`,
+`bote-core`, `sigil`, `majra`, `patra` and `sakshi`; it then compiles
+against `dist/t-ron.cyr` and executes, returning a correct `deny`
+verdict for `ark_install` from an unregistered agent.
+
+No `[deps] stdlib` list, and no `[deps.libro]` / `[deps.bote-core]` /
+`[deps.sigil]` blocks, are required. Add an explicit `[deps.*]` pin
+only if your own code calls that library directly and you want to
+control its version independently — and then pin the **same tag**
+t-ron does, or you will get two copies.
+
+> **Superseded.** Releases through 2.1.8 documented a long
+> `[deps] stdlib = [...]` array plus explicit `[deps.libro]` /
+> `[deps.bote]` blocks here. That snippet had also rotted — it still
+> listed `bigint` / `json` / `base64`, retired into `bayan` by the
+> 2.1.6 carve. Delete it from consumer manifests; the sidecar covers
+> it.
+
+### ⚠️ The sidecar must be correct, and that is not automatic
+
+Because the consumer now declares almost nothing, **`dist/t-ron.deps`
+is the entire contract.** One bad line breaks every downstream build.
+
+`cyrius distlib` excludes a bundled dep from the sidecar only when the
+**module basename matches the dep name**. It does not match on the
+git URL or the path. So this — shipped in t-ron 2.1.3 through 2.1.8 —
+is wrong:
+
+```toml
+[deps.bote]                          # dep name:        bote
+modules = ["dist/bote-core.cyr"]     # module basename: bote-core   ✗
+```
+
+The mismatch put `bote-core` into `dist/t-ron.deps` as a required
+*stdlib* leaf. It is not one, so every consumer got:
+
+```
+error: dep t-ron requires 'bote-core' but it is not in the cyrius stdlib
+```
+
+The fix is to make the section name match the basename:
+
+```toml
+[deps.bote-core]                     # dep name:        bote-core
+modules = ["dist/bote-core.cyr"]     # module basename: bote-core   ✓
+```
+
+⛔ **This defect shipped twice.** 2.1.8 diagnosed the identical
+mechanism for `sigil`, fixed that instance, and validated the result
+by confirming the sidecar was *byte-identical to the previous
+release* — which is precisely why it missed the `bote-core` line
+already sitting in that file. **A regression check cannot catch a
+defect older than its baseline.** CI now validates every sidecar leaf
+against the toolchain stdlib directory itself (`ci.yml` → "Dist
+sidecar validity gate"), which is mutation-tested: re-adding the
+`bote-core` line turns it red.
 
 ## The reference — bote and libro
 

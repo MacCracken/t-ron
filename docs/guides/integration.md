@@ -1,63 +1,49 @@
 # Integration Guide
 
 Step-by-step walkthrough for embedding t-ron in a bote-based MCP
-service. Current for t-ron 2.0.0 (Cyrius port) + bote 2.5.1.
+service. **Current for t-ron 2.1.9** (cyrius 6.5.35 · libro 2.8.12 ·
+bote-core 3.3.7 · sigil 3.12.9).
+
+> ⚠️ **Rewritten at 2.1.9.** Through 2.1.8 this guide still described
+> the 2.0.0 shape: a `cyrius.toml` manifest, cyrius 4.8.4, and
+> per-module source pulls (`lib/libro_chain.cyr`, `lib/bote_dispatch.cyr`,
+> `lib/json.cyr`, …). None of that resolves any more — the manifest is
+> `cyrius.cyml`, libro and bote ship single-file dist bundles, and
+> `json` / `base64` / `bigint` folded into `bayan` at the 2.1.6 carve.
+> The sample below is **verified**: it was built and run against
+> t-ron 2.1.9 before being written down.
 
 ## 1. Add t-ron to your project
 
-In a Cyrius project (one with a `cyrius.toml` at the root), add
-t-ron to your dep set. Pin every dep to a tag for reproducibility:
+Add one block to your `cyrius.cyml`:
 
 ```toml
 [package]
 name = "your-service"
 version = "0.1.0"
 language = "cyrius"
-cyrius = "4.8.4"
+cyrius = "6.5.35"
 
 [build]
 entry = "src/main.cyr"
-output = "your-service"
-
-[deps]
-stdlib = [
-    "string", "fmt", "alloc", "vec", "str", "syscalls", "io", "args",
-    "assert", "tagged", "hashmap", "regex", "fnptr", "chrono",
-    "freelist", "sakshi", "bigint", "json", "base64", "sigil", "net"
-]
-
-[deps.libro]
-git = "https://github.com/MacCracken/libro"
-path = "../libro"
-tag = "1.0.3"
-modules = [
-    "src/error.cyr", "src/hasher.cyr", "src/entry.cyr",
-    "src/verify.cyr", "src/chain.cyr", "src/query.cyr",
-    "src/retention.cyr", "src/review.cyr",
-]
-
-[deps.bote]
-git = "https://github.com/MacCracken/bote"
-path = "../bote"
-tag = "2.5.1"
-modules = [
-    "src/error.cyr", "src/protocol.cyr", "src/jsonx.cyr",
-    "src/codec.cyr", "src/registry.cyr", "src/events.cyr",
-    "src/audit.cyr", "src/dispatch.cyr", "src/schema.cyr",
-]
+output = "build/your-service"
 
 [deps.t-ron]
-git = "https://github.com/MacCracken/t-ron"
-path = "../t-ron"
-tag = "2.0.0"
-modules = [
-    "src/error.cyr", "src/gate.cyr", "src/policy.cyr",
-    "src/rate.cyr", "src/scanner.cyr", "src/pattern.cyr",
-    "src/audit.cyr", "src/score.cyr", "src/query.cyr",
-    "src/correlation.cyr", "src/tron.cyr", "src/tools.cyr",
-    "src/middleware.cyr",
-]
+git = "https://github.com/MacCracken/t-ron.git"
+tag = "2.1.9"
+modules = ["dist/t-ron.cyr"]
 ```
+
+That is the whole dep declaration. `cyrius distlib` ships
+`dist/t-ron.deps` alongside the bundle, and on cyrius 6.5.x
+`cyrius deps` reads it to resolve the stdlib **and** t-ron's own named
+deps (libro, bote-core, sigil, majra, patra, sakshi). You do **not**
+need a `[deps] stdlib` array, and you do **not** need your own
+`[deps.libro]` / `[deps.bote-core]` / `[deps.sigil]` blocks.
+
+Add an explicit `[deps.*]` pin only if your service calls that library
+directly and wants to control its version — and then pin the **same
+tag** t-ron does, or you will vendor two copies.
 
 Then resolve:
 
@@ -65,11 +51,12 @@ Then resolve:
 cyrius deps                    # vendors everything to ./lib/
 ```
 
+Expect `6 deps resolved` and a populated `./lib/`.
+
 ## 2. Wire the gate
 
-Your `src/main.cyr` needs the stdlib includes, the libro + bote
-modules (vendored with `libro_` / `bote_` prefixes by the deps
-resolver), and the t-ron modules in the right order:
+Cyrius resolves forward references in a **single pass**, so include
+order is load-bearing. This is the order t-ron itself uses; copy it:
 
 ```cyrius
 include "lib/string.cyr"
@@ -77,57 +64,69 @@ include "lib/fmt.cyr"
 include "lib/alloc.cyr"
 include "lib/vec.cyr"
 include "lib/str.cyr"
+include "lib/slice.cyr"
 include "lib/syscalls.cyr"
 include "lib/io.cyr"
+include "lib/args.cyr"
 include "lib/tagged.cyr"
+include "lib/assert.cyr"
 include "lib/fnptr.cyr"
 include "lib/hashmap.cyr"
 include "lib/regex.cyr"
 include "lib/chrono.cyr"
 include "lib/freelist.cyr"
 include "lib/sakshi.cyr"
-include "lib/bigint.cyr"
-include "lib/json.cyr"
-include "lib/base64.cyr"
+include "lib/bayan.cyr"          # json / base64 / bigint since 2.1.6
+include "lib/net.cyr"
+
+# atomic / thread / thread_local MUST precede sigil — sigil's hash path
+# self-installs a per-thread TLS scratch bank. Omit them and the SHA-256
+# inside libro's chain_append traps with SIGILL at *runtime*, not at
+# compile time.
+include "lib/atomic.cyr"
+include "lib/thread.cyr"
+include "lib/thread_local.cyr"
+
+# ct / keccak / random MUST also precede sigil (ML-DSA surface).
+include "lib/ct.cyr"
+include "lib/keccak.cyr"
+include "lib/random.cyr"
+
+# fs / process / sync precede libro — declared by its dist sidecar.
+include "lib/fs.cyr"
+include "lib/process.cyr"
+include "lib/sync.cyr"
+
 include "lib/sigil.cyr"
-
-# libro
-include "lib/libro_error.cyr"
-include "lib/libro_hasher.cyr"
-include "lib/libro_entry.cyr"
-include "lib/libro_verify.cyr"
-include "lib/libro_chain.cyr"
-include "lib/libro_query.cyr"
-include "lib/libro_retention.cyr"
-include "lib/libro_review.cyr"
-
-# bote
-include "lib/bote_error.cyr"
-include "lib/bote_protocol.cyr"
-include "lib/bote_jsonx.cyr"
-include "lib/bote_codec.cyr"
-include "lib/bote_registry.cyr"
-include "lib/bote_events.cyr"
-include "lib/bote_audit.cyr"
-include "lib/bote_dispatch.cyr"
-include "lib/bote_schema.cyr"
-
-# t-ron (via dep vendor these are lib/tron_*.cyr; shown here as src/
-# for the in-tree case)
-include "src/error.cyr"
-include "src/gate.cyr"
-include "src/policy.cyr"
-include "src/rate.cyr"
-include "src/scanner.cyr"
-include "src/pattern.cyr"
-include "src/audit.cyr"
-include "src/score.cyr"
-include "src/query.cyr"
-include "src/correlation.cyr"
-include "src/tron.cyr"
-include "src/tools.cyr"
-include "src/middleware.cyr"
+include "lib/libro.cyr"
+include "lib/bote-core.cyr"      # transport-free profile
+include "lib/t-ron.cyr"          # the dist bundle
 ```
+
+Then use the gate:
+
+```cyrius
+fn main() {
+    var cfg = tron_config_default();
+    var t   = tron_new(cfg);
+
+    var c = tool_call_new("agent-id", "ark_install", "{}", 1700000000);
+    var v = tron_check(t, c);
+
+    if verdict_is_denied(v) == 1 {
+        # refuse the call; verdict_reason(v) explains why
+        return 1;
+    }
+    return 0;
+}
+```
+
+⚠️ **`tron_check` takes two arguments** — the monitor and a
+`tool_call_new(agent_id, tool_name, params, timestamp)` struct, not
+loose strings. An unregistered agent calling a sensitive tool returns
+`deny`; that is the default-deny posture from
+[ADR-002](../architecture/adr-002-default-deny.md), not a
+misconfiguration.
 
 ## 3. Construct the gate
 
@@ -151,7 +150,7 @@ fn build_gate() {
         "calls_per_minute = 60\n");
 
     # Build a bote registry with t-ron's tool defs + yours.
-    var reg = registry_new();
+    var reg = tool_registry_new();   # renamed from registry_new at bote 2.7.4
     var defs = tron_tool_defs();
     var i = 0;
     while (i < vec_len(defs)) {

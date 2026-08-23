@@ -1,24 +1,33 @@
 # t-ron Roadmap
 
-> **Current**: `2.1.8` (cyrius 6.4.66, libro 2.8.2, bote 3.1.4
-> via `dist/bote-core.cyr` opt-in profile; sigil 3.12.1 pinned
+> **Current**: `2.1.9` (cyrius 6.5.35, libro 2.8.12, bote 3.3.7
+> via `dist/bote-core.cyr` opt-in profile; sigil 3.12.9 pinned
 > first-party via `[deps.sigil]` — full `dist/sigil.cyr`; patra
-> 1.12.12 / majra 2.5.1 / sakshi 2.4.6 transitively). Full pipeline ~13 µs avg / 10 µs min (was 52 µs
-> at 2.0.0), **401 assertions** across three test suites,
-> ChaCha20+Ed25519 encrypted audit export, 6-pattern
-> prompt-injection detector, 5 default AGNOS safety policies,
-> `dist/t-ron.cyr` single-file consumer bundle (4 621 lines, 18
-> modules), CI capacity gate (fn_table 47 % / identifiers 44 % /
-> code_size 118 %). Note: the 2.1.8 `[deps.sigil]` first-party pin
-> keeps the full `dist/sigil.cyr` bundle (basename ↔ dep-name
-> recognition) so t-ron's dist sidecar stays byte-identical to
-> 2.1.7 — insulated from libro 2.8.0's transitive sigil-thinning,
-> which would otherwise mis-declare the mldsa/sha folds as stdlib
-> leaves and break downstream `cyrius deps`. `code_size` — the
-> informational, non-gated dimension — sits ~118 % over the 1 MB
-> watermark (the full sigil bundle; daimon 1.4.3 runs 173 % on it)
-> and still wants the upstream compile-source-size cap raise.
-> `fn_table` / `identifiers` caps stay at 8 192 / 262 144.
+> 1.13.10 / majra 2.7.0 / sakshi 2.4.11 transitively). Full
+> pipeline ~19.6 µs avg / 14 µs min and `policy_check` **265 ns**
+> (6.4× faster than the same-session 6.4.66 baseline),
+> **401 assertions** across three test suites, ChaCha20+Ed25519
+> encrypted audit export, 6-pattern prompt-injection detector, 5
+> default AGNOS safety policies, `dist/t-ron.cyr` single-file
+> consumer bundle (4 621 lines, 18 modules), CI capacity gate.
+>
+> **2.1.9 fixed a live downstream break**: `dist/t-ron.deps`
+> declared `bote-core` as a *stdlib* leaf (dep name `bote` ≠ module
+> basename `bote-core`), so every consumer wiring t-ron per
+> `DEPS-PATTERN.md` failed `cyrius deps`. Renaming the dep to
+> `[deps.bote-core]` restores basename ↔ dep-name agreement. This
+> is the same defect 2.1.8 fixed for `sigil` and missed for `bote` —
+> the 2.1.8 check compared the sidecar against the previous release
+> and found it "byte-identical", which preserved the bad line
+> instead of catching it. **Verify the sidecar against the stdlib,
+> not against last release.**
+>
+> **`code_size` is no longer a constrained dimension.** cyrius
+> 6.5.35 raised the compile-source cap to 64 MB: t-ron now sits at
+> **2 069 656 / 67 108 864 (3 %)**, down from ~118 % over the old
+> 1 MB watermark. `fn_table` **5751 / 32768 (17 %)**, `identifiers`
+> **185 909 / 524 288 (35 %)**, `var_table` **2689 / 8192 (32 %)** —
+> all comfortable.
 >
 > **Full release history**: [CHANGELOG.md](../../CHANGELOG.md).
 > Rust archive preserved at git tag `0.90.0` under `rust-old/`.
@@ -60,6 +69,7 @@ Forward section after the arc table).
 | **2.1.6** | **cyrius 6.2.11 (onto the 6.2.x line) + libro 2.7.4 + bote 2.7.6 + the `bayan` stdlib carve.** Toolchain + dep refresh; JSON-RPC + dispatcher unchanged. Transitive: sigil 3.7.14 / patra 1.11.2 / agnosys 1.4.3 / majra 2.4.7. **`bayan` carve** — cyrius 6.1.25 folded standalone `json` / `base64` / `bigint` into one bundle; migrated `[deps].stdlib` + all `src`/test includes (no call-site changes; t-ron has no direct `json_*`/`base64_*`/`bigint_*` calls). Repaired the stale `tests/*.tcyr` + `.bcyr` harnesses that still referenced the retired `src/_libro_compat.cyr` + per-module `lib/bote_*.cyr` (latent — they did not compile post-2.1.3); `registry_new()` → `tool_registry_new()` (bote 2.7.4 rename). Fixed the bench's sigil-before-`ct`/no-`thread_local` ordering — a sigil 3.7.14 SIGILL landmine that only surfaces when *run*. Lock 48 → 47 hashes. 401 assertions hold; benches flat. Mirrors bote 2.7.6 |
 | **2.1.7** | **cyrius 6.3.15 base-stack migration + 6.3.x dep-sidecar reconciliation.** Toolchain 6.2.11 → 6.3.15; libro 2.7.4 → 2.7.9, bote-core 2.7.6 → 2.7.7. Added `sakshi` / `fs` / `process` to `[deps].stdlib` (libro's dist `.deps` sidecar on 6.3.x declares them as consumer-scope leaves — the file-backed chain + subprocess-audit paths; on 6.2.x they were folded inside libro's bundle) and `sync` (patra 1.12.7's transitive `lib/sync.cyr` requirement); `main.cyr` includes `lib/fs.cyr` + `lib/process.cyr` before sigil/libro (single-pass). Documented the CYML-comment double-quote gotcha. 401 assertions hold |
 | **2.1.8** | **cyrius 6.4.66 + libro 2.8.2 / bote 3.1.4 / sigil 3.12.1 refresh + `[deps.sigil]` first-party pin.** Toolchain 6.3.15 → 6.4.66 (the 6.4.65 `thread_local_alloc` slot allocator sigil 3.12.x / patra 1.12.x call — stale `lib/` failed to link without the re-vendor). libro 2.7.9 → 2.8.2, bote-core 2.7.7 → **3.1.4** (MAJOR, additive on the 2.0 handler ABI; core profile grew 9 → 11 modules). New **`[deps.sigil]` pin — full `dist/sigil.cyr` @ 3.12.1**: libro 2.8.0 thinned its *transitive* sigil to the mldsa/sha folds, whose basenames pollute `dist/t-ron.deps` as bogus stdlib leaves (breaking downstream `cyrius deps`); pinning the full bundle directly keeps `sigil` a recognized named dep so the sidecar stays byte-identical to 2.1.7. Mirrors daimon 1.4.3 / bote 3.1.4 (full bundle; bloat accepted). **Bare `ERR_*`**: t-ron was already 0 bare `ERR_*` (all `TRON_ERR_*`); banks the reciprocal `LIBRO_ERR_*` / `BOTE_ERR_*` dep renames that retire the `ERR_IO`/`ERR_JSON` duplicate-symbol hazard at source. `bench-history.sh` rewritten float-aware for 6.4.x decimal-µs output. 401 assertions hold; benches flat-to-faster (policy_check 655 ns, tron_check_allow 13.0 µs) |
+| **2.1.9** | **cyrius 6.5.35 + libro 2.8.12 / bote-core 3.3.7 / sigil 3.12.9 — and the `bote-core` sidecar leak.** Toolchain 6.4.66 → 6.5.35; libro 2.8.2 → 2.8.12, bote-core 3.1.4 → 3.3.7, sigil 3.12.1 → 3.12.9; transitive patra 1.13.10 / majra 2.7.0 / sakshi 2.4.11. **Fixed a live downstream break**: `dist/t-ron.deps` emitted `bote-core` as a *stdlib* leaf because dep name `bote` ≠ module basename `bote-core`, so every consumer wiring t-ron per `DEPS-PATTERN.md` failed `cyrius deps` — renamed the dep to `[deps.bote-core]`; verified end-to-end with a scratch consumer that now resolves, compiles against `dist/t-ron.cyr` and returns a correct `deny`. Same defect 2.1.8 fixed for `sigil` and missed for `bote`. **`code_size` watching row closes on its preferred path** — cyrius 6.5.35 raised the compile-source cap to 64 MB, so t-ron drops ~118 % → **3 %**; `fn_table` 17 %, `identifiers` 35 %, `var_table` 32 %. Lock 54 → 72 entries (TLS/sandhi cluster via `net`, all DCE'd; `bote-core` still carries **zero** `sandhi_` refs). ⚠️ **Consumer advisory**: libro 2.8.11 changes every entry hash — re-export and re-anchor live chains before upgrading. 401 assertions hold; `policy_check` 6.4× faster (1.693 µs → 265 ns) vs a same-session baseline |
 
 See [CHANGELOG.md](../../CHANGELOG.md) for the full detail per release.
 
@@ -86,11 +96,12 @@ changing it.
 | **2.1.6** | **cyrius 6.2.11 (onto the 6.2.x line) + libro 2.7.4 + bote 2.7.6 + `bayan` stdlib carve.** Transitive sigil 3.7.14 / patra 1.11.2 / agnosys 1.4.3 / majra 2.4.7. The **`bayan` carve** (cyrius 6.1.25) consolidated standalone `json` / `base64` / `bigint` into one bundle; migrated `[deps].stdlib` + every `src`/test include (`json` + `base64` + `bigint` → `bayan`) with **no call-site changes** — t-ron makes zero direct `json_*`/`base64_*`/`bigint_*` stdlib calls. Repaired three **stale harnesses** (`tests/t-ron.tcyr`, `-crypto.tcyr`, `.bcyr`) that still `include`d the retired `src/_libro_compat.cyr` + nine per-module `lib/bote_*.cyr` files — latent since 2.1.3, they no longer compiled; swapped to `lib/bote-core.cyr` and re-aligned every harness to `main.cyr`'s lib order. `registry_new()` → `tool_registry_new()` (bote 2.7.4 ToolRegistry rename; test-only). Fixed the bench's `sigil`-before-`ct` / no-`thread_local` ordering — a sigil 3.7.14 SIGILL landmine that only surfaces when *run*. Lock 48 → 47 hashes (`bayan` folds three entries into one). 401 assertions hold; benches flat. Mirrors bote 2.7.6 | ✅ Shipped |
 | **2.1.7** | **cyrius 6.3.15 + libro 2.7.9 + bote-core 2.7.7 — 6.3.x dep-sidecar reconciliation.** Added `sakshi` / `fs` / `process` / `sync` to `[deps].stdlib` (libro's 6.3.x dist `.deps` sidecar declares them as consumer-scope leaves; patra 1.12.7 pulls `sync`); `main.cyr` includes `lib/fs.cyr` + `lib/process.cyr` before sigil/libro. Documented the CYML-comment double-quote gotcha. 401 assertions hold; benches flat. Mirrors bote 2.7.7 | ✅ Shipped |
 | **2.1.8** | **cyrius 6.4.66 + libro 2.8.2 + bote-core 3.1.4 (MAJOR) + sigil 3.12.1 `[deps.sigil]` first-party pin.** Toolchain re-vendor for the 6.4.65 `thread_local_alloc` slot allocator (stale `lib/` failed to link). bote MAJOR bump is additive on the 2.0 handler ABI. New **`[deps.sigil]` pin — full `dist/sigil.cyr`** insulates `dist/t-ron.deps` from libro 2.8.0's transitive sigil-thinning (mldsa/sha folds would mis-declare as stdlib leaves and break downstream `cyrius deps`); sidecar byte-identical to 2.1.7, mirrors daimon 1.4.3 / bote 3.1.4. Banks the reciprocal `LIBRO_ERR_*` / `BOTE_ERR_*` dep renames (t-ron already 0 bare `ERR_*`). `bench-history.sh` float-aware rewrite for 6.4.x decimal-µs. 401 assertions hold; benches flat-to-faster. Mirrors daimon 1.4.3 | ✅ Shipped |
+| **2.1.9** | **cyrius 6.5.35 + libro 2.8.12 + bote-core 3.3.7 + sigil 3.12.9 — dist-sidecar repair + the cap raise.** The `[deps.bote]` → **`[deps.bote-core]`** rename restores basename ↔ dep-name agreement so `bote-core` stops being emitted into `dist/t-ron.deps` as a bogus stdlib leaf; this was a **live** break of every downstream `cyrius deps`, not a latent one, and 2.1.8 missed it by checking the sidecar against the previous release ("byte-identical") rather than against the stdlib. cyrius 6.5.35's 64 MB compile-source cap **closes the `code_size` watching row** on response path (1). `[deps].stdlib` unchanged — 6.5.35 resolves sidecar leaves (`bench` / `test` / `result`) itself. Warnings cleared upstream (`bayan` pointer casts, `chan_try_send`); static data 13.4 MB → 805 KB. 401 assertions hold | ✅ Shipped |
 | **2.1.x** | **Real-time alerts via daimon event bus** — daimon exposes `msg_bus_publish` today (`daimon/src/main.cyr:2635`). Wire `audit_log` to publish on the agreed majra topics. Conditional on confirming daimon's topic schema is settled before the patch. This is the next clear "doable on 5.10.44, no upstream blocker, real user-visible delta" candidate | 🟡 Conditional |
-| **2.1.x** | **`code_size` headroom** — **~118 %** at 2.1.8 (126.6 % at 2.1.6, 120 % at 2.1.5, 100.6 % at 2.1.4); the 2.1.8 `[deps.sigil]` full-`dist/sigil.cyr` pin keeps the whole sigil surface in the compile unit, but 6.4.66 codegen trims it back below the 2.1.6 watermark. `fn_table` 47 % / `identifiers` 44 % stay comfortable; only `code_size` is pressured, and it is the informational, non-gated dimension (daimon 1.4.3 runs 173 % on the same full bundle, so this is the accepted ecosystem state). Build holds because cyrius's emit buffer auto-expands past the watermark. Response paths: (1) **cyrius compile-source-size cap raise — preferred, the upstream proposal already exists** (see Future row note), (2) the ecosystem-wide sigil-thinning libro adopted at 2.8.0 (defer until the multi-module dist-sidecar recognition lands so it does not break downstream `cyrius deps`), (3) feature-gate `llm_scan` / `safety` / `signing` behind `#ifdef`. Patch number assigned when path chosen | 🟡 Watching — preference (1); sigil-thinning (2) is the eventual lean path |
+| **~~2.1.x~~ 2.1.9** | **`code_size` headroom — ✅ RESOLVED at 2.1.9 on response path (1).** cyrius **6.5.35 raised the compile-source cap to 64 MB**, the upstream proposal this row named as its preferred fix. t-ron sits at **2 069 656 / 67 108 864 (3 %)**, down from ~118 % over the old 1 MB watermark (126.6 % at 2.1.6, 120 % at 2.1.5, 100.6 % at 2.1.4). Every other counter got a raised ceiling too: `fn_table` **17 %** (cap 8192 → 32768), `identifiers` **35 %** (262144 → 524288), plus a newly surfaced `var_table` at **32 %**. Paths (2) ecosystem-wide sigil-thinning and (3) feature-gating `llm_scan` / `safety` / `signing` are **moot for t-ron** — the full `dist/sigil.cyr` bundle the 2.1.8 `[deps.sigil]` pin keeps now costs 3 % of budget, so the bloat that pin "accepted for now" is free. No further action | ✅ Resolved at 2.1.9 |
 | **Watching** | **Test-file refactor for the cyrius 5.10.x assert-nested-call parser quirk** — bote 2.7.1 hit it; t-ron has not surfaced it today. Lands as a patch only if a future test add trips the pattern | 🟡 Conditional |
 | **Arc close** | **Remaining feature item (daimon real-time alerts), not a toolchain version.** The original plan was to close 2.1.x on the cyrius toolchain crossing and cut 2.2.x — but the ecosystem made the 5.10.44 → 6.1.24 jump and t-ron absorbed it as a patch (2.1.5) since the wire shape never moved. The arc now closes when its last feature item lands; **2.2.x is reserved for the next change that actually moves the JSON-RPC / dispatcher shape**, not a routine toolchain bump | 🔮 Trigger for 2.2.x = wire-shape change |
-| **Future** | **Optional flip to `dist/bote.cyr` (full bundle, transport stack included).** The 2.1.3 bote-core flip closed the consumer-side blocker; the cyrius cap raise track ([cyrius compile-source-size cap 2 MB → 4 MB proposal](https://github.com/MacCracken/cyrius/blob/main/docs/development/proposals/2026-05-10-raise-compile-source-cap.md)) remains open and would let consumers that also want bote transports switch from `dist/bote-core.cyr` → `dist/bote.cyr`. t-ron itself never wires bote transports so bote-core stays the recommended pull regardless; this row only flips if a future t-ron feature reaches for a transport-side bote surface | 🟢 Optional |
+| **Future** | **Optional flip to `dist/bote.cyr` (full bundle, transport stack included).** ⚠️ **The blocker this row waited on is gone** — cyrius 6.5.35's 64 MB compile-source cap landed at 2.1.9 (t-ron uses 3 %), so size no longer argues against the full bundle. The row nonetheless stays **Optional, and the recommendation is unchanged**: t-ron never wires bote transports, so `dist/bote-core.cyr` remains the correct pull — and 2.1.9 confirmed `lib/bote-core.cyr` carries **zero** `sandhi_` references, i.e. the transport-free guarantee is real, not nominal. Flipping would pull the sandhi/TLS stack into the compile unit for no reachable caller. This row only moves if a future t-ron feature actually reaches for a transport-side bote surface | 🟢 Optional — unblocked, still not recommended |
 
 > **Release discipline.** Docs-only work (`.md` / `docs/` /
 > examples prose) does **not** earn a version bump in t-ron. It
@@ -107,11 +118,17 @@ Closes when the items above ship.
 ## Forward — post-2.1.x
 
 > **Cut line:** items in this section are 2.2.x+ because they
-> need either the **cyrius 5.11.x line** (toolchain jump =
-> minor-cut moment) or upstream schema work in another crate
-> that has not firmed up yet. Items code-doable on 5.10.44 with
-> no upstream coordination have been pulled forward into the
-> 2.1.x arc table above.
+> need upstream schema work in another crate that has not firmed
+> up yet. Items code-doable on the current toolchain with no
+> upstream coordination have been pulled forward into the 2.1.x
+> arc table above.
+>
+> ⚠️ **A toolchain jump is no longer the cut trigger.** This
+> section used to read "needs the cyrius 5.11.x line"; t-ron has
+> since crossed 5.10 → 6.1 → 6.2 → 6.3 → 6.4 → **6.5.35**, all as
+> patches, because none of them moved the JSON-RPC boundary or the
+> SecurityGate dispatcher signature. **2.2.x is reserved for a
+> wire-shape change**, per the arc-close row above.
 
 ### 2.2.x candidates
 
@@ -119,7 +136,7 @@ Closes when the items above ship.
 |---|---|
 | **Audit-tool authorization** | The 2.1.0 handler-ABI change plumbed `claims` through to t-ron's four introspection tools; 2.2.x adds the policy hook that gates `tron_audit` / `tron_policy` on caller identity (read from `claims`). **Blocker:** agnosticos claims schema firm-up — no firm-up signal in `agnosticos/docs/development/summer-2026-arc.md` as of 2026-05-11. Spec-aligned with bote's bearer / JWT / PKCE story |
 | **agnoshi intents** | Natural-language security queries — was in the original Phase 1 backlog. Compose with agnoshi's intent parser; t-ron exposes the same surface its MCP tools already cover (`tron_status` / `tron_risk` / `tron_audit`). **Blocker:** agnoshi availability |
-| **cyrius 5.11.x toolchain bump** | The natural trigger for 2.2.x. First-party crates have not crossed yet (cyrius 5.11.18 locally; bote 2.7.2 / libro 2.6.3 still on 5.10.44). When one does — or when a 2.2.x feature needs a 5.11.x surface — that's the minor cut |
+| ~~**cyrius 5.11.x toolchain bump**~~ | ❌ **Retired as a 2.2.x trigger.** Written when 5.11.x looked like the next crossing; the ecosystem has since gone to **6.5.35** and t-ron absorbed every step as a patch (2.1.5 / 2.1.6 / 2.1.7 / 2.1.8 / 2.1.9). Routine toolchain bumps are patch work — see the arc-close row: 2.2.x needs a wire-shape change |
 
 ### Phase 2 — Advanced detection (post-2.1.x)
 
@@ -192,6 +209,7 @@ CHANGELOG entries.
 | Issue | Status |
 |---|---|
 | `ct_eq` retired in cyrius 5.9.20 → renamed `ct_eq_bytes_lens`; libro 2.6.2 dist bundle still calls the old name | ✅ Resolved at 2.1.3 — libro 2.6.3 calls `ct_eq_bytes_lens` directly inside `dist/libro.cyr`; the `src/_libro_compat.cyr` shim retired with this release |
-| bote + libro dist bundles together exceed cyrius's 2 MB compile-source cap (bote drags sandhi 11k lines via the transport stack) | ✅ Resolved at 2.1.3 on the consumer side — flipped `[deps.bote]` to `dist/bote-core.cyr` (opt-in transport-free profile, bote 2.7.2). cyrius compile-source-size cap raise proposal stays open as an orthogonal track |
+| bote + libro dist bundles together exceed cyrius's 2 MB compile-source cap (bote drags sandhi 11k lines via the transport stack) | ✅ Fully resolved. Consumer-side at 2.1.3 (flipped `[deps.bote]` to `dist/bote-core.cyr`, opt-in transport-free profile, bote 2.7.2); **upstream at 2.1.9 — cyrius 6.5.35 raised the cap to 64 MB**, retiring the orthogonal track this row was holding open |
 | `assert(streq(call(…), "lit") == 1, "msg")` parser quirk at cyrius 5.10.x — bote 2.7.1 hit it; t-ron has not (yet) | 🟡 2.1.x will refactor if surfaced — not triggered through 2.1.3 |
 | `secret` is a storage-class keyword in 5.10.x | ✅ t-ron has no `secret` identifiers; only one string-literal use in tests/t-ron-crypto.tcyr (safe) |
+| `cyrius distlib` emits a bundled dep into the `.deps` sidecar as a **stdlib leaf** whenever the module basename does not match the dep name (`[deps.bote]` + `dist/bote-core.cyr` → basename `bote-core` ≠ dep `bote`) | ✅ Resolved at 2.1.9 — renamed the dep to `[deps.bote-core]`. **This bit twice**: 2.1.8 diagnosed the identical mechanism for `sigil` and fixed *that* instance, while the `bote-core` line sat in the same file undetected, because the 2.1.8 check was "sidecar byte-identical to previous release" rather than "every sidecar line is a real stdlib module". **The durable rule: validate `dist/t-ron.deps` against the toolchain stdlib listing, not against the last release** — a regression check cannot catch a defect that predates the baseline |

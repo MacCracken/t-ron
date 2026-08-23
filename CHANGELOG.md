@@ -16,6 +16,216 @@ top. Mirrors bote 2.7.0's flow.
 
 _(empty)_
 
+## [2.1.9] — 2026-08-23 · cyrius 6.5.35 + libro 2.8.12 / bote-core 3.3.7 / sigil 3.12.9 — and the `bote-core` sidecar leak that broke every downstream `cyrius deps`
+
+Tenth patch of the **2.1.x modernization arc**. Toolchain + dependency
+refresh, one **downstream-breaking sidecar defect fixed**, and the
+long-standing `code_size` pressure **resolved upstream** — cyrius 6.5.35
+raises the compile-source cap to 64 MB, so the dimension the roadmap has
+been watching since 2.1.2 drops from ~118 % to **3 %**. No t-ron runtime
+*logic* changed; all **401 assertions** (t-ron 323 · crypto 30 · safety 48)
+pass, and benches are flat-to-**6× faster** against a same-session baseline.
+
+### Fixed — `dist/t-ron.deps` declared `bote-core` as a stdlib leaf, breaking every consumer
+
+⛔ **This is the headline, and it was a live break — not a latent one.**
+`[deps.bote]` pinned `modules = ["dist/bote-core.cyr"]`, so the module
+basename (`bote-core`) did not match the dep name (`bote`). `cyrius distlib`
+recognizes a bundle as a *named dep* — and therefore excludes it from the
+generated sidecar — only when basename and dep name agree. They did not, so
+`bote-core` was emitted into `dist/t-ron.deps` as a required **stdlib** leaf.
+It is not in the stdlib, so any consumer wiring t-ron per `DEPS-PATTERN.md`
+got:
+
+```
+error: cannot read /home/macro/.cyrius/versions/6.5.35/lib/bote-core.cyr
+error: dep t-ron requires 'bote-core' but it is not in the cyrius stdlib
+6 deps resolved, 1 errors
+```
+
+⚠️ **This is exactly the defect 2.1.8 fixed for `sigil` — and missed for
+`bote`.** The 2.1.8 `[deps.sigil]` pin was introduced with the correct
+reasoning (basename ↔ dep name) and verified `dist/t-ron.deps`
+byte-identical to 2.1.7 — but "byte-identical" was the wrong check: the
+`bote-core` line was *already in that file* and already wrong, so comparing
+against the previous release preserved the bug instead of catching it.
+
+Fixed by renaming the dep `[deps.bote]` → **`[deps.bote-core]`**, so the
+basename matches. `bote-core` now drops out of the sidecar; `sync` is
+correctly declared in its place.
+
+⭐ **Verified end-to-end against a real consumer, not inferred.** A scratch
+project that pins t-ron per the `DEPS-PATTERN.md` contract now runs
+`cyrius deps` (**6 deps resolved, 0 errors**), compiles against
+`dist/t-ron.cyr`, and executes — returning a correct `deny` verdict for
+`ark_install` from an unregistered agent. Before the fix the same probe
+failed at the `cyrius deps` step.
+
+### Added — CI gate: `dist/t-ron.deps` validated against the toolchain stdlib
+
+A new **"Dist sidecar validity gate"** in `ci.yml` reads every leaf in
+`dist/t-ron.deps` and fails the build if the corresponding
+`$CYRIUS_HOME/versions/$PIN/lib/<leaf>.cyr` does not exist — i.e. if
+the sidecar claims something is stdlib that is not.
+
+The existing freshness gate could not catch this: it only asserts the
+committed `dist/t-ron.cyr` matches a regeneration. The sidecar was
+never checked at all, and the 2.1.8 manual check ("byte-identical to
+last release") was structurally incapable of finding a defect older
+than its baseline. The new gate compares against the **toolchain**,
+which has no such blind spot.
+
+⭐ **Mutation-tested, and tested through the real YAML path** — the
+step's `run:` block was extracted from the parsed workflow and
+executed, so the escaping is verified, not assumed. It reports
+`all 28 leaves resolve` on the fixed tree, and re-adding the
+`bote-core` line turns it red with the downstream error quoted.
+
+### Changed
+
+- **Toolchain**: cyrius **6.4.66 → 6.5.35**. The wrapper had already rolled
+  forward locally (`manifest-pin: 6.4.66 (drift — wrapper is 6.5.35)`).
+  `rm -rf ./lib && cyrius deps` re-vendored the snapshot.
+- **Dependencies**: libro **2.8.12** (was 2.8.2), bote-core **3.3.7** (was
+  3.1.4), sigil **3.12.9** (was 3.12.1). Transitive: patra **1.13.10**,
+  majra **2.7.0**, sakshi **2.4.11**. The set matches bote 3.3.7's own pins
+  (libro 2.8.12 / cyrius 6.5.35) — one coherent ecosystem stack.
+- **`[deps].stdlib` needs no `bench` / `test` / `result` entry.** libro's and
+  sigil's 6.5.x sidecars declare all three, but cyrius 6.5.35 resolves
+  sidecar leaves itself — `cyrius deps` succeeds with the list unchanged and
+  `cyrius deps --verify` reports **72 verified, 0 failed**.
+- **Lockfile 54 → 72 entries.** 18 modules vendored transitively that were
+  not before: `bench`, `test`, `dynlib`, `fdlopen`, `thread_macos`, the
+  four `async*`, `sandhi`, and the eight `tls*` / `tls_native*` files. The
+  TLS/sandhi cluster arrives through t-ron's own `net` stdlib dep, whose
+  TLS surface 6.5.x carves into separate modules.
+  ✅ `lib/bote-core.cyr` contains **zero** `sandhi_` references — the
+  transport-free guarantee the 2.1.3 core-profile flip rests on still holds;
+  none of the cluster is reachable from t-ron, and DCE NOPs all of it.
+
+### Fixed — build warnings that cleared on the new stack
+
+- `lib/bayan.cyr`'s three `assigning non-pointer to typed pointer` warnings:
+  **gone** (fixed upstream).
+- `warning: undefined function 'chan_try_send'`: **gone**.
+- **Static data 13,411,920 → 805,216 bytes** (16.6× smaller) on the DCE
+  build. Binary 2,929,424 B.
+
+Three benign `duplicate fn` warnings remain and are unchanged since 2.1.5
+(`_sub_new` libro/majra; `chacha20_xor` and `circuit_breaker_new`, where
+t-ron's own tested definitions win).
+
+### Capacity — the cap raise landed, and `code_size` is no longer a concern
+
+cyrius 6.5.35 raises every counter's ceiling. `CYRIUS_STATS=1`, DCE build:
+
+| Counter | 2.1.8 | 2.1.9 | Cap change |
+|---|---|---|---|
+| `fn_table` | 3866 / 8192 (47 %) | **5751 / 32768 (17 %)** | 8192 → 32768 |
+| `identifiers` | 114767 / 262144 (44 %) | **185909 / 524288 (35 %)** | 262144 → 524288 |
+| `var_table` | — | **2689 / 8192 (32 %)** | newly surfaced |
+| `code_size` | ~118 % over a 1 MB watermark | **2069656 / 67108864 (3 %)** | → 64 MB |
+
+⭐ **This closes the roadmap's `code_size` watching row on its preferred
+path.** That row named three responses and ranked them: (1) the upstream
+compile-source-size cap raise, (2) ecosystem-wide sigil-thinning, (3)
+feature-gating `llm_scan` / `safety` / `signing`. Path (1) shipped, so
+(2) and (3) are moot for t-ron — the full `dist/sigil.cyr` bundle the 2.1.8
+`[deps.sigil]` pin keeps is now 3 % of budget, and the bloat that pin
+"accepted for now" costs nothing.
+
+### Benchmarks
+
+Measured on the same machine in the same session — the old stack was
+re-benchmarked immediately before the upgrade, because the 2.1.8 CSV row was
+recorded on a different day under different load and is not a fair baseline.
+
+| Bench | 6.4.66 baseline | 6.5.35 | Δ |
+|---|---|---|---|
+| `policy_check` | 1.693 µs | **265 ns** | **6.4× faster** |
+| `scanner_sql_detect` | 2.470 µs | **1.04 µs** | **2.4× faster** |
+| `scanner_clean_text` | 4.713 µs | **3.35 µs** | 1.4× faster |
+| `audit_log` | 14.154 µs | **13.0 µs** | ~8 % faster |
+| `tron_check_allow` | 20.733 µs | **19.6 µs** | ~5 % faster |
+
+Three consecutive runs; `policy_check` held 273/265/264 ns and
+`tron_check_allow` 19.4/19.4/20.0 µs, so the ordering is stable, not noise.
+
+⚠️ **Read `audit_log` and `tron_check_allow` carefully.** Against the *2.1.8
+CSV row* (10.4 µs / 13.0 µs) both look like regressions. They are not
+comparable measurements: the **old** stack benchmarked on this machine today
+at 14.2 µs / 20.7 µs, i.e. slower still, so the delta is machine conditions,
+not the upgrade. Both paths do get genuinely more work per call — libro
+2.8.11 added strict `canonical_json_is_valid` validation ahead of the
+canonical-JSON hasher — and that cost is real but smaller than the codegen
+win. Worth re-measuring on a quiet machine before quoting an absolute.
+
+### Documentation — three docs were not stale, they were broken
+
+The docs pass started as a routine pin refresh and turned up code
+samples that **do not compile**. Each was verified by building it, not
+by reading it:
+
+- **All four `docs/examples/*.cyr` failed to build**, while
+  `docs/doc-health.md` recorded them as "✅ Fresh — Builds + runs
+  clean". They still included `lib/bigint.cyr` / `lib/json.cyr` /
+  `lib/base64.cyr` (folded into `bayan` at the 2.1.6 carve) and
+  `src/_libro_compat.cyr` (retired at 2.1.3) — latent since 2.1.6.
+  Include blocks rebuilt; **all four now build and run**:
+  `01` allow/deny, `02` signed-policy enforce, `03` a 456-byte
+  ChaCha20+Ed25519 envelope round-trip, `04` blocks `rm -rf /`.
+- **`docs/guides/testing.md` was 100 % Rust-era** — `cargo test`,
+  `make clippy`, `cargo audit`, `serde` round-trips, `.await` — in a
+  repo with no `Cargo.toml`. The ledger had it as "🟡 Stale — refresh
+  the cyrius pin reference". Fully rewritten to the real three-suite
+  Cyrius layout, `test_group` / `assert_eq` idiom, and the
+  include-order hazards specific to harnesses.
+- **`docs/guides/integration.md` sections 1–2 did not compile** —
+  `cyrius.toml`, cyrius 4.8.4, per-module `lib/libro_*.cyr` +
+  `lib/bote_*.cyr` pulls. Rewritten around the verified one-block
+  manifest; `registry_new()` → `tool_registry_new()`; every cited
+  symbol checked against `dist/t-ron.cyr` / `lib/bote-core.cyr`.
+- **`README.md`** carried the same non-compiling
+  `include "lib/bote_dispatch.cyr"`, a 2.1.2 version badge, a
+  "2.1.0 — modernization arc opens" headline, and 5.10.34-era pins.
+  Refreshed throughout, including an honest note on why the binary
+  grew 1.12 MB → 2.93 MB (the deliberate full-sigil pin).
+- **`CONTRIBUTING.md`** told contributors `.cyrius-toolchain` "is kept
+  as a local-dev convenience" — that file was retired at 2.1.3 and
+  does not exist.
+- **`CLAUDE.md`** stated a 390-assertion floor (312+30+48); the real
+  floor has been **401** (323+30+48) since 2.1.4.
+- **`DEPS-PATTERN.md`** — the consumer contract — documented the
+  *broken* `[deps.bote]` pattern this release fixes, so it was
+  actively teaching the defect. Rewritten.
+
+⭐ **The pattern behind all of it:** these rows were assessed by
+reading, and a stale include list reads fine. `docs/doc-health.md`
+now carries the rule that an executable doc may only be marked Fresh
+if it was **built and run** in that pass, and a table of what the
+ledger previously got wrong.
+
+### Notes — ⚠️ consumer advisory: libro 2.8.11 changes every entry hash
+
+libro **2.8.11** is a **breaking data-format change**: four fixes alter the
+entry-hash preimage, so **a chain written by libro ≤ 2.8.10 will not verify
+against 2.8.12**, and proofs, anchors and tree-head signatures over it will
+not either. The most serious of the four was a forgery primitive — the
+canonical-JSON hasher silently dropped unrecognized bytes, so `{"a":1}` and
+`{approved_by_legal"a":1}` hashed identically with `verify_chain` returning
+clean. `details` is exactly the field t-ron fills from caller data via
+`audit_log`.
+
+**t-ron's code needs no change** — it calls only six high-level libro
+functions (`chain_new` / `chain_append` / `chain_append_with_agent` /
+`chain_len` / `chain_verify` / `chain_review`) and does no raw-offset reads
+of libro's structs, so the 2.8.11 `struct error` field *prepend* that bote
+3.3.4 flagged does not reach us either.
+
+**Operators do need to act**: any t-ron deployment with a live audit chain
+must **re-export and re-anchor before upgrading**. There is no migration
+path — the old preimage was unsound.
+
 ## [2.1.8] — 2026-07-17 · cyrius 6.4.66 + libro 2.8.2 / bote 3.1.4 / sigil 3.12.1 refresh + `[deps.sigil]` first-party pin
 
 Ninth patch of the **2.1.x modernization arc** — the consumer step of the

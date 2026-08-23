@@ -14,10 +14,12 @@ project conventions.
 ## Prerequisites
 
 - **Cyrius toolchain** — version pinned in `cyrius.cyml`
-  (`cyrius = "5.10.34"` at time of writing). Install per the
-  [cyrius README](https://github.com/MacCracken/cyrius). The
-  `.cyrius-toolchain` file is kept as a local-dev convenience;
-  CI reads the pin from `cyrius.cyml`.
+  (`cyrius = "6.5.35"` as of 2.1.9). Install per the
+  [cyrius README](https://github.com/MacCracken/cyrius).
+  `cyrius.cyml [package].cyrius` is the **single source of truth** —
+  CI and the release workflow both read the pin from it, so there is
+  no second place to edit. (The legacy `.cyrius-toolchain` file was
+  retired at 2.1.3 and no longer exists in the tree.)
 - Sibling-checkout the local AGNOS deps (`libro`, `bote`) under
   `../` if you want `cyrius deps` to resolve via path overrides
   instead of fetching git tags.
@@ -29,7 +31,7 @@ project conventions.
 | `cyrius deps` | Populate `./lib/` from the version-pinned stdlib + tagged libro/bote modules. Run before any build/test/check. `./lib/` is gitignored — the contract is the `cyrius.lock` pin, not the bytes on disk. |
 | `cyrius deps --verify` | Enforce `cyrius.lock` hash match on every resolved dep. |
 | `cyrius build src/main.cyr build/t-ron` | Build the production binary. |
-| `cyrius test tests/t-ron.tcyr` | Run the main test compile unit (312 assertions). |
+| `cyrius test tests/t-ron.tcyr` | Run the main test compile unit (323 assertions). |
 | `cyrius test tests/t-ron-crypto.tcyr` | Run the crypto / signing / audit-export suite (30 assertions). |
 | `cyrius test tests/t-ron-safety.tcyr` | Run the AGNOS safety engine suite (48 assertions). |
 | `cyrius bench tests/t-ron.bcyr` | Run the 5-bench pipeline harness. |

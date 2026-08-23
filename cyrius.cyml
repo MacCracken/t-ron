@@ -4,7 +4,7 @@ version = "${file:VERSION}"
 description = "MCP security monitor — tool call auditing, rate limiting, injection detection, anomaly analysis"
 license = "GPL-3.0-only"
 language = "cyrius"
-cyrius = "6.4.66"
+cyrius = "6.5.35"
 repository = "https://github.com/MacCracken/t-ron"
 
 [build]
@@ -142,32 +142,47 @@ stdlib = [
 [deps.libro]
 git = "https://github.com/MacCracken/libro"
 path = "../libro"
-tag = "2.8.2"
+tag = "2.8.12"
 modules = ["dist/libro.cyr"]
 
-# bote MCP core — opt-in `dist/bote-core.cyr` profile (bote 2.7.3).
-# The nine transport-free modules (`error`, `protocol`, `jsonx`,
-# `codec`, `registry`, `events`, `audit`, `dispatch`, `schema`)
-# packaged as a single bundle via bote's `cyrius distlib core`
-# profile. Excludes `transport_*` / `bridge` / `auth` / `session` /
-# `discovery` / `content` / `host` / `audit_libro` / `events_majra`
-# — the surface t-ron does not consume, and the surface that
-# previously pushed our expanded source past cyrius's 2 MB
-# compile-source cap when paired with libro's dist bundle.
+# bote MCP core — opt-in `dist/bote-core.cyr` profile. The
+# transport-free module set, packaged as a single bundle via bote's
+# `cyrius distlib core` profile ([lib.core] in bote's manifest).
+# Verified against bote 3.3.7 — 12 modules:
+#   error protocol jsonx registry prompts resources
+#   events audit dispatch codec schema content
+# (`prompts` / `resources` arrived with the 3.1.x MAJOR, `content`
+# since; the 9-module figure in pre-2.1.9 comments was stale.)
+# Excludes `transport_*` / `bridge` / `auth` / `session` /
+# `discovery` / `host` / `stream` / `audit_libro` / `events_majra`
+# — surface t-ron does not consume. Full `dist/bote.cyr` is 30.
 #
 # t-ron is the trigger consumer for the opt-in profile — see bote
 # 2.7.2 CHANGELOG. Retires the nine-module cherry-pick that shipped
 # at 2.1.0; replaces it with one bundle entry.
 #
-# Future: when cyrius lands the compile-source-size cap raise
-# (proposal 2026-05-10), this block may flip to
-# `modules = ["dist/bote.cyr"]` for consumers that want the full
-# transport surface. bote-core remains the recommended pull for
-# t-ron because t-ron itself never wires bote transports.
-[deps.bote]
+# ⚠️ SECTION NAME IS LOAD-BEARING: it must be `[deps.bote-core]`, not
+# `[deps.bote]`. `cyrius distlib` excludes a bundled dep from
+# `dist/t-ron.deps` only when the dep name matches the module
+# BASENAME. From 2.1.3 to 2.1.8 this was `[deps.bote]` pinning
+# `dist/bote-core.cyr`, so basename `bote-core` != dep `bote` and
+# `bote-core` was emitted as a required *stdlib* leaf — breaking
+# EVERY downstream `cyrius deps` with
+# `dep t-ron requires 'bote-core' but it is not in the cyrius stdlib`.
+# Same defect class as the sigil block below (fixed 2.1.8); this
+# instance was missed then and fixed at 2.1.9. CI now validates every
+# sidecar leaf against the toolchain stdlib dir. Do not rename. (2.1.9)
+#
+# Size is no longer an argument either way: cyrius 6.5.35 raised the
+# compile-source cap to 64 MB and t-ron uses ~3%. bote-core remains
+# the correct pull regardless — t-ron never wires bote transports,
+# and `lib/bote-core.cyr` carries zero `sandhi_` references, so the
+# transport-free guarantee is real. Flipping to `dist/bote.cyr` would
+# pull the sandhi/TLS stack in for no reachable caller.
+[deps.bote-core]
 git = "https://github.com/MacCracken/bote"
 path = "../bote"
-tag = "3.1.4"
+tag = "3.3.7"
 modules = ["dist/bote-core.cyr"]
 
 # sigil crypto — explicit first-party pin (added 2.1.8). Prior to 2.1.8
@@ -182,9 +197,12 @@ modules = ["dist/bote-core.cyr"]
 # sidecar — and gives t-ron the trust-layer wrappers (verify_data) its
 # signing path uses. Bloat (the x509/RSA bignum tables t-ron never calls)
 # is accepted for now; this mirrors daimon 1.4.3 / bote 3.1.4, which both
-# keep the full bundle. Thinning is a future, ecosystem-wide step. (2.1.8)
+# keep the full bundle. Thinning is a future, ecosystem-wide step.
+# The same basename-must-match-dep-name rule as [deps.bote-core]
+# above applies here — `dist/sigil.cyr` -> basename `sigil` -> section
+# `[deps.sigil]`. (2.1.8; cross-referenced 2.1.9)
 [deps.sigil]
 git = "https://github.com/MacCracken/sigil.git"
 path = "../sigil"
-tag = "3.12.1"
+tag = "3.12.9"
 modules = ["dist/sigil.cyr"]

@@ -9,9 +9,11 @@ detection, anomaly analysis.
 - **Type**: Flat Cyrius library crate (consumed via
   `dist/t-ron.cyr` per `DEPS-PATTERN.md`).
 - **Language**: Cyrius (pin in `cyrius.cyml`,
-  `cyrius = "5.10.44"` as of 2.1.3). `cyrius.cyml
+  `cyrius = "6.5.35"` as of 2.1.9). `cyrius.cyml
   [package].cyrius` is the single source of truth — the legacy
-  `.cyrius-toolchain` file was retired at 2.1.3.
+  `.cyrius-toolchain` file was retired at 2.1.3. CI and release
+  both read the pin from the manifest; there is no second place
+  to edit.
 - **License**: GPL-3.0-only.
 - **Version**: SemVer (2.x line, stable post-Cyrius-port). Source
   of truth is `VERSION`; `cyrius.cyml` reads it via
@@ -33,6 +35,32 @@ git = "https://github.com/MacCracken/t-ron.git"
 tag = "<t-ron version>"
 modules = ["dist/t-ron.cyr"]
 ```
+
+On cyrius 6.5.x that block is **sufficient on its own** — `cyrius
+deps` reads `dist/t-ron.deps` and resolves the stdlib *and* t-ron's
+named deps (libro / bote-core / sigil / majra / patra / sakshi).
+Consumers no longer need a `[deps] stdlib` array. Verified end-to-end
+at 2.1.9 with a scratch consumer.
+
+### ⚠️ Dep-name ↔ module-basename rule (load-bearing)
+
+`cyrius distlib` omits a bundled dep from `dist/t-ron.deps` **only
+when the dep section name matches the module basename**. Mismatch and
+the basename is emitted as a required *stdlib* leaf, which it is not,
+so every downstream `cyrius deps` fails:
+
+```
+error: dep t-ron requires 'bote-core' but it is not in the cyrius stdlib
+```
+
+So `dist/bote-core.cyr` must be pinned under `[deps.bote-core]`, not
+`[deps.bote]`; `dist/sigil.cyr` under `[deps.sigil]`. This shipped
+broken twice — for `sigil` (fixed 2.1.8) and `bote-core` (fixed
+2.1.9) — because the 2.1.8 check was "sidecar byte-identical to last
+release", which cannot catch a defect older than its baseline.
+**Validate the sidecar against the toolchain stdlib directory, never
+against a previous revision.** CI enforces this ("Dist sidecar
+validity gate" in `ci.yml`), and the gate is mutation-tested.
 
 **Note**: T.Ron (SY personality) queries t-ron for security
 intelligence.
@@ -104,7 +132,7 @@ intelligence.
 - **Never skip benchmarks.** Numbers don't lie. The CSV history
   is the proof.
 - **Tests + benchmarks are the way.** Minimum 80 % coverage
-  target; the 390-assertion baseline (312 + 30 + 48) is the
+  target; the 401-assertion baseline (323 + 30 + 48) is the
   current floor.
 - **Own the stack.** If an AGNOS crate wraps an external lib,
   depend on the AGNOS crate.

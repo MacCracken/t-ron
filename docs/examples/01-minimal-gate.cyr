@@ -10,8 +10,10 @@ include "lib/fmt.cyr"
 include "lib/alloc.cyr"
 include "lib/vec.cyr"
 include "lib/str.cyr"
+include "lib/slice.cyr"
 include "lib/syscalls.cyr"
 include "lib/io.cyr"
+include "lib/args.cyr"
 include "lib/tagged.cyr"
 include "lib/assert.cyr"
 include "lib/fnptr.cyr"
@@ -20,13 +22,24 @@ include "lib/regex.cyr"
 include "lib/chrono.cyr"
 include "lib/freelist.cyr"
 include "lib/sakshi.cyr"
-include "lib/bigint.cyr"
-include "lib/json.cyr"
-include "lib/base64.cyr"
-include "lib/sigil.cyr"
+# bayan — json / base64 / bigint folded into one bundle at the 2.1.6 carve.
+include "lib/bayan.cyr"
+include "lib/net.cyr"
+# atomic / thread / thread_local and ct / keccak / random MUST precede
+# sigil — its hash path self-installs a per-thread TLS scratch bank, and
+# its ML-DSA surface references ct / keccak / random. Cyrius is
+# single-pass; get this wrong and libro's chain_append SIGILLs at RUNTIME.
+include "lib/atomic.cyr"
+include "lib/thread.cyr"
+include "lib/thread_local.cyr"
 include "lib/ct.cyr"
+include "lib/keccak.cyr"
+include "lib/random.cyr"
+# fs / process precede libro — declared by its dist sidecar since 6.3.x.
+include "lib/fs.cyr"
+include "lib/process.cyr"
+include "lib/sigil.cyr"
 
-include "src/_libro_compat.cyr"
 include "lib/libro.cyr"
 
 include "src/error.cyr"
