@@ -10,7 +10,7 @@ T-Ron is a [Cyrius](https://github.com/MacCracken/cyrius) security-middleware mo
 
 > **2.1.9 — cyrius 6.5.35, libro 2.8.12, bote-core 3.3.7, sigil 3.12.9.** Fixes a **live downstream break**: `dist/t-ron.deps` declared `bote-core` as a stdlib leaf, so every consumer wiring t-ron per [`DEPS-PATTERN.md`](DEPS-PATTERN.md) failed `cyrius deps` — renaming the dep to `[deps.bote-core]` restores basename ↔ dep-name agreement. cyrius 6.5.35's 64 MB compile-source cap also retires the long-standing `code_size` pressure (~118 % → **3 %**). See [CHANGELOG.md](CHANGELOG.md) and [`docs/development/roadmap.md`](docs/development/roadmap.md).
 >
-> ⚠️ **Upgrading with a live audit chain?** libro 2.8.11 changes every entry hash — chains written by libro ≤ 2.8.10 will not verify. **Re-export and re-anchor before upgrading.** There is no migration path; the old preimage was unsound.
+> **Note — audit-chain hashes changed upstream.** libro 2.8.11 alters the entry-hash preimage, so a chain written by libro ≤ 2.8.10 will not verify against 2.8.12; there is no migration path, because the old preimage was unsound. **No known deployment is affected** — t-ron has no production consumer with a live chain as of 2.1.9, which is why this landed as a routine patch. If you are carrying a chain from an older build, re-export and re-anchor before upgrading.
 
 ## Rust vs. Cyrius — at a glance
 

@@ -222,9 +222,13 @@ functions (`chain_new` / `chain_append` / `chain_append_with_agent` /
 of libro's structs, so the 2.8.11 `struct error` field *prepend* that bote
 3.3.4 flagged does not reach us either.
 
-**Operators do need to act**: any t-ron deployment with a live audit chain
-must **re-export and re-anchor before upgrading**. There is no migration
-path — the old preimage was unsound.
+**Impact assessment: none known.** t-ron has no production consumer
+carrying a live audit chain at 2.1.9, so nothing needs re-anchoring and
+this rides as a routine patch rather than a coordinated migration. The
+requirement still stands for anyone who *does* hold a chain from an
+older build — re-export and re-anchor before upgrading; there is no
+migration path, because the old preimage was unsound. Worth revisiting
+the moment a consumer starts persisting chains.
 
 ## [2.1.8] — 2026-07-17 · cyrius 6.4.66 + libro 2.8.2 / bote 3.1.4 / sigil 3.12.1 refresh + `[deps.sigil]` first-party pin
 
