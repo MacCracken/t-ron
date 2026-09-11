@@ -1,3 +1,4 @@
+commit	d4f7bee9cf3aae0ec15605b4081056ceabea10b1	majra	https://github.com/MacCracken/majra	2.7.1
 3e51b4f19ecc223ec72f48058d1130074a3d7163de611c3fd704bf6a89ab02f4  lib/tagged.cyr
 fe799dda111731ca5d4b92ef1160659c1cec5a507481770b5ed9c92b943d2730  lib/net.cyr
 6c76a1afec2ab1e3a11cc0d308feae34c4be34c5030a059d79c9efaf9e4b5213  lib/syscalls_macos.cyr

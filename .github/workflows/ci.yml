@@ -89,10 +89,18 @@ jobs:
 
       - name: Build
         run: |
+          # `set -o pipefail` is LOAD-BEARING (2.1.10). GitHub Actions runs `run:`
+          # under `bash -e`, NOT pipefail, so `cyrius build ... | tee` took TEE's
+          # exit status and this step went GREEN on a failed compile. The break then
+          # surfaced two steps later as `xxd: build/t-ron: No such file or directory`
+          # — a missing-file error standing in for a compiler diagnostic that had
+          # already been printed and thrown away. Do not remove.
+          set -o pipefail
           mkdir -p build
           # CYRIUS_STATS=1 emits a machine-parseable capacity report
           # at the tail of stdout — feeds the capacity gate below.
           CYRIUS_STATS=1 cyrius build src/main.cyr build/t-ron 2>&1 | tee build/build.log
+          test -s build/t-ron || { echo "FAIL: build/t-ron not produced"; exit 1; }
           echo "t-ron: $(wc -c < build/t-ron) bytes"
 
       - name: Verify ELF

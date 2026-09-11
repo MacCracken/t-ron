@@ -144,6 +144,26 @@ git = "https://github.com/MacCracken/libro"
 path = "../libro"
 tag = "2.10.0"
 modules = ["dist/libro.cyr"]
+# majra actors — an EXPLICIT pin, and the same "explicit wins" pattern as
+# [deps.sigil] below. bote-core 3.3.7 pins majra 2.7.0 transitively; majra
+# <= 2.7.0 defines `_sub_new(chan, filter_fn)` while libro defines
+# `_sub_new(pattern)`. cyrius 6.6.2 promotes that same-name/different-arity
+# pair from a silent "last definition wins" to a HARD ERROR, so the transitive
+# pin cannot build. majra 2.7.1 renamed it `_majra_sub_new`.
+#
+# ⚠ NO `path = "../majra"` here, deliberately, unlike the three sections
+# around it. t-ron co-develops none of majra and calls no majra symbol
+# directly — this section exists solely to win the resolution over bote's.
+# A path override makes `git`/`tag` inert, so a local build would resolve
+# whatever happens to be in the majra worktree while CI clones the tag. That
+# divergence is exactly what hid this break: locally `path = "../bote"` chained
+# into `path = "../majra"` and picked up an unreleased majra, so the build was
+# green here and red in CI. Retire this section once bote re-pins majra >= 2.7.1.
+[deps.majra]
+git = "https://github.com/MacCracken/majra"
+tag = "2.7.1"
+modules = ["dist/majra.cyr"]
+
 
 # bote MCP core — opt-in `dist/bote-core.cyr` profile. The
 # transport-free module set, packaged as a single bundle via bote's

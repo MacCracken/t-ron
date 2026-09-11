@@ -31,6 +31,7 @@ refresh, and **four silent defects** that the toolchain flip exposed. All
 | libro | 2.8.12 | **2.10.0** |
 | sigil | 3.12.9 | **3.12.16** |
 | bote-core | 3.3.7 | 3.3.7 (current) |
+| majra | *(transitive, 2.7.0)* | **2.7.1 — now an explicit pin** |
 
 The sigil bump is load-bearing, not cosmetic: the vendored `lib/sigil.cyr`
 at 3.12.9 carried **12 calls to `payload()`**, the accessor cyrius 6.6.0
@@ -76,6 +77,44 @@ off a **single process-global buffer** (`cc20_ks_g`) where sigil uses a
 per-thread lane, and which never wipes the keystream after use. Renamed to
 `cc20_xor`, consistent with the module's `cc20_block` / `cc20_init` / `cc20_qr`.
 t-ron's own use is unchanged and still pins the RFC 7539 vector.
+
+### Fixed — CI could not build at all: bote's transitive majra 2.7.0
+
+⛔ **Found by CI after this release was first cut locally-green — the local
+build was not representative.** `[deps.libro]`, `[deps.bote-core]` and
+`[deps.sigil]` each carry a `path = "../sibling"` override. That is the
+language's sanctioned local-dev mechanism, and it makes `git`/`tag` inert: the
+dep resolves from the sibling **worktree**. CI has no siblings, so it clones the
+tag. The two environments therefore resolved different code, and the difference
+was two levels down — `path = "../bote"` chained into bote's own
+`path = "../majra"` and picked up an unreleased majra, while CI cloned
+bote 3.3.7, which pins **majra 2.7.0**.
+
+majra ≤ 2.7.0 defines `_sub_new(chan, filter_fn)`; libro defines
+`_sub_new(pattern)`. cyrius 6.6.2 promotes that same-name/different-arity pair
+from a silent "last definition wins" to a **hard error**, so CI could not
+produce a binary at all. Fixed with an explicit `[deps.majra]` pinned to
+**2.7.1** (which renamed it `_majra_sub_new`), declared ahead of
+`[deps.bote-core]` so it wins the resolution — the same "explicit pin wins"
+pattern `[deps.sigil]` already uses against libro's thin sub-bundles. That
+section carries **no** `path` override, deliberately: t-ron co-develops no part
+of majra, and the override is what hid the break. Retire it once bote re-pins
+majra ≥ 2.7.1.
+
+### Fixed — the Build step went GREEN on a failed compile
+
+`CYRIUS_STATS=1 cyrius build ... 2>&1 | tee build/build.log` takes **tee's**
+exit status. GitHub Actions runs `run:` blocks under `bash -e`, not
+`bash -eo pipefail`, so a compiler exit 1 was discarded and the step passed.
+The break surfaced two steps later as:
+
+```
+xxd: build/t-ron: No such file or directory
+```
+
+— a missing-file error standing in for a compiler diagnostic that had already
+been printed and thrown away. The step now sets `set -o pipefail` and asserts
+`test -s build/t-ron` before reporting the size.
 
 ### Fixed — the main test suite and the bench exercised a different cipher than the binary
 
