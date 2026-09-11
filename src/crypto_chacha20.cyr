@@ -92,7 +92,7 @@ fn cc20_block(key, counter, nonce, out) {
     return 0;
 }
 
-fn chacha20_xor(key, nonce, counter, data, len, out) {
+fn cc20_xor(key, nonce, counter, data, len, out) {
     if (cc20_ks_g == 0) { cc20_ks_g = alloc(64); }
     var processed = 0;
     var ctr = counter;

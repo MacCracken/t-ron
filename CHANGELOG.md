@@ -16,6 +16,85 @@ top. Mirrors bote 2.7.0's flow.
 
 _(empty)_
 
+## [2.1.10] — 2026-09-10 · cyrius 6.6.2 value-form migration — and the two `duplicate fn` warnings 2.1.5 wrote down as "benign"
+
+Eleventh patch of the **2.1.x modernization arc**. Toolchain jump
+**6.5.35 → 6.6.2** (the `Result`/`Option`/`Either` *value form*), dependency
+refresh, and **four silent defects** that the toolchain flip exposed. All
+**401 assertions** (t-ron 323 · crypto 30 · safety 48) pass; benches flat.
+
+### Changed — toolchain and dependency pins
+
+| dep | was | now |
+|---|---|---|
+| cyrius | 6.5.35 | **6.6.2** |
+| libro | 2.8.12 | **2.10.0** |
+| sigil | 3.12.9 | **3.12.16** |
+| bote-core | 3.3.7 | 3.3.7 (current) |
+
+The sigil bump is load-bearing, not cosmetic: the vendored `lib/sigil.cyr`
+at 3.12.9 carried **12 calls to `payload()`**, the accessor cyrius 6.6.0
+deleted when `Result` became a two-register `(tag, payload)` value. t-ron's
+own `src/` never called it, so the repo looked clean while the bundle it
+compiles against did not.
+
+### Fixed — `_llm_http_post` treated connect and send failures as success
+
+⛔ **Two of these four sites were silent, and they are the headline.**
+`tcp_socket` / `sock_connect` / `sock_send` / `sock_recv` are all `: Result`.
+Under the value form a Result consumed as a single value yields only its
+**tag** — `0` for `Ok`, `1` for `Err`:
+
+```
+if (sock_connect(fd, addr, port) < 0) { return 0; }   # can NEVER fire
+if (sock_send(fd, req, off) < 0)      { return 0; }   # can NEVER fire
+```
+
+Neither guard could ever be true, so a refused connection or a failed write
+fell through into the read loop and `_llm_http_post` reported a scan against
+a host it never reached. The other two sites (`tcp_socket`, `sock_recv`) the
+compiler rejected outright. All four now bind both halves and test
+`is_err_result`.
+
+### Fixed — `circuit_breaker_new` collided with majra's, at a different arity
+
+t-ron's `circuit_breaker_new(threshold, window_secs, cooldown_secs)` and
+majra's `circuit_breaker_new(failure_threshold, cooldown_ns)` share a name,
+disagree about arity, and describe **different 48-byte layouts**. cyrius
+6.6.2 promotes that to a hard error. The safety module's family is renamed
+to `safety_circuit_breaker_*` — matching its own `safety_engine_*` /
+`safety_default_policies` convention and the `SafetyCircuitBreaker` name
+already used in ADR-006. Six functions; no behaviour change.
+
+### Fixed — t-ron's `chacha20_xor` was silently overriding sigil's
+
+Same name, **same** arity, so this one stayed a warning rather than an error
+— and it was the more dangerous of the two. "Last definition wins" meant
+sigil's `chacha20_aead_encrypt` / `_decrypt` (`lib/sigil.cyr:8437`, `:8475`)
+did not call sigil's cipher. They called t-ron's, which keys its keystream
+off a **single process-global buffer** (`cc20_ks_g`) where sigil uses a
+per-thread lane, and which never wipes the keystream after use. Renamed to
+`cc20_xor`, consistent with the module's `cc20_block` / `cc20_init` / `cc20_qr`.
+t-ron's own use is unchanged and still pins the RFC 7539 vector.
+
+### Fixed — the main test suite and the bench exercised a different cipher than the binary
+
+Direct consequence of the above, and only visible once the name stopped
+colliding. `tests/t-ron.tcyr` (323 assertions) and `tests/t-ron.bcyr` both
+include `src/audit.cyr` but neither included `src/crypto_chacha20.cyr`.
+Their `audit_export_encrypted` coverage therefore resolved against **sigil's**
+implementation, while `src/main.cyr` — which does include the module — shipped
+t-ron's. The suite passed either way because the assertions round-trip.
+Both harnesses now include the module; `cyrius test` / `cyrius bench` report
+zero undefined symbols and zero duplicate definitions.
+
+> **Correction to the 2.1.5 entry.** That release recorded these as "two
+> benign cross-module `duplicate fn` warnings … t-ron's tested `src/`
+> definitions win". Neither was benign. Writing a defect down as acceptable
+> is what kept it unfixed for six patches — and "t-ron's definitions win"
+> was precisely the problem, not the reassurance.
+
+
 ## [2.1.9] — 2026-08-23 · cyrius 6.5.35 + libro 2.8.12 / bote-core 3.3.7 / sigil 3.12.9 — and the `bote-core` sidecar leak that broke every downstream `cyrius deps`
 
 Tenth patch of the **2.1.x modernization arc**. Toolchain + dependency

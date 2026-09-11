@@ -176,7 +176,7 @@ fn test_chacha20_rfc_vector() {
     var plaintext = "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.";
     var plen = strlen(plaintext);
     var ct = alloc(plen);
-    chacha20_xor(key, nonce, 1, plaintext, plen, ct);
+    cc20_xor(key, nonce, 1, plaintext, plen, ct);
 
     assert_eq(load8(ct + 0) & 0xFF, 0x6e, "ct[0] = 6e");
     assert_eq(load8(ct + 1) & 0xFF, 0x2e, "ct[1] = 2e");
@@ -186,7 +186,7 @@ fn test_chacha20_rfc_vector() {
     assert_eq(load8(ct + 5) & 0xFF, 0x68, "ct[5] = 68");
 
     var pt2 = alloc(plen + 1);
-    chacha20_xor(key, nonce, 1, ct, plen, pt2);
+    cc20_xor(key, nonce, 1, ct, plen, pt2);
     store8(pt2 + plen, 0);
     assert_eq(memeq(pt2, plaintext, plen), 1, "roundtrip plaintext");
     return 0;

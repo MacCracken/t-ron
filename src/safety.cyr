@@ -509,7 +509,7 @@ enum CircuitState {
     CS_HALF_OPEN = 2;
 }
 
-fn circuit_breaker_new(threshold, window_secs, cooldown_secs) {
+fn safety_circuit_breaker_new(threshold, window_secs, cooldown_secs) {
     var b = alloc(48);
     store64(b,      CS_CLOSED);
     store64(b + 8,  threshold);
@@ -520,11 +520,11 @@ fn circuit_breaker_new(threshold, window_secs, cooldown_secs) {
     return b;
 }
 
-fn circuit_breaker_state(b)      { return load64(b); }
-fn circuit_breaker_threshold(b)  { return load64(b + 8); }
+fn safety_circuit_breaker_state(b)      { return load64(b); }
+fn safety_circuit_breaker_threshold(b)  { return load64(b + 8); }
 
 #  Record a violation; may transition Closed -> Open.
-fn circuit_breaker_record_violation(b) {
+fn safety_circuit_breaker_record_violation(b) {
     var now = clock_now_ns();
     var failures = load64(b + 40);
     vec_push(failures, now);
@@ -549,7 +549,7 @@ fn circuit_breaker_record_violation(b) {
 }
 
 #  Return 1 if the agent is allowed to proceed, 0 if blocked.
-fn circuit_breaker_check_allowed(b) {
+fn safety_circuit_breaker_check_allowed(b) {
     if (load64(b) == CS_OPEN) {
         var last = load64(b + 32);
         var elapsed = clock_now_ns() - last;
@@ -569,7 +569,7 @@ fn circuit_breaker_check_allowed(b) {
     return 0;
 }
 
-fn circuit_breaker_reset(b) {
+fn safety_circuit_breaker_reset(b) {
     store64(b,      CS_CLOSED);
     store64(b + 32, 0);
     store64(b + 40, vec_new());

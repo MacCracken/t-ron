@@ -257,7 +257,7 @@ fn audit_export_encrypted(a, nonce, key, sk, out_len_ptr) {
     memcpy(envelope, nonce, 12);
 
     #  Encrypt json into envelope+76 via CTR counter = 1.
-    chacha20_xor(key, nonce, 1, json, jlen, envelope + 76);
+    cc20_xor(key, nonce, 1, json, jlen, envelope + 76);
 
     #  Sign (nonce || ciphertext) into envelope+12.
     ed25519_sign(sk, envelope, 12 + jlen, envelope + 12);
@@ -285,7 +285,7 @@ fn audit_decrypt_export(data, data_len, key, pk) {
     if (ed25519_verify(pk, sig_input, 12 + clen, data + 12) != 1) { return 0; }
 
     var plaintext = alloc(clen + 1);
-    chacha20_xor(key, data, 1, data + 76, clen, plaintext);
+    cc20_xor(key, data, 1, data + 76, clen, plaintext);
     store8(plaintext + clen, 0);
     return plaintext;
 }

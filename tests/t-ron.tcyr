@@ -59,6 +59,7 @@ include "src/tools.cyr"
 include "src/middleware.cyr"
 include "src/llm_scan.cyr"
 include "src/signing.cyr"
+include "src/crypto_chacha20.cyr"
 
 fn test_errors() {
     test_group("error codes");

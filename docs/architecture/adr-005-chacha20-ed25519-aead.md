@@ -42,7 +42,7 @@ offset 76   ciphertext (N bytes, same length as plaintext)
   test_chacha20_rfc_vector`).
 
 - `audit.cyr::audit_export_encrypted` builds the plaintext via
-  `audit_export_json`, encrypts with `chacha20_xor(counter=1)`, then
+  `audit_export_json`, encrypts with `cc20_xor(counter=1)`, then
   signs the `nonce || ciphertext` concatenation with sigil's
   `ed25519_sign`.
 

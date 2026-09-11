@@ -133,34 +133,34 @@ fn test_injection_multiple_patterns_higher_conf() {
 
 fn test_breaker_closed_allows() {
     test_group("breaker: closed allows");
-    var b = circuit_breaker_new(3, 60, 10);
-    assert_eq(circuit_breaker_state(b), CS_CLOSED, "starts closed");
-    assert_eq(circuit_breaker_check_allowed(b), 1, "allowed");
+    var b = safety_circuit_breaker_new(3, 60, 10);
+    assert_eq(safety_circuit_breaker_state(b), CS_CLOSED, "starts closed");
+    assert_eq(safety_circuit_breaker_check_allowed(b), 1, "allowed");
     return 0;
 }
 
 fn test_breaker_trips_after_threshold() {
     test_group("breaker: trips after threshold violations");
-    var b = circuit_breaker_new(3, 60, 10);
-    circuit_breaker_record_violation(b);
-    assert_eq(circuit_breaker_state(b), CS_CLOSED, "still closed after 1");
-    circuit_breaker_record_violation(b);
-    assert_eq(circuit_breaker_state(b), CS_CLOSED, "still closed after 2");
-    circuit_breaker_record_violation(b);
-    assert_eq(circuit_breaker_state(b), CS_OPEN, "open after 3");
-    assert_eq(circuit_breaker_check_allowed(b), 0, "blocked");
+    var b = safety_circuit_breaker_new(3, 60, 10);
+    safety_circuit_breaker_record_violation(b);
+    assert_eq(safety_circuit_breaker_state(b), CS_CLOSED, "still closed after 1");
+    safety_circuit_breaker_record_violation(b);
+    assert_eq(safety_circuit_breaker_state(b), CS_CLOSED, "still closed after 2");
+    safety_circuit_breaker_record_violation(b);
+    assert_eq(safety_circuit_breaker_state(b), CS_OPEN, "open after 3");
+    assert_eq(safety_circuit_breaker_check_allowed(b), 0, "blocked");
     return 0;
 }
 
 fn test_breaker_reset() {
     test_group("breaker: force reset");
-    var b = circuit_breaker_new(2, 60, 10);
-    circuit_breaker_record_violation(b);
-    circuit_breaker_record_violation(b);
-    assert_eq(circuit_breaker_state(b), CS_OPEN, "open");
-    circuit_breaker_reset(b);
-    assert_eq(circuit_breaker_state(b), CS_CLOSED, "reset to closed");
-    assert_eq(circuit_breaker_check_allowed(b), 1, "allowed again");
+    var b = safety_circuit_breaker_new(2, 60, 10);
+    safety_circuit_breaker_record_violation(b);
+    safety_circuit_breaker_record_violation(b);
+    assert_eq(safety_circuit_breaker_state(b), CS_OPEN, "open");
+    safety_circuit_breaker_reset(b);
+    assert_eq(safety_circuit_breaker_state(b), CS_CLOSED, "reset to closed");
+    assert_eq(safety_circuit_breaker_check_allowed(b), 1, "allowed again");
     return 0;
 }
 

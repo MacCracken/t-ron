@@ -58,7 +58,7 @@ split) because:
 - **Injection detector**: `injection_detector_check(input)` returns
   a 6-pattern classifier with Unicode zero-width / directional-
   override normalization.
-- **Circuit breaker**: `circuit_breaker_new(threshold, window_secs,
+- **Circuit breaker**: `safety_circuit_breaker_new(threshold, window_secs,
   cooldown_secs)` and Closed → Open → HalfOpen state machine.
 - **Policy engine**: `safety_engine_new()` + `safety_engine_add_policy`
   / `safety_engine_check_action` / `safety_engine_check_output` /

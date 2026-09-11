@@ -50,6 +50,7 @@ include "src/score.cyr"
 include "src/query.cyr"
 include "src/correlation.cyr"
 include "src/tron.cyr"
+include "src/crypto_chacha20.cyr"
 
 # Shared fixtures — single allocation, reused across benchmarks.
 var _b_eng      = 0;
