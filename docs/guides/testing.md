@@ -1,6 +1,6 @@
 # Testing Guide
 
-**Current for t-ron 2.1.9** (cyrius 6.5.35).
+**Current for t-ron 2.1.11** (cyrius 6.6.6).
 
 > ⚠️ **Rewritten at 2.1.9.** Every prior revision of this file was the
 > **Rust-era** guide — `cargo test`, `make clippy`, `serde` round-trips,

@@ -2,7 +2,7 @@
 
 Each file in this directory is a self-contained, runnable Cyrius
 program that demonstrates one aspect of t-ron. All examples build
-against the same `cyrius.toml` at the repo root (`cyrius build
+against the same `cyrius.cyml` at the repo root (`cyrius build
 docs/examples/NAME.cyr build/NAME`).
 
 | File | Shows |

@@ -117,8 +117,8 @@ single-pass forward-reference resolution.
   for every consumer.
 - **libro / bote / sigil bundles** (`lib/libro.cyr`,
   `lib/bote-core.cyr`, `lib/sigil.cyr`) — these are *named deps*,
-  declared in t-ron's own `cyrius.cyml`. On cyrius 6.5.x they are
-  resolved for the consumer automatically (see below).
+  declared in t-ron's own `cyrius.cyml`. Since cyrius 6.5.x they
+  are resolved for the consumer automatically (see below).
 - **Tests / benches / examples** — not part of the consumer
   surface; live under `tests/` and `docs/examples/`.
 
@@ -133,16 +133,20 @@ therefore declares only:
 ```toml
 [deps.t-ron]
 git = "https://github.com/MacCracken/t-ron.git"
-tag = "2.1.9"
+tag = "2.1.11"
 modules = ["dist/t-ron.cyr"]
 ```
 
-✅ **Verified at 2.1.9**, not assumed: a scratch project containing
-exactly the block above runs `cyrius deps` (**6 deps resolved, 0
-errors**), which vendors the full stdlib set plus `libro`,
-`bote-core`, `sigil`, `majra`, `patra` and `sakshi`; it then compiles
-against `dist/t-ron.cyr` and executes, returning a correct `deny`
-verdict for `ark_install` from an unregistered agent.
+✅ **Re-verified at 2.1.11** (cyrius 6.6.6), not assumed: a
+clean-room project declaring only the block above — with no sibling
+checkouts, so every transitive dep is cloned at its tag, and t-ron
+itself supplied through a `path` override because the tag did not
+exist yet — runs `cyrius deps` (**6 deps resolved, 0 errors**): t-ron,
+`libro`, `bote-core` and `sigil`, plus `majra` (via bote) and `patra`
+(via libro), with `sakshi` and the rest of the stdlib coming from the
+sidecar. It then compiles against `dist/t-ron.cyr` and executes,
+returning a correct `deny` verdict for `ark_install` from an
+unregistered agent.
 
 No `[deps] stdlib` list, and no `[deps.libro]` / `[deps.bote-core]` /
 `[deps.sigil]` blocks, are required. Add an explicit `[deps.*]` pin

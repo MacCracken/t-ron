@@ -9,7 +9,7 @@ detection, anomaly analysis.
 - **Type**: Flat Cyrius library crate (consumed via
   `dist/t-ron.cyr` per `DEPS-PATTERN.md`).
 - **Language**: Cyrius (pin in `cyrius.cyml`,
-  `cyrius = "6.5.35"` as of 2.1.9). `cyrius.cyml
+  `cyrius = "6.6.6"` as of 2.1.11). `cyrius.cyml
   [package].cyrius` is the single source of truth — the legacy
   `.cyrius-toolchain` file was retired at 2.1.3. CI and release
   both read the pin from the manifest; there is no second place
@@ -36,11 +36,12 @@ tag = "<t-ron version>"
 modules = ["dist/t-ron.cyr"]
 ```
 
-On cyrius 6.5.x that block is **sufficient on its own** — `cyrius
-deps` reads `dist/t-ron.deps` and resolves the stdlib *and* t-ron's
-named deps (libro / bote-core / sigil / majra / patra / sakshi).
-Consumers no longer need a `[deps] stdlib` array. Verified end-to-end
-at 2.1.9 with a scratch consumer.
+Since cyrius 6.5.x that block is **sufficient on its own** — `cyrius
+deps` reads `dist/t-ron.deps` for the stdlib leaves (sakshi included)
+and resolves t-ron's named deps (libro / bote-core / sigil) plus theirs
+(majra via bote, patra via libro). Consumers no longer need a
+`[deps] stdlib` array. Re-verified end-to-end at 2.1.11 (cyrius 6.6.6)
+with a clean-room consumer.
 
 ### ⚠️ Dep-name ↔ module-basename rule (load-bearing)
 

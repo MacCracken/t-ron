@@ -1,8 +1,8 @@
 # Integration Guide
 
 Step-by-step walkthrough for embedding t-ron in a bote-based MCP
-service. **Current for t-ron 2.1.9** (cyrius 6.5.35 · libro 2.8.12 ·
-bote-core 3.3.7 · sigil 3.12.9).
+service. **Current for t-ron 2.1.11** (cyrius 6.6.6 · libro 2.10.3 ·
+bote-core 3.3.13 · sigil 3.12.18).
 
 > ⚠️ **Rewritten at 2.1.9.** Through 2.1.8 this guide still described
 > the 2.0.0 shape: a `cyrius.toml` manifest, cyrius 4.8.4, and
@@ -10,8 +10,11 @@ bote-core 3.3.7 · sigil 3.12.9).
 > `lib/json.cyr`, …). None of that resolves any more — the manifest is
 > `cyrius.cyml`, libro and bote ship single-file dist bundles, and
 > `json` / `base64` / `bigint` folded into `bayan` at the 2.1.6 carve.
-> The sample below is **verified**: it was built and run against
-> t-ron 2.1.9 before being written down.
+> The §1–§2 sample is **verified**: it was built and run against
+> t-ron 2.1.11 on cyrius 6.6.6, in a clean-room project, before being
+> written down. (Re-verifying it at 2.1.11 caught that its `if`
+> condition lacked the parentheses cyrius requires.) §3 is **not** —
+> see the warning there.
 
 ## 1. Add t-ron to your project
 
@@ -22,7 +25,7 @@ Add one block to your `cyrius.cyml`:
 name = "your-service"
 version = "0.1.0"
 language = "cyrius"
-cyrius = "6.5.35"
+cyrius = "6.6.6"
 
 [build]
 entry = "src/main.cyr"
@@ -30,14 +33,14 @@ output = "build/your-service"
 
 [deps.t-ron]
 git = "https://github.com/MacCracken/t-ron.git"
-tag = "2.1.9"
+tag = "2.1.11"
 modules = ["dist/t-ron.cyr"]
 ```
 
 That is the whole dep declaration. `cyrius distlib` ships
-`dist/t-ron.deps` alongside the bundle, and on cyrius 6.5.x
+`dist/t-ron.deps` alongside the bundle, and since cyrius 6.5.x
 `cyrius deps` reads it to resolve the stdlib **and** t-ron's own named
-deps (libro, bote-core, sigil, majra, patra, sakshi). You do **not**
+deps (libro, bote-core, sigil — and through them majra and patra). You do **not**
 need a `[deps] stdlib` array, and you do **not** need your own
 `[deps.libro]` / `[deps.bote-core]` / `[deps.sigil]` blocks.
 
@@ -113,7 +116,7 @@ fn main() {
     var c = tool_call_new("agent-id", "ark_install", "{}", 1700000000);
     var v = tron_check(t, c);
 
-    if verdict_is_denied(v) == 1 {
+    if (verdict_is_denied(v) == 1) {
         # refuse the call; verdict_reason(v) explains why
         return 1;
     }
@@ -129,6 +132,13 @@ loose strings. An unregistered agent calling a sensitive tool returns
 misconfiguration.
 
 ## 3. Construct the gate
+
+> ⚠️ **Not verified at 2.1.11 — this sample does not compile as
+> written.** cyrius rejects the multi-line string passed to
+> `tron_load_policy` (`expected ')', got string`), and
+> `your_echo_handler` predates the bote 2.0 `fn h(args, claims)`
+> handler ABI. Build the policy string explicitly and give handlers
+> both parameters until this section is rewritten.
 
 ```cyrius
 fn your_echo_handler(args) { return args; }

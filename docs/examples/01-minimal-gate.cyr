@@ -53,6 +53,7 @@ include "src/score.cyr"
 include "src/query.cyr"
 include "src/correlation.cyr"
 include "src/tron.cyr"
+include "src/crypto_chacha20.cyr"
 
 fn main() {
     alloc_init();

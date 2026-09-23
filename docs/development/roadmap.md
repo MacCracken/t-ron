@@ -1,33 +1,25 @@
 # t-ron Roadmap
 
-> **Current**: `2.1.9` (cyrius 6.5.35, libro 2.8.12, bote 3.3.7
-> via `dist/bote-core.cyr` opt-in profile; sigil 3.12.9 pinned
-> first-party via `[deps.sigil]` — full `dist/sigil.cyr`; patra
-> 1.13.10 / majra 2.7.0 / sakshi 2.4.11 transitively). Full
-> pipeline ~19.6 µs avg / 14 µs min and `policy_check` **265 ns**
-> (6.4× faster than the same-session 6.4.66 baseline),
-> **401 assertions** across three test suites, ChaCha20+Ed25519
-> encrypted audit export, 6-pattern prompt-injection detector, 5
-> default AGNOS safety policies, `dist/t-ron.cyr` single-file
-> consumer bundle (4 621 lines, 18 modules), CI capacity gate.
+> **Current**: `2.1.11` (cyrius 6.6.6, libro 2.10.3, bote-core
+> 3.3.13 via the transport-free `dist/bote-core.cyr` profile; sigil
+> 3.12.18 pinned first-party via `[deps.sigil]` — full
+> `dist/sigil.cyr`; majra 2.9.1 / patra 1.14.3 transitively). Full
+> pipeline (`tron_check_allow`) **~16.4 µs**, `audit_log` **~10.2
+> µs**, `policy_check` **~288 ns**; **401 assertions** across three
+> test suites, ChaCha20+Ed25519 encrypted audit export, 6-pattern
+> prompt-injection detector, 5 default AGNOS safety policies,
+> `dist/t-ron.cyr` single-file consumer bundle (4 624 lines, 18
+> modules), CI capacity gate.
 >
-> **2.1.9 fixed a live downstream break**: `dist/t-ron.deps`
-> declared `bote-core` as a *stdlib* leaf (dep name `bote` ≠ module
-> basename `bote-core`), so every consumer wiring t-ron per
-> `DEPS-PATTERN.md` failed `cyrius deps`. Renaming the dep to
-> `[deps.bote-core]` restores basename ↔ dep-name agreement. This
-> is the same defect 2.1.8 fixed for `sigil` and missed for `bote` —
-> the 2.1.8 check compared the sidecar against the previous release
-> and found it "byte-identical", which preserved the bad line
-> instead of catching it. **Verify the sidecar against the stdlib,
-> not against last release.**
+> **2.1.11** took cyrius 6.6.6 and the latest deps, retired the
+> `[deps.majra]` override now that bote 3.3.13 pins majra 2.9.1
+> itself, and rewrote `cyrius.cyml` as a manifest — release history
+> lives in the CHANGELOG, not in manifest comments. The audit path
+> got ~20 % faster, most of it libro 2.10.3.
 >
-> **`code_size` is no longer a constrained dimension.** cyrius
-> 6.5.35 raised the compile-source cap to 64 MB: t-ron now sits at
-> **2 069 656 / 67 108 864 (3 %)**, down from ~118 % over the old
-> 1 MB watermark. `fn_table` **5751 / 32768 (17 %)**, `identifiers`
-> **185 909 / 524 288 (35 %)**, `var_table` **2689 / 8192 (32 %)** —
-> all comfortable.
+> **Capacity is comfortable on every dimension**: `fn_table` **5 955
+> / 131 072 (4 %)**, `identifiers` **191 765 / 8 388 608 (2 %)**,
+> `code_size` **2 157 592 / 67 108 864 (3 %)**.
 >
 > **Full release history**: [CHANGELOG.md](../../CHANGELOG.md).
 > Rust archive preserved at git tag `0.90.0` under `rust-old/`.
@@ -71,6 +63,7 @@ Forward section after the arc table).
 | **2.1.8** | **cyrius 6.4.66 + libro 2.8.2 / bote 3.1.4 / sigil 3.12.1 refresh + `[deps.sigil]` first-party pin.** Toolchain 6.3.15 → 6.4.66 (the 6.4.65 `thread_local_alloc` slot allocator sigil 3.12.x / patra 1.12.x call — stale `lib/` failed to link without the re-vendor). libro 2.7.9 → 2.8.2, bote-core 2.7.7 → **3.1.4** (MAJOR, additive on the 2.0 handler ABI; core profile grew 9 → 11 modules). New **`[deps.sigil]` pin — full `dist/sigil.cyr` @ 3.12.1**: libro 2.8.0 thinned its *transitive* sigil to the mldsa/sha folds, whose basenames pollute `dist/t-ron.deps` as bogus stdlib leaves (breaking downstream `cyrius deps`); pinning the full bundle directly keeps `sigil` a recognized named dep so the sidecar stays byte-identical to 2.1.7. Mirrors daimon 1.4.3 / bote 3.1.4 (full bundle; bloat accepted). **Bare `ERR_*`**: t-ron was already 0 bare `ERR_*` (all `TRON_ERR_*`); banks the reciprocal `LIBRO_ERR_*` / `BOTE_ERR_*` dep renames that retire the `ERR_IO`/`ERR_JSON` duplicate-symbol hazard at source. `bench-history.sh` rewritten float-aware for 6.4.x decimal-µs output. 401 assertions hold; benches flat-to-faster (policy_check 655 ns, tron_check_allow 13.0 µs) |
 | **2.1.9** | **cyrius 6.5.35 + libro 2.8.12 / bote-core 3.3.7 / sigil 3.12.9 — and the `bote-core` sidecar leak.** Toolchain 6.4.66 → 6.5.35; libro 2.8.2 → 2.8.12, bote-core 3.1.4 → 3.3.7, sigil 3.12.1 → 3.12.9; transitive patra 1.13.10 / majra 2.7.0 / sakshi 2.4.11. **Fixed a live downstream break**: `dist/t-ron.deps` emitted `bote-core` as a *stdlib* leaf because dep name `bote` ≠ module basename `bote-core`, so every consumer wiring t-ron per `DEPS-PATTERN.md` failed `cyrius deps` — renamed the dep to `[deps.bote-core]`; verified end-to-end with a scratch consumer that now resolves, compiles against `dist/t-ron.cyr` and returns a correct `deny`. Same defect 2.1.8 fixed for `sigil` and missed for `bote`. **`code_size` watching row closes on its preferred path** — cyrius 6.5.35 raised the compile-source cap to 64 MB, so t-ron drops ~118 % → **3 %**; `fn_table` 17 %, `identifiers` 35 %, `var_table` 32 %. Lock 54 → 72 entries (TLS/sandhi cluster via `net`, all DCE'd; `bote-core` still carries **zero** `sandhi_` refs). ⚠️ **Consumer advisory**: libro 2.8.11 changes every entry hash — re-export and re-anchor live chains before upgrading. 401 assertions hold; `policy_check` 6.4× faster (1.693 µs → 265 ns) vs a same-session baseline |
 | **2.1.10** | **cyrius 6.6.2 value-form migration + libro 2.10.0 / sigil 3.12.16.** Toolchain 6.5.35 → 6.6.2 (`Result`/`Option`/`Either` are now a two-register `(tag, payload)` value; `payload()` deleted). The sigil bump is load-bearing — vendored `lib/sigil.cyr` at 3.12.9 carried **12 `payload()` calls** while t-ron's own `src/` had none, so the repo looked clean and the bundle it compiles against did not. **Four defects the flip exposed, two of them silent**: (1) `_llm_http_post`'s `if (sock_connect(...) < 0)` and `if (sock_send(...) < 0)` guards could **never fire** — `Err`'s tag is `1` — so refused connections and failed writes fell through and t-ron reported a scan against a host it never reached; (2) `circuit_breaker_new` collided with majra's at a **different arity** over a different 48-byte layout, now a hard error at 6.6.2 → family renamed `safety_circuit_breaker_*`; (3) `chacha20_xor` collided with sigil's at the **same** arity, so sigil's `chacha20_aead_encrypt`/`_decrypt` silently called t-ron's process-global, never-wiped keystream instead of sigil's per-thread lane → renamed `cc20_xor`; (4) exposed by (3) — `tests/t-ron.tcyr` and `tests/t-ron.bcyr` include `src/audit.cyr` but not `src/crypto_chacha20.cyr`, so **the 323-assertion suite and the bench exercised sigil's cipher while the binary shipped t-ron's**. ⛔ Defects (2), (3) and (4) all descend from the 2.1.5 row's claim that these were "two benign cross-module `duplicate fn` warnings" — see the correction on that row. 401 assertions hold; benches flat; zero undefined symbols and zero duplicate definitions across all five harnesses |
+| **2.1.11** | **cyrius 6.6.6 + libro 2.10.3 / bote-core 3.3.13 / sigil 3.12.18 — `cyrius.cyml` back to a manifest, `[deps.majra]` retired.** Toolchain 6.6.2 → 6.6.6; libro 2.10.0 → 2.10.3, bote-core 3.3.7 → 3.3.13, sigil 3.12.16 → 3.12.18; majra 2.9.1 / patra 1.14.3 transitive. No t-ron source change. The explicit majra pin retires now that bote 3.3.13 pins majra 2.9.1 itself — lock hashes, bundle and sidecar byte-identical without it — and takes with it the two `refusing to overwrite stdlib leaf` warnings 2.1.10 printed on every command (majra's sidecar claimed `sigil` / `patra` ahead of t-ron's own sigil pin). `cyrius.cyml` 228 → 128 lines: release narratives out, present-tense rules in; the stale 2.1.8 rationale for `[deps.sigil]` replaced by the current one (it stops libro's thin sigil sub-bundles compiling beside the full bundle — 233 duplicate definitions without it). Sidecar gains `sys` (29 leaves). Audit path ~20 % faster (`audit_log` 13.4 → 10.2 µs), ~2.7 µs of it attributed to libro 2.10.3 by an A/B. Integration-guide sample fixed (it did not compile). Verified sibling-free (byte-identical binary) and with a clean-room consumer (6 deps resolved, `deny`). 401 assertions hold |
 
 See [CHANGELOG.md](../../CHANGELOG.md) for the full detail per release.
 
@@ -99,6 +92,7 @@ changing it.
 | **2.1.8** | **cyrius 6.4.66 + libro 2.8.2 + bote-core 3.1.4 (MAJOR) + sigil 3.12.1 `[deps.sigil]` first-party pin.** Toolchain re-vendor for the 6.4.65 `thread_local_alloc` slot allocator (stale `lib/` failed to link). bote MAJOR bump is additive on the 2.0 handler ABI. New **`[deps.sigil]` pin — full `dist/sigil.cyr`** insulates `dist/t-ron.deps` from libro 2.8.0's transitive sigil-thinning (mldsa/sha folds would mis-declare as stdlib leaves and break downstream `cyrius deps`); sidecar byte-identical to 2.1.7, mirrors daimon 1.4.3 / bote 3.1.4. Banks the reciprocal `LIBRO_ERR_*` / `BOTE_ERR_*` dep renames (t-ron already 0 bare `ERR_*`). `bench-history.sh` float-aware rewrite for 6.4.x decimal-µs. 401 assertions hold; benches flat-to-faster. Mirrors daimon 1.4.3 | ✅ Shipped |
 | **2.1.9** | **cyrius 6.5.35 + libro 2.8.12 + bote-core 3.3.7 + sigil 3.12.9 — dist-sidecar repair + the cap raise.** The `[deps.bote]` → **`[deps.bote-core]`** rename restores basename ↔ dep-name agreement so `bote-core` stops being emitted into `dist/t-ron.deps` as a bogus stdlib leaf; this was a **live** break of every downstream `cyrius deps`, not a latent one, and 2.1.8 missed it by checking the sidecar against the previous release ("byte-identical") rather than against the stdlib. cyrius 6.5.35's 64 MB compile-source cap **closes the `code_size` watching row** on response path (1). `[deps].stdlib` unchanged — 6.5.35 resolves sidecar leaves (`bench` / `test` / `result`) itself. Warnings cleared upstream (`bayan` pointer casts, `chan_try_send`); static data 13.4 MB → 805 KB. 401 assertions hold | ✅ Shipped |
 | **2.1.10** | **cyrius 6.6.2 + libro 2.10.0 + sigil 3.12.16 — the value-form migration and the "benign" duplicates.** Four value-form sites in `_llm_http_post` (two of which silently swallowed connect and send failures), the `circuit_breaker_*` → `safety_circuit_breaker_*` rename forced by 6.6.2's arity-collision hard error, the `chacha20_xor` → `cc20_xor` rename that stops t-ron shadowing sigil's AEAD cipher, and the two harnesses that had been testing sigil's implementation instead of t-ron's. 401 assertions hold | ✅ Shipped |
+| **2.1.11** | **cyrius 6.6.6 + libro 2.10.3 + bote-core 3.3.13 + sigil 3.12.18 — manifest cleanup and the majra retirement.** `cyrius.cyml` rewritten as a manifest (228 → 128 lines); `[deps.majra]` retired now that bote pins majra 2.9.1; `dist/t-ron.deps` gains `sys`; audit path ~20 % faster via libro 2.10.3. 401 assertions hold | ✅ Shipped |
 | **2.1.x** | **Real-time alerts via daimon event bus** — daimon exposes `msg_bus_publish` today (`daimon/src/main.cyr:2635`). Wire `audit_log` to publish on the agreed majra topics. Conditional on confirming daimon's topic schema is settled before the patch. This is the next clear "doable on 5.10.44, no upstream blocker, real user-visible delta" candidate | 🟡 Conditional |
 | **~~2.1.x~~ 2.1.9** | **`code_size` headroom — ✅ RESOLVED at 2.1.9 on response path (1).** cyrius **6.5.35 raised the compile-source cap to 64 MB**, the upstream proposal this row named as its preferred fix. t-ron sits at **2 069 656 / 67 108 864 (3 %)**, down from ~118 % over the old 1 MB watermark (126.6 % at 2.1.6, 120 % at 2.1.5, 100.6 % at 2.1.4). Every other counter got a raised ceiling too: `fn_table` **17 %** (cap 8192 → 32768), `identifiers` **35 %** (262144 → 524288), plus a newly surfaced `var_table` at **32 %**. Paths (2) ecosystem-wide sigil-thinning and (3) feature-gating `llm_scan` / `safety` / `signing` are **moot for t-ron** — the full `dist/sigil.cyr` bundle the 2.1.8 `[deps.sigil]` pin keeps now costs 3 % of budget, so the bloat that pin "accepted for now" is free. No further action | ✅ Resolved at 2.1.9 |
 | **Watching** | **Test-file refactor for the cyrius 5.10.x assert-nested-call parser quirk** — bote 2.7.1 hit it; t-ron has not surfaced it today. Lands as a patch only if a future test add trips the pattern | 🟡 Conditional |

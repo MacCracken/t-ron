@@ -4,24 +4,19 @@ version = "${file:VERSION}"
 description = "MCP security monitor — tool call auditing, rate limiting, injection detection, anomaly analysis"
 license = "GPL-3.0-only"
 language = "cyrius"
-cyrius = "6.6.2"
+cyrius = "6.6.6"
 repository = "https://github.com/MacCracken/t-ron"
 
 [build]
 entry = "src/main.cyr"
 output = "build/t-ron"
 
-# Library distribution. Order mirrors the include order in src/main.cyr —
-# critical for Cyrius's single-pass forward-reference resolution.
-# `cyrius distlib` reads this section to produce dist/t-ron.cyr for
-# downstream consumers (daimon, bote middleware, phylax). Kept under
-# [lib] (not [build]) so tests/benches do not pull every module into
-# their compilation unit via the manifest — they include only what
-# they need.
-#
-# 2.1.3: dropped src/_libro_compat.cyr — libro 2.6.3's dist bundle
-# now calls ct_eq_bytes_lens directly, so the ct_eq shim has no
-# remaining caller.
+# Modules `cyrius distlib` bundles into dist/t-ron.cyr, the single file
+# consumers vendor (see DEPS-PATTERN.md). Order matches the include order in
+# src/main.cyr: cyrius is single-pass, so a module must follow everything it
+# references. Every src/ file main.cyr includes must be listed; CI checks.
+# Kept under [lib], not [build], so tests and benches include only the
+# modules they need.
 [lib]
 modules = [
     "src/error.cyr",
@@ -44,27 +39,15 @@ modules = [
     "src/safety.cyr",
 ]
 
-# ── Dependencies ─────────────────────────────────────────────────
-# Cyrius-stdlib modules. `cyrius deps` copies these from the
-# version-pinned snapshot into ./lib/ (gitignored). The list mirrors
-# the include order at the top of src/main.cyr so the manifest stays
-# load-bearing.
-[deps]
-# Pure cyrius-stdlib modules. `sigil` and `sakshi` are intentionally
-# NOT listed here even though src/main.cyr includes them — libro
-# 2.7.4 pulls both transitively via [deps.sigil] (tag 3.7.14) and
-# its own stdlib reference, so listing them here as well makes
-# `cyrius deps` attempt two writes to lib/sigil.cyr / lib/sakshi.cyr.
-# Locally the writes are byte-identical and silently succeed; in CI
-# the second write errors with "cannot write lib/sigil.cyr". Mirrors
-# the dep-chain bote/libro use.
+# Stdlib modules `cyrius deps` vendors into lib/ from the pinned snapshot and
+# `cyrius build` prepends to the compile unit, in this order. Several are
+# here for the deps below rather than for src/ (bayan, fs, process, sync);
+# the include-order constraints are documented at the includes in
+# src/main.cyr.
 #
-# 2.1.3: added `slice` (libro 2.6.3 → agnosys 1.2.6 uses slice
-# subscript syntax) and `keccak` / `random` (sigil 3.1.1 ML-DSA +
-# AES-GCM surfaces reference `_keccak_*`, `shake256`, `random_bytes`).
-# `ct` / `keccak` / `random` must precede the `sigil` include in
-# src/main.cyr — single-pass forward-reference resolution. Mirrors
-# bote 2.7.3's stdlib comment.
+# No comments inside the array: the parser takes any double-quoted token in
+# the array region as a module name, even one inside a comment.
+[deps]
 stdlib = [
     "string",
     "fmt",
@@ -82,147 +65,64 @@ stdlib = [
     "regex",
     "chrono",
     "freelist",
-    # sakshi — first-party structured-logging lib; included in
-    # src/main.cyr and required by libro's dist .deps sidecar on 6.3.x.
-    # Declared here so `cyrius deps` copies lib/sakshi.cyr (the 6.2.x
-    # transitive-via-libro resolution no longer covers it). The old
-    # double-write concern is gone under the 6.3.x sidecar model —
-    # byte-identical copies are idempotent. (migration 2.1.7)
     "sakshi",
-    # fs / process — required by libro's dist .deps sidecar on 6.3.x
-    # (file-backed chain + subprocess audit). See src/main.cyr include
-    # comment; both must precede the libro include. (migration 2.1.7)
     "fs",
     "process",
-    # bayan — consolidated stdlib bundle (cyrius 6.1.25 carve). The
-    # standalone json / base64 / bigint modules no longer ship in the
-    # 6.1.35+ snapshot; bayan folds json (json_parse / json_get
-    # back-compat shims), base64 / base64url, csv and u128/u256 into
-    # one dist. t-ron makes no direct json_* / base64_* / bigint_*
-    # calls (its base64/json helpers are hand-rolled in src/safety.cyr
-    # and src/llm_scan.cyr) — the bundle is needed transitively by
-    # libro (canonical-JSON hashing) and sigil. No call-site changes.
-    # Mirrors libro 2.7.3 / bote 2.7.4's carve. (2.1.6)
     "bayan",
     "net",
-    # atomic / thread / thread_local must precede sigil — sigil 3.7.14's
-    # crypto path self-installs a per-thread TLS scratch bank
-    # (`cbank()` → `thread_local_get`, cyrius ≥ 6.0.52) on the *serial*
-    # hash path, and its parallel `sv_verify_batch` spawns
-    # `thread_create`/`thread_join` workers. `thread` pulls `atomic`
-    # (lock-free queue); without these the SHA-256 in libro's
-    # `chain_append` traps with SIGILL. sigil 3.7.14's `crypto_scratch`
-    # exercises the TLS path 3.7.8/3.7.12 never hit, so the
-    # thread_local guard is load-bearing, not belt-and-suspenders —
-    # see libro 2.7.4 / bote 2.7.6 CHANGELOGs. (2.1.5; reaffirmed 2.1.6)
     "atomic",
-    # sync — patra 1.12.7 (pulled transitively via libro on the 6.3.x
-    # line) declares lib/sync.cyr as a hard stdlib dep; cyrius deps
-    # fails to find sync.cyr without it. NOTE: keep quoted strings OUT
-    # of comments inside this array — the CYML parser extracts any
-    # double-quoted token in the array region as a module name, even
-    # inside a # comment. Migration 6.3.15 (2.1.7).
     "sync",
     "thread",
     "thread_local",
-    # ct / keccak / random must precede sigil — see comment above.
     "ct",
     "keccak",
     "random",
 ]
 
-# libro audit chain — single-file dist bundle. libro 2.x uses
-# `#derive(accessors)` to emit per-field getters (entry_hash,
-# entry_prev_hash, …) that are referenced cross-module within
-# libro itself; cyrius only resolves the derive macro when the
-# full module set is preprocessed in dist-build order, so a
-# per-module pull leaves the getters undefined at link time
-# (silent — surfaces as a SIGILL inside `chain_verify`). The
-# dist bundle bakes the accessor bodies in.
+# Two rules for the git deps below.
+#
+# 1. The section name must equal the module's basename: dist/bote-core.cyr
+#    belongs under deps.bote-core, not deps.bote. `cyrius distlib` leaves a
+#    bundled dep out of dist/t-ron.deps only on that match; on a mismatch it
+#    emits the basename as a stdlib leaf, and every consumer's `cyrius deps`
+#    then fails with "dep t-ron requires '<name>' but it is not in the cyrius
+#    stdlib". CI's "Dist sidecar validity gate" checks each leaf against the
+#    toolchain stdlib.
+#
+# 2. `path` beats `tag` whenever the sibling checkout exists, and skips
+#    commit-pin verification: a local build compiles the sibling's working
+#    tree while CI clones the tag. Before a release, resolve and build from a
+#    sibling-free copy (`git archive HEAD` into an empty directory).
+
+# libro audit chain, as its single-file dist bundle rather than per-module
+# src/ pulls: libro's #derive(accessors) getters only exist when its modules
+# are preprocessed together in dist order.
 [deps.libro]
 git = "https://github.com/MacCracken/libro"
 path = "../libro"
-tag = "2.10.0"
+tag = "2.10.3"
 modules = ["dist/libro.cyr"]
-# majra actors — an EXPLICIT pin, and the same "explicit wins" pattern as
-# [deps.sigil] below. bote-core 3.3.7 pins majra 2.7.0 transitively; majra
-# <= 2.7.0 defines `_sub_new(chan, filter_fn)` while libro defines
-# `_sub_new(pattern)`. cyrius 6.6.2 promotes that same-name/different-arity
-# pair from a silent "last definition wins" to a HARD ERROR, so the transitive
-# pin cannot build. majra 2.7.1 renamed it `_majra_sub_new`.
-#
-# ⚠ NO `path = "../majra"` here, deliberately, unlike the three sections
-# around it. t-ron co-develops none of majra and calls no majra symbol
-# directly — this section exists solely to win the resolution over bote's.
-# A path override makes `git`/`tag` inert, so a local build would resolve
-# whatever happens to be in the majra worktree while CI clones the tag. That
-# divergence is exactly what hid this break: locally `path = "../bote"` chained
-# into `path = "../majra"` and picked up an unreleased majra, so the build was
-# green here and red in CI. Retire this section once bote re-pins majra >= 2.7.1.
-[deps.majra]
-git = "https://github.com/MacCracken/majra"
-tag = "2.7.1"
-modules = ["dist/majra.cyr"]
 
-
-# bote MCP core — opt-in `dist/bote-core.cyr` profile. The
-# transport-free module set, packaged as a single bundle via bote's
-# `cyrius distlib core` profile ([lib.core] in bote's manifest).
-# Verified against bote 3.3.7 — 12 modules:
-#   error protocol jsonx registry prompts resources
-#   events audit dispatch codec schema content
-# (`prompts` / `resources` arrived with the 3.1.x MAJOR, `content`
-# since; the 9-module figure in pre-2.1.9 comments was stale.)
-# Excludes `transport_*` / `bridge` / `auth` / `session` /
-# `discovery` / `host` / `stream` / `audit_libro` / `events_majra`
-# — surface t-ron does not consume. Full `dist/bote.cyr` is 30.
-#
-# t-ron is the trigger consumer for the opt-in profile — see bote
-# 2.7.2 CHANGELOG. Retires the nine-module cherry-pick that shipped
-# at 2.1.0; replaces it with one bundle entry.
-#
-# ⚠️ SECTION NAME IS LOAD-BEARING: it must be `[deps.bote-core]`, not
-# `[deps.bote]`. `cyrius distlib` excludes a bundled dep from
-# `dist/t-ron.deps` only when the dep name matches the module
-# BASENAME. From 2.1.3 to 2.1.8 this was `[deps.bote]` pinning
-# `dist/bote-core.cyr`, so basename `bote-core` != dep `bote` and
-# `bote-core` was emitted as a required *stdlib* leaf — breaking
-# EVERY downstream `cyrius deps` with
-# `dep t-ron requires 'bote-core' but it is not in the cyrius stdlib`.
-# Same defect class as the sigil block below (fixed 2.1.8); this
-# instance was missed then and fixed at 2.1.9. CI now validates every
-# sidecar leaf against the toolchain stdlib dir. Do not rename. (2.1.9)
-#
-# Size is no longer an argument either way: cyrius 6.5.35 raised the
-# compile-source cap to 64 MB and t-ron uses ~3%. bote-core remains
-# the correct pull regardless — t-ron never wires bote transports,
-# and `lib/bote-core.cyr` carries zero `sandhi_` references, so the
-# transport-free guarantee is real. Flipping to `dist/bote.cyr` would
-# pull the sandhi/TLS stack in for no reachable caller.
+# bote MCP core, transport-free profile (`cyrius distlib core` in bote).
+# t-ron wraps bote's Dispatcher and never wires a transport, so it does not
+# take the full dist/bote.cyr. majra arrives through bote's own deps.majra.
 [deps.bote-core]
 git = "https://github.com/MacCracken/bote"
 path = "../bote"
-tag = "3.3.7"
+tag = "3.3.13"
 modules = ["dist/bote-core.cyr"]
 
-# sigil crypto — explicit first-party pin (added 2.1.8). Prior to 2.1.8
-# t-ron inherited sigil only transitively via libro's [deps.sigil];
-# libro 2.8.0 thinned its own transitive sigil surface to the mldsa/sha
-# folds, whose multi-module basenames do not match the dep name `sigil`,
-# so a `cyrius distlib`-generated t-ron sidecar would mis-declare each
-# fold (`sigil-mldsa`, `sigil_sha256`, …) as a required *stdlib* leaf and
-# every downstream `cyrius deps` would error `… not in the cyrius stdlib`.
-# Pinning the full `dist/sigil.cyr` bundle directly (basename `sigil` ↔
-# dep `sigil`) keeps it recognized as a named dep — excluded from the
-# sidecar — and gives t-ron the trust-layer wrappers (verify_data) its
-# signing path uses. Bloat (the x509/RSA bignum tables t-ron never calls)
-# is accepted for now; this mirrors daimon 1.4.3 / bote 3.1.4, which both
-# keep the full bundle. Thinning is a future, ecosystem-wide step.
-# The same basename-must-match-dep-name rule as [deps.bote-core]
-# above applies here — `dist/sigil.cyr` -> basename `sigil` -> section
-# `[deps.sigil]`. (2.1.8; cross-referenced 2.1.9)
+# sigil, as the full dist/sigil.cyr bundle. libro's own deps.sigil lists only
+# thin sub-bundles (sigil-mldsa, sha256, sha_ni, hex); this section overrides
+# it, so exactly one sigil is compiled. Without it the sub-bundles land
+# beside the stdlib copy and collide as duplicate definitions. Only the full
+# bundle carries verify_data(), which src/signing.cyr calls.
+#
+# Keep the tag on the sigil release the pinned cyrius folds into its stdlib
+# (the `# Version:` line of lib/sigil.cyr in the toolchain snapshot), so both
+# copies are the same bytes.
 [deps.sigil]
 git = "https://github.com/MacCracken/sigil.git"
 path = "../sigil"
-tag = "3.12.16"
+tag = "3.12.18"
 modules = ["dist/sigil.cyr"]
