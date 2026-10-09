@@ -209,3 +209,22 @@ CHANGELOG entries.
 | `assert(streq(call(…), "lit") == 1, "msg")` parser quirk at cyrius 5.10.x — bote 2.7.1 hit it; t-ron has not (yet) | 🟡 2.1.x will refactor if surfaced — not triggered through 2.1.3 |
 | `secret` is a storage-class keyword in 5.10.x | ✅ t-ron has no `secret` identifiers; only one string-literal use in tests/t-ron-crypto.tcyr (safe) |
 | `cyrius distlib` emits a bundled dep into the `.deps` sidecar as a **stdlib leaf** whenever the module basename does not match the dep name (`[deps.bote]` + `dist/bote-core.cyr` → basename `bote-core` ≠ dep `bote`) | ✅ Resolved at 2.1.9 — renamed the dep to `[deps.bote-core]`. **This bit twice**: 2.1.8 diagnosed the identical mechanism for `sigil` and fixed *that* instance, while the `bote-core` line sat in the same file undetected, because the 2.1.8 check was "sidecar byte-identical to previous release" rather than "every sidecar line is a real stdlib module". **The durable rule: validate `dist/t-ron.deps` against the toolchain stdlib listing, not against the last release** — a regression check cannot catch a defect that predates the baseline |
+
+## Recorded by cyrius 6.7.6 (2026-10-08) — for the next cyrius pin move
+
+⛔ Needs cyrius >= 6.7.6 — nothing to do until cyrius 6.7.6 is tagged; then at your pin bump:
+
+- **Git first: a `path` beside `git` / `tag` becomes a dev override** (here: `libro`, `bote-core` (`../bote`),
+  `sigil`).
+  From 6.7.6 it is read only in local mode (`CYRIUS_LOCAL=1`, `CYRIUS_LOCAL=<dep,dep>` or `--local`).
+  With no switch, `cyrius deps` / `build` resolve the TAG (commit pin checked) and print one `hint:`
+  line naming the checkout not used, so a local build and CI compile the same code.
+- Local mode prints a `local:` line per override and builds from `build/local-deps/` without writing
+  `lib/` or `cyrius.lock`; a hand-written `include "lib/<dep>.cyr"` sees the override there too (the
+  compiler's `CYRIUS_LIB_OVERLAY`, set by `cyrius`).
+- The first default resolve adds commit pins for these deps to `cyrius.lock` — a one-time diff.
+- CI lock guards and `sed`-the-path-out steps can become `cyrius deps --locked`.
+- `.github/workflows/ci.yml:58,66` and `release.yml:58,63` (`cyrius deps` then `cyrius deps --verify`) are such
+  guards; with `lib/` gitignored, `--locked` checks the resolve against `cyrius.lock` alone and builds from
+  `build/locked-deps/`.
+- Reference: the cyrius guide's *Git first; local development is a switch (6.7.6)*.
