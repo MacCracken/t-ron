@@ -4,7 +4,7 @@ version = "${file:VERSION}"
 description = "MCP security monitor — tool call auditing, rate limiting, injection detection, anomaly analysis"
 license = "GPL-3.0-only"
 language = "cyrius"
-cyrius = "6.7.9"
+cyrius = "6.7.18"
 repository = "https://github.com/MacCracken/t-ron"
 
 [build]
@@ -109,7 +109,7 @@ stdlib = [
 # copies are the same bytes.
 [deps.sigil]
 git = "https://github.com/MacCracken/sigil.git"
-tag = "3.13.11"
+tag = "3.13.15"
 modules = ["dist/sigil.cyr"]
 
 # libro audit chain, as its single-file dist bundle rather than per-module
@@ -117,7 +117,7 @@ modules = ["dist/sigil.cyr"]
 # are preprocessed together in dist order.
 [deps.libro]
 git = "https://github.com/MacCracken/libro"
-tag = "2.11.0"
+tag = "2.11.3"
 modules = ["dist/libro.cyr"]
 
 # bote MCP core, transport-free profile (`cyrius distlib core` in bote).
@@ -125,5 +125,5 @@ modules = ["dist/libro.cyr"]
 # take the full dist/bote.cyr. majra arrives through bote's own deps.majra.
 [deps.bote-core]
 git = "https://github.com/MacCracken/bote"
-tag = "3.4.10"
+tag = "3.8.0"
 modules = ["dist/bote-core.cyr"]

@@ -1,6 +1,6 @@
 # Testing Guide
 
-**Current for t-ron 2.2.0** (cyrius 6.7.9).
+**Current for t-ron 2.2.1** (cyrius 6.7.18).
 
 > ⚠️ **Rewritten at 2.1.9.** Every prior revision of this file was the
 > **Rust-era** guide — `cargo test`, `make clippy`, `serde` round-trips,
@@ -15,12 +15,12 @@
 Three suites, run separately:
 
 ```sh
-cyrius test tests/t-ron.tcyr          # 332 assertions — core pipeline
+cyrius test tests/t-ron.tcyr          # 348 assertions — core pipeline
 cyrius test tests/t-ron-crypto.tcyr   #  30 assertions — signal, crypto, export
 cyrius test tests/t-ron-safety.tcyr   #  48 assertions — AGNOS safety engine
 ```
 
-**410 assertions total** (332 + 30 + 48) across 144 groups. That total
+**426 assertions total** (348 + 30 + 48) across 147 groups. That total
 is the **floor**, per `CLAUDE.md`: a change may raise it, never lower
 it. Coverage target is 80 %.
 
@@ -35,7 +35,7 @@ cyrius bench tests/t-ron.bcyr         # 5 pipeline benchmarks
 
 | Suite | Groups | Assertions | Covers |
 |---|---:|---:|---|
-| `tests/t-ron.tcyr` | 113 | 332 | error codes, gate verdicts, policy engine, rate limiter, scanner, pattern analyzer, audit ring buffer + libro chain, risk scoring, query API, correlation, middleware |
+| `tests/t-ron.tcyr` | 116 | 348 | error codes, gate verdicts, policy engine, rate limiter, scanner, pattern analyzer, audit ring buffer + libro chain, risk scoring, query API, correlation, middleware, MCP tool definitions and results |
 | `tests/t-ron-crypto.tcyr` | 10 | 30 | SIGHUP signalfd reload, ChaCha20, Ed25519 policy signing, encrypted audit export round-trip + tamper rejection |
 | `tests/t-ron-safety.tcyr` | 21 | 48 | safety policies, severity, enforcement, 7 rule types, circuit breaker |
 

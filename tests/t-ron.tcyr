@@ -1308,6 +1308,140 @@ fn _permissive_config() {
     return c;
 }
 
+fn _t_hexval(c) {
+    if (c >= 48 && c <= 57)  { return c - 48; }
+    if (c >= 97 && c <= 102) { return c - 87; }
+    if (c >= 65 && c <= 70)  { return c - 55; }
+    return 0;
+}
+
+#  Decode one level of a JSON string body (\" \\ \/ \b \f \n \r \t and
+#  \u00XX). jsonx_get_str returns bodies undecoded, and a tool result's
+#  `text` is a JSON document inside a JSON string, so a test opens it here.
+fn _t_json_unescape(s) {
+    if (s == 0) { return ""; }
+    var n = strlen(s);
+    var out = alloc(n + 1);
+    var i = 0;
+    var o = 0;
+    while (i < n) {
+        var c = load8(s + i);
+        i = i + 1;
+        if (c == 92 && i < n) {
+            var e = load8(s + i);
+            i = i + 1;
+            c = e;
+            if (e == 98)  { c = 8; }
+            if (e == 102) { c = 12; }
+            if (e == 110) { c = 10; }
+            if (e == 114) { c = 13; }
+            if (e == 116) { c = 9; }
+            if (e == 117 && i + 4 <= n) {
+                c = _t_hexval(load8(s + i + 2)) * 16 + _t_hexval(load8(s + i + 3));
+                i = i + 4;
+            }
+        }
+        store8(out + o, c);
+        o = o + 1;
+    }
+    store8(out + o, 0);
+    return out;
+}
+
+#  The decoded `text` of a one-block tool result; "" when it has none.
+fn _t_result_text(r) {
+    var content = jsonx_get_raw(r, "content");
+    if (content == 0 || load8(content) != 91) { return ""; }
+    return _t_json_unescape(jsonx_get_str(content + 1, "text"));
+}
+
+#  The first element of a JSON array, as the text from its start; "" when
+#  `arr` is not an array.
+fn _t_first_elem(arr) {
+    if (load8(arr) != 91) { return ""; }
+    return arr + 1;
+}
+
+fn test_tool_results_plain() {
+    test_group("tool results: exact bytes for plain input");
+    tools_bind(tron_new(_permissive_config()));
+    assert_eq(streq(tron_status_handler("{}", 0),
+        "{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"total_events\\\":0,\\\"total_denials\\\":0,\\\"status\\\":\\\"clean\\\"}\"}]}"),
+        1, "status");
+    assert_eq(streq(tron_risk_handler("{\"agent_id\":\"web-agent\"}", 0),
+        "{\"content\":[{\"type\":\"text\",\"text\":\"{\\\"agent_id\\\":\\\"web-agent\\\",\\\"risk_score_bp\\\":0,\\\"risk_level\\\":\\\"low\\\"}\"}]}"),
+        1, "risk");
+    assert_eq(streq(tron_policy_handler("{}", 0),
+        "{\"content\":[{\"type\":\"text\",\"text\":\"policy error: missing toml argument\"}],\"isError\":true}"),
+        1, "policy error");
+    return 0;
+}
+
+fn test_tool_results_escape() {
+    test_group("tool results: hostile ids stay valid JSON");
+    var t = tron_new(_permissive_config());
+    tools_bind(t);
+
+    #  jsonx_get_str hands tron_risk the undecoded body a\"b\\c; that is the
+    #  id it scores, so that is the id it must echo.
+    var r = tron_risk_handler("{\"agent_id\":\"a\\\"b\\\\c\"}", 0);
+    assert_eq(jsonx_valid(r, strlen(r)), 1, "risk: result is JSON");
+    var ri = _t_result_text(r);
+    assert_eq(jsonx_valid(ri, strlen(ri)), 1, "risk: text is JSON");
+    assert_eq(streq(_t_json_unescape(jsonx_get_str(ri, "agent_id")), "a\\\"b\\\\c"),
+        1, "risk: echoes the id it scored");
+
+    #  The gate records ids as raw bytes, so tron_audit sees them unescaped.
+    var agent = "ev\"il\\agent\nx";
+    tron_check(t, tool_call_new(agent, "to\"ol", "{}", 1700000000));
+    var a = tron_audit_handler("{}", 0);
+    assert_eq(jsonx_valid(a, strlen(a)), 1, "audit: result is JSON");
+    var ai = _t_result_text(a);
+    assert_eq(jsonx_valid(ai, strlen(ai)), 1, "audit: text is JSON");
+    var ev = _t_first_elem(ai);
+    assert_eq(streq(_t_json_unescape(jsonx_get_str(ev, "agent_id")), agent),
+        1, "audit: agent_id round-trips");
+    assert_eq(streq(_t_json_unescape(jsonx_get_str(ev, "tool_name")), "to\"ol"),
+        1, "audit: tool_name round-trips");
+    return 0;
+}
+
+#  Through 2.2.0 tron_risk wrote into alloc(256) and tron_audit into
+#  n * 160 + 32 bytes, whatever the ids' lengths.
+fn test_tool_results_long() {
+    test_group("tool results: long ids fit their buffers");
+    var t = tron_new(_permissive_config());
+    tools_bind(t);
+    var n = 2048;
+
+    #  2 KB of quotes: 2 bytes each in the document, 4 in `text`.
+    var id = alloc(n + 1);
+    for (var i = 0; i < n; i = i + 1) { store8(id + i, 34); }
+    store8(id + n, 0);
+    tron_check(t, tool_call_new(id, id, "{}", 1700000000));
+    var a = tron_audit_handler("{}", 0);
+    assert_eq(jsonx_valid(a, strlen(a)), 1, "audit: 2 KB ids, result is JSON");
+    var ev = _t_first_elem(_t_result_text(a));
+    assert_eq(streq(_t_json_unescape(jsonx_get_str(ev, "agent_id")), id),
+        1, "audit: 2 KB agent_id round-trips");
+    assert_eq(streq(_t_json_unescape(jsonx_get_str(ev, "tool_name")), id),
+        1, "audit: 2 KB tool_name round-trips");
+
+    #  A 2 KB plain id in tron_risk's arguments.
+    var args = alloc(n + 32);
+    var off = 0;
+    memcpy(args, "{\"agent_id\":\"", 13); off = 13;
+    for (var j = 0; j < n; j = j + 1) { store8(args + off, 65); off = off + 1; }
+    memcpy(args + off, "\"}", 2); off = off + 2;
+    store8(args + off, 0);
+    var r = tron_risk_handler(args, 0);
+    assert_eq(jsonx_valid(r, strlen(r)), 1, "risk: 2 KB id, result is JSON");
+    var ri = _t_result_text(r);
+    assert_eq(strlen(jsonx_get_str(ri, "agent_id")), n, "risk: 2 KB id echoed whole");
+    assert_eq(jsonx_has(ri, "risk_level"), 1, "risk: fields after the id intact");
+    return 0;
+}
+
 fn _permissive_quiet() {
     var c = _permissive_config();
     tron_config_set_scan_payloads(c,    0);
@@ -1544,6 +1678,9 @@ fn main() {
     test_signing_missing_sig_rejected();
     test_signing_pipeline_integration();
     test_tron_tool_defs();
+    test_tool_results_plain();
+    test_tool_results_escape();
+    test_tool_results_long();
     test_gate_deny_unknown_agent();
     test_gate_allow_with_policy();
     test_gate_deny_by_policy();

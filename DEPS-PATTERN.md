@@ -129,7 +129,7 @@ sidecar listing the stdlib leaves the fold needs in scope. Since
 cyrius 6.5.x, `cyrius deps` reads that sidecar and resolves the whole
 tree itself — stdlib *and* t-ron's own named deps. Since 6.6.18 the
 sidecar holds exactly the leaves `distlib`'s compile-verify proves the
-bundle needs — `regex`, `net`, `syscalls` at 2.2.0, mirrored by a
+bundle needs — `regex`, `net`, `syscalls` at 2.2.1, mirrored by a
 `# Requires` include block at the top of `dist/t-ron.cyr` — and the
 named deps' own `# Requires` blocks supply the rest. A consumer
 therefore declares only:
@@ -137,15 +137,17 @@ therefore declares only:
 ```toml
 [deps.t-ron]
 git = "https://github.com/MacCracken/t-ron.git"
-tag = "2.2.0"
+tag = "2.2.1"
 modules = ["dist/t-ron.cyr"]
 ```
 
-⚠️ **t-ron 2.2.0 needs cyrius ≥ 6.7.2 in the consumer**, because its
-bote-core 3.4.10 dep does. Measured: a consumer pinned at 6.6.20 fails
-to build; at 6.7.2 it builds and runs.
+⚠️ **t-ron 2.2.x needs cyrius ≥ 6.7.2 in the consumer**, because its
+bote-core dep does. Measured at 2.2.0 and again at 2.2.1: a consumer
+pinned at 6.6.20 fails to build; at 6.7.2 it builds and runs. bote
+3.8.0 states "Minimum cyrius: 6.7.13", but for its full `dist/bote.cyr`;
+the `dist/bote-core.cyr` profile t-ron takes compiles from 6.7.2.
 
-✅ **Re-verified at 2.2.0** (cyrius 6.7.9), not assumed: a
+✅ **Re-verified at 2.2.1** (cyrius 6.7.18), not assumed: a
 clean-room project declaring only the block above — with no sibling
 checkouts, so every transitive dep is cloned at its tag, and t-ron
 itself supplied through a `path` override because the tag did not

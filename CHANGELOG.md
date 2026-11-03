@@ -16,6 +16,170 @@ top. Mirrors bote 2.7.0's flow.
 
 _(empty)_
 
+## [2.2.1] — 2026-11-03 · cyrius 6.7.18 + libro 2.11.3 / bote-core 3.8.0 / sigil 3.13.15 — the tool handlers escape what they echo, and stop overrunning their buffers
+
+Toolchain **6.7.9 → 6.7.18**, dependencies to their latest releases, with bote
+held at **3.8.0** for this release. It fixes the JSON defect 2.2.0 recorded as
+known, and a heap overrun found while fixing it. Both are in `src/tools.cyr`'s
+MCP handlers. **426 assertions** (t-ron 348 · crypto 30 · safety 48) pass, 16
+of them new. The binary is **70 % smaller** (2.28 MB → 676 KB) because 6.7.18
+removes the dead code 6.7.9 only NOPed. `policy_check` is 11 % faster; the
+other four benches are flat.
+
+### Security — `tron_risk` and `tron_audit` wrote past their buffers
+
+Both handlers built their reply in a fixed-size allocation and copied
+caller-controlled strings into it without a length check:
+
+- **`tron_risk`** used `alloc(256)`, then copied the `agent_id` from the call's
+  arguments. Any ID over ~190 bytes ran past the buffer. With the bump
+  allocator, the next allocation (the score's digits) landed inside the copied
+  ID, so the reply came back truncated and corrupted. Measured on the 2.2.0
+  code: a 2,048-byte ID was echoed as 241 bytes.
+- **`tron_audit`** sized its array at `events × 160 + 32` bytes, whatever the
+  recorded IDs and tool names held. About 61 bytes of each 160 are fixed
+  syntax, so any event whose two strings exceeded ~100 bytes overran it.
+
+Each reply is now sized exactly before it is written. A first pass measures
+every value's escaped length, then one checked `alloc` takes it. On a failed
+alloc the handler returns 0, which bote reports as a failed call; there is no
+abort path. Reachable by any MCP client that can call these tools, or by any
+agent whose calls the gate records.
+
+### Fixed — the tool results were not valid JSON for hostile IDs
+
+Recorded as known at 2.2.0. A result's `text` is a JSON document inside a JSON
+string. The handlers hand-wrote the outer escapes and spliced values in raw.
+There were two distinct breaks:
+
+- **`tron_audit`** spliced the gate's raw agent IDs and tool names into the
+  reply. One holding `"` broke the outer JSON, which bote 3.4.8+ turns into an
+  `isError` result.
+- **`tron_risk`** receives `jsonx_get_str`'s undecoded body (`a\"b\\c`), so its
+  outer JSON stayed valid. But the `text` decoded to invalid JSON, so the
+  document a client was meant to parse did not parse.
+
+Every interpolated value is now escaped once into the document (RFC 8259 §7:
+`"`, `\` and every byte below 0x20, with short forms for `\b \t \n \f \r`). The
+document is then escaped once into `text`. **Output for ordinary input is
+byte-identical**; three new assertions pin it exactly. `tron_risk` echoes the ID
+it scored, the undecoded body, so the echo and the lookup agree.
+
+The escaping is t-ron's own (`_tron_json_esc_len` / `_tron_json_esc_into`), not
+bote's `bote_json_escape`. bote's writes through `str_builder_putc`, which
+aborts the process on OOM, and CLAUDE.md rules that out in library code.
+
+**Tests (+16 assertions, 3 new groups).**
+- `tool results: exact bytes for plain input` pins the current output of
+  `tron_status`, `tron_risk` and a `tron_policy` error.
+- `hostile ids stay valid JSON` decodes both levels for IDs holding `"`, `\` and
+  a newline, and round-trips them.
+- `long ids fit their buffers` uses 2 KB IDs, all quotes for `tron_audit`, so
+  they double when escaped.
+
+Against the 2.2.0 handlers, 12 of the 16 fail, including `risk: 2 KB id echoed
+whole (got 241, expected 2048)`. The 4 that pass are the 3 exact-bytes pins and
+`tron_risk`'s outer validity, as the analysis above predicts.
+
+### Changed — toolchain and dependency pins
+
+| dep | was | now |
+|---|---|---|
+| cyrius | 6.7.9 | **6.7.18** |
+| libro | 2.11.0 | **2.11.3** |
+| bote-core | 3.4.10 | **3.8.0** *(held; 3.8.1 is tagged)* |
+| sigil | 3.13.11 | **3.13.15** |
+| majra | 2.12.0 *(transitive)* | **2.13.0** *(transitive, via bote-core)* |
+| patra | 1.16.0 *(transitive)* | **1.16.6** *(transitive, via libro)* |
+
+The set is consistent with no overrides. libro 2.11.3, bote 3.8.0 and majra
+2.13.0 pin 6.7.18; bote 3.8.0 pins libro 2.11.3 and majra 2.13.0; libro 2.11.3
+pins sigil 3.13.15 and patra 1.16.6. Those two are also the 6.7.18 folds
+(`cmp`-identical), so the 2.2.0 `note: sigil 3.13.12 (wanted by libro) not
+used` is gone.
+
+What the deps changed, as it reaches t-ron:
+
+- **bote 3.4.11–3.8.0.** None of the 17 bote functions t-ron calls changed
+  shape. `registry_check_tool_def` now also refuses a bad `x-mcp-header`
+  annotation, which t-ron does not use. Output schemas (3.8.0) are opt-in, and a
+  tool without one "pays nothing more". t-ron is not named anywhere in those
+  entries.
+- **libro 2.11.x**: "No preimage, proof or signature format changes." Existing
+  audit chains verify as before.
+- **sigil 3.13.14** fixes CYRIUS-2026-0040 (ChaCha20-Poly1305 accepting a forged
+  tag across shared crypto lanes). t-ron's encrypted export uses its own
+  ChaCha20 (`cc20_*`) and sigil's Ed25519, not that AEAD, so the fix is
+  inherited but off t-ron's path. 3.13.15 also drops the 256 KB static scratch
+  array whose warning every build printed since 2.1.10.
+
+⚠️ **Consumer floor unchanged: cyrius ≥ 6.7.2.** bote 3.8.0's bundles say
+"Minimum cyrius: 6.7.13", but for the full `dist/bote.cyr`. Its own note says
+`dist/bote-core.cyr`, the profile t-ron takes, compiles from 6.7.2. Measured
+here: the clean-room consumer pinned at 6.7.2 builds with 0 undefined functions
+and returns `deny`.
+
+### Changed — `cyrius.lock`
+
+- **60 → 68 entries**: `lib/math.cyr` and seven `lib/unicode/*` files, which
+  6.7.18's `bayan.cyr` includes. 42 of the 60 carried-over hashes moved.
+- Five commit pins, each matching its remote tag: bote-core `0de2037`, libro
+  `f4a31a4`, majra `40b827f`, patra `efa2e34`, sigil `3c47656`. The lock was
+  regenerated from scratch, so no 2.2.0 pins linger.
+
+### Performance
+
+Same session, three interleaved rounds, mean. The 2.2.0 column is the committed
+tree built sibling-free at 6.7.9 (2,282,720 B, as released).
+
+| bench | 2.2.0 | 2.2.1 | Δ |
+|---|---|---|---|
+| `policy_check` | 333.7 ns | 297.0 ns | **−11.0 %** |
+| `scanner_clean_text` | 3.533 µs | 3.534 µs | 0.0 % |
+| `scanner_sql_detect` | 1.119 µs | 1.113 µs | −0.5 % |
+| `audit_log` | 10.339 µs | 10.291 µs | −0.5 % |
+| `tron_check_allow` | 16.998 µs | 16.984 µs | −0.1 % |
+
+`policy_check` is faster in every round (294–302 ns against 333–334). It is
+not t-ron code: `src/policy.cyr` did not change, and neither did `hashmap.cyr`
+or `regex.cyr` (byte-identical to 6.7.9). Two toolchain candidates remain, not
+separated. First, `vec_get`'s out-of-bounds abort moved out of line into
+`_vec_abort` (a cold path, but a smaller body). Second, 6.7.18's dead-code
+compaction re-laid out the binary; 2.1.12 measured ~30 ns of placement
+sensitivity on this bench. The handlers' new escaping is off `tron_check`'s
+path, which the flat `tron_check_allow` confirms. Recorded in
+`bench-history.csv`.
+
+### Verified
+
+- **Sibling-free, locked.** A copy of the working tree with no `lib/`:
+  `cyrius deps --locked` proves the lock. Every CI verb under `CYRIUS_LOCKED=1`
+  reproduces the local binary (675,640 B) and `dist/` byte-for-byte, runs all
+  426 assertions and the bench, and writes neither `lib/` nor the lock.
+- **Clean-room consumer** (local mode, tag 2.2.1 not yet on GitHub): **6 deps
+  resolved** (t-ron 2.2.1, libro 2.11.3, bote-core 3.8.0, sigil 3.13.15, patra
+  1.16.6, majra 2.13.0). It builds with 0 undefined and 0 duplicate diagnostics
+  and returns **`deny`**. Pinned at 6.7.2, it does the same.
+- **Every `ci.yml` gate run locally**: locked resolve, manifest completeness
+  (18 modules), build + ELF + smoke, capacity, the three suites, dist freshness,
+  sidecar validity (3/3: `regex net syscalls`, unchanged).
+- **All four examples** build with 0 undefined and 0 duplicate diagnostics and
+  pass on 6.7.18.
+- **Warnings**: the build and the main and safety suites print **none**. The
+  sigil static-array and large-static-data warnings are gone.
+- **Capacity** (`CYRIUS_STATS=1`, DCE): `fn_table` 5,751 / 131,072 (4 %),
+  `identifiers` 163,546 / 8,388,608 (2 %), `code_size` 153,000 / 67,108,864
+  (0.2 %). Binary 2,282,720 → **675,640 B (−1,607,080 B, −70.4 %)**. At 6.7.9
+  the dead code was NOPed in place ("compaction declined … the repair registry
+  cap"). At 6.7.18 it is removed ("1992807 bytes of dead code eliminated").
+  Live code went 148,775 → 153,000 B (+2.8 %, the handlers' escaping among
+  it).
+
+### Known — upstream / pre-existing, not changed here
+
+- **`syscall arity mismatch` at `tests/t-ron-crypto.tcyr:138`** — a raw x86_64
+  `syscall(39, 0)` getpid in a test.
+
 ## [2.2.0] — 2026-11-03 · cyrius 6.7.9 + libro 2.11.0 / bote-core 3.4.10 / sigil 3.13.11 — t-ron's four MCP tools register, and CI resolves `--locked`
 
 First release of the 2.2.x line. Toolchain **6.6.20 → 6.7.9**, and every
