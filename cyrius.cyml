@@ -4,7 +4,7 @@ version = "${file:VERSION}"
 description = "MCP security monitor — tool call auditing, rate limiting, injection detection, anomaly analysis"
 license = "GPL-3.0-only"
 language = "cyrius"
-cyrius = "6.6.6"
+cyrius = "6.6.20"
 repository = "https://github.com/MacCracken/t-ron"
 
 [build]
@@ -44,9 +44,6 @@ modules = [
 # here for the deps below rather than for src/ (bayan, fs, process, sync);
 # the include-order constraints are documented at the includes in
 # src/main.cyr.
-#
-# No comments inside the array: the parser takes any double-quoted token in
-# the array region as a module name, even one inside a comment.
 [deps]
 stdlib = [
     "string",
@@ -89,18 +86,38 @@ stdlib = [
 #    stdlib". CI's "Dist sidecar validity gate" checks each leaf against the
 #    toolchain stdlib.
 #
-# 2. `path` beats `tag` whenever the sibling checkout exists, and skips
-#    commit-pin verification: a local build compiles the sibling's working
-#    tree while CI clones the tag. Before a release, resolve and build from a
-#    sibling-free copy (`git archive HEAD` into an empty directory).
+# 2. No `path` line is committed. `path` beats `tag` and skips commit-pin
+#    verification, so with a sibling checkout present a local build compiles
+#    the sibling's working tree while CI clones the tag. To build against a
+#    sibling, add `path` locally and drop it before committing.
+#
+# The sections resolve in the order written, and `cyrius build` prepends them
+# to the compile unit in that order.
+
+# sigil, as the full dist/sigil.cyr bundle. Only the full bundle carries
+# verify_data(), which src/signing.cyr calls; libro's own deps.sigil asks for
+# thin sub-bundles (sigil-mldsa, sha256, sha_ni, hex) that lack it. This
+# section makes the full bundle t-ron's declared dependency rather than
+# whatever another dep's sidecar happens to pull in.
+#
+# Listed first: bote-core's sidecar names `sigil` as a stdlib leaf, and if
+# that resolves before this section, cyrius keeps the snapshot copy and prints
+# "refusing to overwrite stdlib leaf 'sigil'".
+#
+# Keep the tag on the sigil release the pinned cyrius folds into its stdlib
+# (the `# Version:` line of lib/sigil.cyr in the toolchain snapshot), so both
+# copies are the same bytes.
+[deps.sigil]
+git = "https://github.com/MacCracken/sigil.git"
+tag = "3.13.10"
+modules = ["dist/sigil.cyr"]
 
 # libro audit chain, as its single-file dist bundle rather than per-module
 # src/ pulls: libro's #derive(accessors) getters only exist when its modules
 # are preprocessed together in dist order.
 [deps.libro]
 git = "https://github.com/MacCracken/libro"
-path = "../libro"
-tag = "2.10.3"
+tag = "2.10.8"
 modules = ["dist/libro.cyr"]
 
 # bote MCP core, transport-free profile (`cyrius distlib core` in bote).
@@ -108,21 +125,5 @@ modules = ["dist/libro.cyr"]
 # take the full dist/bote.cyr. majra arrives through bote's own deps.majra.
 [deps.bote-core]
 git = "https://github.com/MacCracken/bote"
-path = "../bote"
-tag = "3.3.13"
+tag = "3.3.17"
 modules = ["dist/bote-core.cyr"]
-
-# sigil, as the full dist/sigil.cyr bundle. libro's own deps.sigil lists only
-# thin sub-bundles (sigil-mldsa, sha256, sha_ni, hex); this section overrides
-# it, so exactly one sigil is compiled. Without it the sub-bundles land
-# beside the stdlib copy and collide as duplicate definitions. Only the full
-# bundle carries verify_data(), which src/signing.cyr calls.
-#
-# Keep the tag on the sigil release the pinned cyrius folds into its stdlib
-# (the `# Version:` line of lib/sigil.cyr in the toolchain snapshot), so both
-# copies are the same bytes.
-[deps.sigil]
-git = "https://github.com/MacCracken/sigil.git"
-path = "../sigil"
-tag = "3.12.18"
-modules = ["dist/sigil.cyr"]

@@ -127,26 +127,38 @@ single-pass forward-reference resolution.
 `cyrius distlib` emits **`dist/t-ron.deps`** alongside the bundle: a
 sidecar listing the stdlib leaves the fold needs in scope. Since
 cyrius 6.5.x, `cyrius deps` reads that sidecar and resolves the whole
-tree itself — stdlib *and* t-ron's own named deps. A consumer
+tree itself — stdlib *and* t-ron's own named deps. Since 6.6.18 the
+sidecar holds exactly the leaves `distlib`'s compile-verify proves the
+bundle needs — `regex`, `net`, `syscalls` at 2.1.12, mirrored by a
+`# Requires` include block at the top of `dist/t-ron.cyr` — and the
+named deps' own `# Requires` blocks supply the rest. A consumer
 therefore declares only:
 
 ```toml
 [deps.t-ron]
 git = "https://github.com/MacCracken/t-ron.git"
-tag = "2.1.11"
+tag = "2.1.12"
 modules = ["dist/t-ron.cyr"]
 ```
 
-✅ **Re-verified at 2.1.11** (cyrius 6.6.6), not assumed: a
+✅ **Re-verified at 2.1.12** (cyrius 6.6.20), not assumed: a
 clean-room project declaring only the block above — with no sibling
 checkouts, so every transitive dep is cloned at its tag, and t-ron
 itself supplied through a `path` override because the tag did not
 exist yet — runs `cyrius deps` (**6 deps resolved, 0 errors**): t-ron,
 `libro`, `bote-core` and `sigil`, plus `majra` (via bote) and `patra`
-(via libro), with `sakshi` and the rest of the stdlib coming from the
-sidecar. It then compiles against `dist/t-ron.cyr` and executes,
-returning a correct `deny` verdict for `ark_install` from an
-unregistered agent.
+(via libro), each commit-pinned in the consumer's lock, with the
+stdlib coming from the sidecar and the deps' `# Requires` blocks. It
+then compiles against `dist/t-ron.cyr` and executes, returning a
+correct `deny` verdict for `ark_install` from an unregistered agent.
+
+⚠️ **The sidecar shrank from 29 leaves to 3 at 2.1.12.** Through 2.1.11
+it was a copy of t-ron's whole `[deps] stdlib`, so `cyrius deps`
+vendored and locked modules like `fs` or `args` for the consumer.
+It no longer does. A hand-written `include "lib/fs.cyr"` still
+compiles (the compiler falls back to the toolchain snapshot), but the
+file is not in your `lib/` or `cyrius.lock`. If your code calls a
+stdlib module directly, list it in your own `[deps] stdlib`.
 
 No `[deps] stdlib` list, and no `[deps.libro]` / `[deps.bote-core]` /
 `[deps.sigil]` blocks, are required. Add an explicit `[deps.*]` pin

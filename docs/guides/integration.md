@@ -1,8 +1,8 @@
 # Integration Guide
 
 Step-by-step walkthrough for embedding t-ron in a bote-based MCP
-service. **Current for t-ron 2.1.11** (cyrius 6.6.6 · libro 2.10.3 ·
-bote-core 3.3.13 · sigil 3.12.18).
+service. **Current for t-ron 2.1.12** (cyrius 6.6.20 · libro 2.10.8 ·
+bote-core 3.3.17 · sigil 3.13.10).
 
 > ⚠️ **Rewritten at 2.1.9.** Through 2.1.8 this guide still described
 > the 2.0.0 shape: a `cyrius.toml` manifest, cyrius 4.8.4, and
@@ -11,7 +11,7 @@ bote-core 3.3.13 · sigil 3.12.18).
 > `cyrius.cyml`, libro and bote ship single-file dist bundles, and
 > `json` / `base64` / `bigint` folded into `bayan` at the 2.1.6 carve.
 > The §1–§2 sample is **verified**: it was built and run against
-> t-ron 2.1.11 on cyrius 6.6.6, in a clean-room project, before being
+> t-ron 2.1.12 on cyrius 6.6.20, in a clean-room project, before being
 > written down. (Re-verifying it at 2.1.11 caught that its `if`
 > condition lacked the parentheses cyrius requires.) §3 is **not** —
 > see the warning there.
@@ -25,7 +25,7 @@ Add one block to your `cyrius.cyml`:
 name = "your-service"
 version = "0.1.0"
 language = "cyrius"
-cyrius = "6.6.6"
+cyrius = "6.6.20"
 
 [build]
 entry = "src/main.cyr"
@@ -33,7 +33,7 @@ output = "build/your-service"
 
 [deps.t-ron]
 git = "https://github.com/MacCracken/t-ron.git"
-tag = "2.1.11"
+tag = "2.1.12"
 modules = ["dist/t-ron.cyr"]
 ```
 
@@ -42,7 +42,10 @@ That is the whole dep declaration. `cyrius distlib` ships
 `cyrius deps` reads it to resolve the stdlib **and** t-ron's own named
 deps (libro, bote-core, sigil — and through them majra and patra). You do **not**
 need a `[deps] stdlib` array, and you do **not** need your own
-`[deps.libro]` / `[deps.bote-core]` / `[deps.sigil]` blocks.
+`[deps.libro]` / `[deps.bote-core]` / `[deps.sigil]` blocks. If your
+own code calls stdlib modules directly, list those in a `[deps] stdlib`
+of your own: since 2.1.12 t-ron's sidecar names only the three leaves
+its bundle needs (see [DEPS-PATTERN.md](../../DEPS-PATTERN.md)).
 
 Add an explicit `[deps.*]` pin only if your service calls that library
 directly and wants to control its version — and then pin the **same
@@ -95,7 +98,7 @@ include "lib/ct.cyr"
 include "lib/keccak.cyr"
 include "lib/random.cyr"
 
-# fs / process / sync precede libro — declared by its dist sidecar.
+# fs / process / sync precede libro (cyrius is single-pass).
 include "lib/fs.cyr"
 include "lib/process.cyr"
 include "lib/sync.cyr"
@@ -133,8 +136,8 @@ misconfiguration.
 
 ## 3. Construct the gate
 
-> ⚠️ **Not verified at 2.1.11 — this sample does not compile as
-> written.** cyrius rejects the multi-line string passed to
+> ⚠️ **Not verified — at 2.1.11 this sample did not compile as
+> written, and it was not re-tested at 2.1.12.** cyrius rejected the multi-line string passed to
 > `tron_load_policy` (`expected ')', got string`), and
 > `your_echo_handler` predates the bote 2.0 `fn h(args, claims)`
 > handler ABI. Build the policy string explicitly and give handlers

@@ -9,7 +9,7 @@ detection, anomaly analysis.
 - **Type**: Flat Cyrius library crate (consumed via
   `dist/t-ron.cyr` per `DEPS-PATTERN.md`).
 - **Language**: Cyrius (pin in `cyrius.cyml`,
-  `cyrius = "6.6.6"` as of 2.1.11). `cyrius.cyml
+  `cyrius = "6.6.20"` as of 2.1.12). `cyrius.cyml
   [package].cyrius` is the single source of truth — the legacy
   `.cyrius-toolchain` file was retired at 2.1.3. CI and release
   both read the pin from the manifest; there is no second place
@@ -37,11 +37,14 @@ modules = ["dist/t-ron.cyr"]
 ```
 
 Since cyrius 6.5.x that block is **sufficient on its own** — `cyrius
-deps` reads `dist/t-ron.deps` for the stdlib leaves (sakshi included)
-and resolves t-ron's named deps (libro / bote-core / sigil) plus theirs
-(majra via bote, patra via libro). Consumers no longer need a
-`[deps] stdlib` array. Re-verified end-to-end at 2.1.11 (cyrius 6.6.6)
-with a clean-room consumer.
+deps` reads `dist/t-ron.deps` for the stdlib leaves and resolves
+t-ron's named deps (libro / bote-core / sigil) plus theirs (majra via
+bote, patra via libro). Since 6.6.18 the sidecar lists only the leaves
+the bundle's compile-verify proves it needs (`regex`, `net`,
+`syscalls`); the named deps' own `# Requires` blocks bring the rest.
+Consumers need a `[deps] stdlib` array only for stdlib modules their
+own code calls. Re-verified end-to-end at 2.1.12 (cyrius 6.6.20) with a
+clean-room consumer.
 
 ### ⚠️ Dep-name ↔ module-basename rule (load-bearing)
 

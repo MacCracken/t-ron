@@ -16,6 +16,188 @@ top. Mirrors bote 2.7.0's flow.
 
 _(empty)_
 
+## [2.1.12] — 2026-11-03 · cyrius 6.6.20 + libro 2.10.8 / bote-core 3.3.17 / sigil 3.13.10 — no `path` lines, sigil resolves first, and a three-leaf sidecar
+
+Thirteenth patch of the **2.1.x modernization arc**. Toolchain **6.6.6 →
+6.6.20**, and every dependency moved to the release that matches it. **No
+t-ron source changed.** `dist/t-ron.cyr` differs from 2.1.11 in its version
+stamp and a new `# Requires` block. All **401 assertions** (t-ron 323 ·
+crypto 30 · safety 48) pass. `policy_check` is **~14 % slower**; the other four
+benches are flat. Both are measured and attributed below.
+
+### Changed — toolchain and dependency pins
+
+| dep | was | now |
+|---|---|---|
+| cyrius | 6.6.6 | **6.6.20** |
+| libro | 2.10.3 | **2.10.8** |
+| bote-core | 3.3.13 | **3.3.17** |
+| sigil | 3.12.18 | **3.13.10** |
+| majra | 2.9.1 *(transitive)* | **2.9.3** *(transitive, via bote-core)* |
+| patra | 1.14.3 *(transitive)* | **1.15.2** *(transitive, via libro)* |
+
+libro 2.10.8, bote 3.3.17 and majra 2.9.3 are the releases that pin cyrius
+6.6.20. sigil has no 6.6.20-pinned release. 3.13.10 is the one 6.6.20 folds
+into its stdlib, and patra 1.15.2 is the patra it folds. So the git pins and
+the snapshot agree byte-for-byte: `cmp` shows the fold's `lib/sigil.cyr` is
+identical to sigil 3.13.10's `dist/sigil.cyr`. The set is also self-consistent:
+bote 3.3.17 pins libro 2.10.8 and majra 2.9.3, and libro 2.10.8 pins sigil
+3.13.10 and patra 1.15.2.
+
+### Changed — no `path` lines in `cyrius.cyml`
+
+`path = "../libro"`, `"../bote"` and `"../sigil"` are gone. Below cyrius 6.7.6
+`path` beats `tag` and skips commit-pin verification. On the release machine the
+sibling checkouts had moved on to libro 2.11.3, bote 3.8.1 and sigil 3.13.15,
+all pinned to cyrius 6.7.x. A local resolve would therefore have compiled those
+working trees, not the tags CI clones. libro 2.10.5 and bote 3.3.16 made the
+same change for the same reason. Rule 2 above the git deps now says a `path`
+line is never committed, and the local build is now the CI build; the
+sibling-free reproduction below is byte-identical.
+
+### Changed — `[deps.sigil]` resolves first
+
+At 6.6.20, bote-core 3.3.17's sidecar names `sigil` as a stdlib leaf. With
+`[deps.sigil]` listed after bote-core (as at 2.1.11), that leaf claimed
+`lib/sigil.cyr` first, and every command printed:
+
+```
+warning: refusing to overwrite stdlib leaf 'sigil' -- a dependency resolves a package of the same name.
+  kept (stdlib snapshot): lib/sigil.cyr
+  skipped (dep artifact): ~/.cyrius/deps/sigil/3.13.10/dist/sigil.cyr
+```
+
+This is the same shape as the majra warning 2.1.11 removed. The two copies are
+the same bytes, so nothing compiled differently, but the pin t-ron declared was
+not the one that resolved. The section now comes first, which clears the warning
+and also matches `src/main.cyr`'s include order (sigil → libro → bote-core).
+The reorder is **perf-neutral**: in an interleaved A/B (sigil first vs. last,
+three rounds) all five benches are within noise. The binaries are the same size
+with different bytes, because the compile order changed.
+
+The section's comment is rewritten with its current reason. 2.1.11 said that
+without the section, libro's thin sigil sub-bundles compile beside the full copy
+(233 duplicate definitions). **That no longer happens at 6.6.20.** Probed with
+the section removed, the build is clean: 0 duplicates, and the thin modules are
+reported "not vendored". But that is only because bote-core's sidecar happens to
+name `sigil`, and bote 3.3.17's own CHANGELOG calls that line an artifact no core
+module uses. `src/signing.cyr` needs `verify_data()`, which only the full bundle
+carries, so the section stays. That way t-ron's crypto does not depend on another
+package's sidecar.
+
+### Changed — `cyrius.cyml` drops the "no comments inside the array" rule
+
+cyrius 6.6.17 reads the manifest with a single reader that skips comments (as
+libro 2.10.7 and bote 3.3.17 recorded). Checked here rather than inherited: a
+comment holding a quoted `"bogusmod"` and a stray `]`, placed mid-`stdlib`, was
+ignored, and the entry after it was still read.
+
+### Changed — `dist/t-ron.deps` drops from 29 leaves to 3, and the bundle opens with `# Requires`
+
+Since cyrius 6.6.18, `distlib` writes only the stdlib leaves its compile-verify
+proves the bundle needs: **`regex`, `net`, `syscalls`**. Everything else arrives
+through the named deps' own `# Requires` blocks. `dist/t-ron.cyr` now opens with
+the matching include block. The sidecar validity gate resolves all 3 leaves
+against the 6.6.20 stdlib.
+
+⚠️ **Consumer impact.** A consumer that calls a stdlib module from its own code,
+and got it only through t-ron's old 29-leaf sidecar, may need to list it in its
+own `[deps] stdlib`. The integration guide's sample is unaffected. It still
+resolves 6 deps, builds and returns `deny` (below), even though its hand-written
+`include "lib/args.cyr"` / `assert` / `fs` are no longer vendored into `lib/`;
+the compiler finds them in the toolchain snapshot.
+
+### Changed — `cyrius.lock`
+
+- **76 → 60 entries.** The deps' sidecars shrank (libro 27 leaves → 1, bote-core
+  8 → 4), so `async` ×4, `tls_*` ×8, `sandhi`, `bench`, `test`, `dynlib` and
+  `fdlopen` are no longer vendored. `poison` is new (6.6.18's `freelist`
+  includes it). 54 of the 59 surviving hashes moved with the toolchain and deps.
+- ⭐ **The lock carries commit pins again**: bote-core `cd7dd95`, libro
+  `53401e7`, majra `ddf26f1`, patra `2bc1925`, sigil `6d065da`. Each was checked
+  against its remote tag with `git ls-remote`. 2.1.11's committed lock had none,
+  for two reasons: `path` overrides skip pinning, and 6.6.6 dropped inherited
+  pins. Both are gone (the `path` lines above; 6.6.20's CYRIUS-2026-0030 fix
+  merges inherited pins). The 2.1.11 note "the committed lock carries no
+  `commit` pins" no longer applies.
+- `tests/t-ron.bcyr` includes `lib/bench.cyr`, which is no longer vendored. It
+  resolves from the toolchain snapshot, so `cyrius bench` and CI's bench step run
+  unchanged.
+
+### Performance
+
+Same session, same machine, three interleaved rounds, mean. The 2.1.11 column
+is the committed tree built sibling-free at 6.6.6. It reproduces the 2.1.11
+binary exactly (2,664,672 B).
+
+| bench | 2.1.11 | 2.1.12 | Δ |
+|---|---|---|---|
+| `policy_check` | 289 ns | 329 ns | **+13.7 %** |
+| `scanner_clean_text` | 3.556 µs | 3.544 µs | −0.3 % |
+| `scanner_sql_detect` | 1.132 µs | 1.133 µs | +0.1 % |
+| `audit_log` | 10.487 µs | 10.375 µs | −1.1 % |
+| `tron_check_allow` | 17.099 µs | 17.202 µs | +0.6 % |
+
+⭐ **Attributed, not inferred.** `policy_check` calls nothing from libro, bote
+or sigil, only stdlib `map_has` / `map_get`, `vec_get` and `glob_match`.
+`glob_match` is unchanged and `hashmap.cyr` was rewritten (6.6.20 counts
+tombstones toward the rebuild). Three interleaved rounds, each binary run by
+hand:
+
+| `policy_check` build | mean |
+|---|---|
+| `cyrius build` of `tests/t-ron.bcyr` (what `cyrius bench` runs) | ~330 ns |
+| same source, hand-assembled prepend, compiled by 6.6.20 `cycc` | 298 ns |
+| as above, with 6.6.6's `hashmap.cyr` + `hashseed.cyr` swapped in | 289 ns |
+
+- **~9 ns comes from 6.6.20's `hashmap.cyr`.** Swapping in the 6.6.6 file
+  restores the 2.1.11 number exactly.
+- **~30 ns is code placement.** The `cyrius build` and hand-assembled binaries
+  compile the same source to the same size (2,209,864 B) with different bytes.
+  Run directly, outside `cyrius bench`, they keep their gap, which rules out the
+  runner and environment size (a 0–4 KB environment pad moves nothing).
+
+Neither part is t-ron code. `policy_check` does two hash lookups per call
+(`map_has`, then `map_get`) where one would do, which doubles its exposure to
+both; that is noted, not changed in this patch. Recorded in
+`bench-history.csv`.
+
+### Verified
+
+- **Sibling-free reproduction.** A copy of the working tree with no siblings
+  beside it, resolved so every dep cloned at its tag. Byte-identical to the
+  local build: the binary (2,241,072 B), `dist/t-ron.cyr`, `dist/t-ron.deps` and
+  `cyrius.lock`.
+- **Clean-room consumer.** A project declaring *only* `[deps.t-ron]` and running
+  the integration guide's §1–§2 sample: `cyrius deps` → **6 deps resolved**
+  (t-ron 2.1.12, libro 2.10.8, bote-core 3.3.17, sigil 3.13.10, patra 1.15.2,
+  majra 2.9.3), five commit-pinned. It builds with 0 undefined and 0 duplicate
+  diagnostics and returns **`deny`** for `ark_install` from an unregistered agent.
+- **Every `ci.yml` gate run locally**: dep verify (60/60), manifest completeness
+  (18 modules), build + ELF + smoke, capacity, the three suites, dist freshness,
+  sidecar validity (3/3).
+- **All four examples** build with 0 undefined and 0 duplicate diagnostics and
+  pass on 6.6.20.
+- **Capacity** (`CYRIUS_STATS=1`, DCE): `fn_table` 4,987 / 131,072 (4 %),
+  `identifiers` 142,314 / 8,388,608 (2 %), `code_size` 1,747,728 / 67,108,864
+  (3 %). Binary 2,664,672 → **2,241,072 B (−423,600 B, −15.9 %)**; `fn_table`
+  5,955 → 4,987. **The shrink comes from the toolchain.** The prepend list is the
+  same 33 modules, and every vendored bundle *grew* in source (sigil 1,168 →
+  1,264 functions).
+
+### Known — upstream, not t-ron defects
+
+- **`duplicate fn 'uname_release'` is gone.** sigil 3.13.10 dropped its copy, the
+  fix 2.1.11 said belonged upstream.
+- **sigil's 256 KB crypto scratch array gets static storage.** Still a
+  `warning:`, now at `lib/sigil.cyr:28046`. Same code, which sigil indexes per
+  thread bank.
+- **New `note:` on every build**: `compaction declined on x86_64 ELF: more than
+  4096 dead-code runs, the repair registry cap`. DCE still NOPs the 4,654
+  unreachable functions; the bytes stay in the file.
+- **`syscall arity mismatch` at `tests/t-ron-crypto.tcyr:138`.** Pre-existing: a
+  raw x86_64 `syscall(39, 0)` getpid in a test.
+
 ## [2.1.11] — 2026-09-23 · cyrius 6.6.6 + libro 2.10.3 / bote-core 3.3.13 / sigil 3.12.18 — `cyrius.cyml` back to a manifest, and `[deps.majra]` retires
 
 Twelfth patch of the **2.1.x modernization arc**. Toolchain **6.6.2 → 6.6.6**,
