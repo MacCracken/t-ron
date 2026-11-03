@@ -12,6 +12,9 @@ permissions:
   contents: write
 
 env:
+  # Same locked resolution as ci.yml: the release builds what
+  # cyrius.lock records, from build/locked-deps/.
+  CYRIUS_LOCKED: "1"
   CYRIUS_NO_WARN_SHADOW_LIB: "1"
   CYRIUS_DCE: "1"
 
@@ -54,16 +57,8 @@ jobs:
             CYRIUS_VERSION="$CYRIUS_VERSION" sh
           echo "$HOME/.cyrius/bin" >> "$GITHUB_PATH"
 
-      - name: Resolve deps
-        run: cyrius deps
-
-      - name: Verify dep hashes
-        run: |
-          if [ -f cyrius.lock ]; then
-            cyrius deps --verify
-          else
-            echo "::warning::cyrius.lock not committed — skipping hash verification"
-          fi
+      - name: Locked resolve (cyrius.lock is exactly what the tags resolve)
+        run: cyrius deps --locked
 
       - name: Build
         run: |

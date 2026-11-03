@@ -16,6 +16,184 @@ top. Mirrors bote 2.7.0's flow.
 
 _(empty)_
 
+## [2.2.0] — 2026-11-03 · cyrius 6.7.9 + libro 2.11.0 / bote-core 3.4.10 / sigil 3.13.11 — t-ron's four MCP tools register, and CI resolves `--locked`
+
+First release of the 2.2.x line. Toolchain **6.6.20 → 6.7.9**, and every
+dependency moved to the release that matches it. bote 3.4.x changes what a
+client of a SecurityGate-wrapped dispatcher sees on the wire (listed below),
+and it refused t-ron's own tool definitions, which forced **one source fix**
+(`src/tools.cyr`). `dispatcher_dispatch`'s signature, the 2.0 handler ABI and
+`security_gate_*` are unchanged. **410 assertions** (t-ron 332 · crypto 30 ·
+safety 48) pass, 9 of them new. Benches are within ±3 %.
+
+### Fixed — t-ron's four MCP tools were never registered correctly
+
+`tron_tool_defs()` passed `str_from("object")` as each schema's type, and
+`Str` values for every property name, property schema and `required` entry.
+bote's `ToolSchema` stores C strings, so it read the `Str` header bytes.
+bote 3.4.8's CHANGELOG names t-ron for this. Through bote 3.4.7 the four tools
+(`tron_status`, `tron_risk`, `tron_audit`, `tron_policy`) were listed with
+garbage bytes in `tools/list`, and calls failed validation on a garbage
+`required` key. From 3.4.8, `registry_register` refuses them:
+
+```
+[ERROR] tool registration refused tool=tron_status reason="inputSchema type must be \"object\""
+```
+
+All 14 values are now C-string literals.
+
+**Why 401 passing assertions never caught it.** `test_tron_tool_defs` only
+counted the definitions. The gate harness `_make_gate` ignored
+`registry_register`'s return value, and registered its own `echo` tool with
+the same `str_from("object")`, which is what failed
+`test_gate_allow_with_policy` at 6.7.9. The harness is fixed, and
+`test_tron_tool_defs` gains **9 assertions**: each definition passes
+`registry_check_tool_def`, each registers, and the registry then holds 4 tools.
+**Mutation-checked**: against the old `src/tools.cyr` those 9 fail and the
+other 323 pass. The integration guide's §3 snippet had the same call and is
+corrected.
+
+### Changed — toolchain and dependency pins
+
+| dep | was | now |
+|---|---|---|
+| cyrius | 6.6.20 | **6.7.9** |
+| libro | 2.10.8 | **2.11.0** |
+| bote-core | 3.3.17 | **3.4.10** |
+| sigil | 3.13.10 | **3.13.11** |
+| majra | 2.9.3 *(transitive)* | **2.12.0** *(transitive, via bote-core)* |
+| patra | 1.15.2 *(transitive)* | **1.16.0** *(transitive, via libro)* |
+
+libro 2.11.0 is the only libro pinned to 6.7.9. bote 3.4.0–3.4.10 all pin
+6.7.9, and 3.4.10 is the latest; it pins libro 2.11.0 and majra 2.12.0. patra
+1.16.0 is both libro's pin and the 6.7.9 fold.
+
+**sigil is 3.13.11, the 6.7.9 fold, not 3.13.12.** The manifest rule keeps
+`[deps.sigil]` on the release the toolchain folds, and `cmp` shows the fold is
+byte-identical to 3.13.11's `dist/sigil.cyr`. bote compiles that same fold.
+libro 2.11.0 asks for 3.13.12, and every resolve says so in one line:
+
+```
+note: sigil 3.13.12 (wanted by libro) not used; 3.13.11 (the root) resolved first
+```
+
+3.13.12 is a pin move plus one LOW fix in `hash_file_into`, which t-ron does
+not call.
+
+⚠️ **Consumer impact: cyrius ≥ 6.7.2.** bote 3.4.x's bundles need it (bote
+3.4.9 measured 6.7.0 and 6.7.1 failing). Measured here with the clean-room
+consumer: pinned at 6.6.20 it fails to build (`lib/alloc.cyr:120:25: undefined
+variable '_threads_active'`); at 6.7.2 it builds and returns `deny`.
+
+### Changed — wire behaviour, inherited from bote 3.4.x
+
+A client talking to a dispatcher behind `security_gate_dispatch` sees these.
+t-ron passes `dispatcher_dispatch`'s result through without re-wrapping it,
+and its handlers already return CallToolResults (`_tron_result_text`). So
+nothing here needs a t-ron change, but clients may:
+
+- `tools/call` naming an unknown tool: error `-32601` → **`-32602`** (3.4.5).
+- Arguments that fail the tool's `inputSchema`: error `-32602` → a **result
+  with `isError: true`** naming the argument (3.4.5, SEP-1303). Types, enums and
+  bounds are enforced from 3.4.8, where only `required` was before.
+- A handler that returns bare JSON is wrapped in a text block, and one that
+  returns bytes that are not JSON becomes a failed call (3.4.8).
+- A result with `isError: true` is audited as a failure (3.4.8).
+- Invalid JSON is `-32700`, and a bad `id` / `params` / `cursor` is refused
+  (3.4.5).
+
+t-ron's own denials (`security: <reason> [<code>]`) are unchanged.
+
+### Changed — CI and release resolve `--locked` (the roadmap note recorded by cyrius 6.7.6)
+
+`ci.yml` and `release.yml` replace `cyrius deps` + `cyrius deps --verify` with
+one `cyrius deps --locked`, and set `CYRIUS_LOCKED=1` job-wide. Every verb then
+compiles the resolution the lock proves, from `build/locked-deps/`; nothing
+writes `lib/` or `cyrius.lock`. The note's other items were already done at
+2.1.12 (no `path` lines, commit pins in the lock).
+
+⭐ **The old guard had a hole, and the new one closes it.** Tested on a
+sibling-free copy with no `lib/`, as on a runner:
+
+| committed `cyrius.lock` | `cyrius deps` + `--verify` | `cyrius deps --locked` |
+|---|---|---|
+| as committed | pass | pass, nothing written |
+| one hash flipped (`lib/hashmap.cyr`) | fail (6.7.9 refuses to re-lock a changed leaf) | fail, naming both hashes |
+| one entry deleted (`lib/poison.cyr`) | **pass**: `deps` re-added the line, `--verify` checked the rewrite (60/60) | **fail**: "the tags resolve it and cyrius.lock has no line for it" |
+
+Every CI verb was then run under `CYRIUS_LOCKED=1` on that copy. The build is
+byte-identical to the local one, all 410 assertions pass, `distlib` output is
+identical, the bench runs, and `lib/` is never created.
+
+### Changed — `cyrius.lock`
+
+- The same 60 entries; 39 hashes moved with the toolchain and deps.
+- Five commit pins: bote-core `deeb32f`, libro `53f00ce`, majra `e7e244b`,
+  patra `00cf574`, sigil `fb42c8a`. Each matches its remote tag
+  (`git ls-remote`).
+- Regenerated from scratch rather than updated. Since 6.6.20, cyrius keeps an
+  old tag's commit pin after a tag bump, so an in-place resolve left all five
+  2.1.12 pins beside the new ones (10 lines). The file hashes were identical
+  either way.
+
+### Performance
+
+Same session, three interleaved rounds, mean. The 2.1.12 column is the
+committed tree built sibling-free at 6.6.20. It reproduces the 2.1.12 binary
+exactly (2,241,072 B).
+
+| bench | 2.1.12 | 2.2.0 | Δ |
+|---|---|---|---|
+| `policy_check` | 324.7 ns | 333.7 ns | +2.8 % |
+| `scanner_clean_text` | 3.516 µs | 3.527 µs | +0.3 % |
+| `scanner_sql_detect` | 1.123 µs | 1.109 µs | −1.2 % |
+| `audit_log` | 10.299 µs | 10.281 µs | −0.2 % |
+| `tron_check_allow` | 17.039 µs | 16.919 µs | −0.7 % |
+
+`policy_check` is slower in all three rounds (+7 to +12 ns). The stdlib source
+on its path did not change as code. `hashmap.cyr` and `vec.cyr` differ from
+6.6.20 only in comments, and `regex.cyr` only names a constant inside the regex
+compiler, not `glob_match`. So the delta is the 6.7.9 compiler's codegen or
+placement, inside the ~30 ns placement effect 2.1.12 measured. Recorded in
+`bench-history.csv`.
+
+### Verified
+
+- **Sibling-free, locked.** A copy of the working tree with no `lib/`:
+  `cyrius deps --locked` proves the committed lock is exactly what the tags
+  resolve. Every CI verb under `CYRIUS_LOCKED=1` reproduces the local binary
+  (2,282,720 B) and `dist/` byte-for-byte.
+- **Clean-room consumer.** A project declaring only `[deps.t-ron]`, running the
+  integration guide's §1–§2 sample: **6 deps resolved** (t-ron 2.2.0, libro
+  2.11.0, bote-core 3.4.10, sigil 3.13.11, patra 1.16.0, majra 2.12.0). It
+  builds with 0 undefined and 0 duplicate diagnostics and returns **`deny`**.
+  From 6.7.6 a `path` is read only in local mode, so the probe ran with
+  `CYRIUS_LOCAL=t-ron`: tag 2.2.0 does not exist on GitHub yet.
+- **Every `ci.yml` gate run locally**: locked resolve, manifest completeness
+  (18 modules), build + ELF + smoke, capacity, the three suites, dist
+  freshness, sidecar validity (3/3: `regex net syscalls`, unchanged).
+- **All four examples** build with 0 undefined and 0 duplicate diagnostics and
+  pass on 6.7.9.
+- **Capacity** (`CYRIUS_STATS=1`, DCE): `fn_table` 5,071 / 131,072 (4 %),
+  `identifiers` 144,370 / 8,388,608 (2 %), `code_size` 1,788,752 / 67,108,864
+  (3 %). Binary 2,241,072 → **2,282,720 B (+41,648 B, +1.9 %)**.
+
+### Known — t-ron, not fixed in this release
+
+- **`tron_risk` and `tron_audit` build their JSON by concatenation, without
+  escaping.** An `agent_id` (or a recorded tool name) holding `"` or `\`
+  produces invalid JSON. Under bote 3.4.8 that becomes an `isError` result
+  instead of a malformed reply. The defect predates this release.
+
+### Known — upstream, not t-ron defects
+
+- **sigil's 256 KB crypto scratch array gets static storage** — a `warning:`,
+  now at `lib/sigil.cyr:28103`.
+- **`compaction declined on x86_64 ELF: more than 4096 dead-code runs`** —
+  informational. DCE still NOPs the 4,738 unreachable functions.
+- **`syscall arity mismatch` at `tests/t-ron-crypto.tcyr:138`.** Pre-existing:
+  a raw x86_64 `syscall(39, 0)` getpid in a test.
+
 ## [2.1.12] — 2026-11-03 · cyrius 6.6.20 + libro 2.10.8 / bote-core 3.3.17 / sigil 3.13.10 — no `path` lines, sigil resolves first, and a three-leaf sidecar
 
 Thirteenth patch of the **2.1.x modernization arc**. Toolchain **6.6.6 →

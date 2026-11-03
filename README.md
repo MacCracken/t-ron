@@ -4,11 +4,11 @@
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 [![Language: Cyrius](https://img.shields.io/badge/Language-Cyrius-brightgreen.svg)](https://github.com/MacCracken/cyrius)
-[![Version: 2.1.12](https://img.shields.io/badge/Version-2.1.12-informational.svg)](VERSION)
+[![Version: 2.2.0](https://img.shields.io/badge/Version-2.2.0-informational.svg)](VERSION)
 
 T-Ron is a [Cyrius](https://github.com/MacCracken/cyrius) security-middleware module set that sits between [bote](https://github.com/MacCracken/bote) (MCP protocol layer) and tool handlers, enforcing per-agent permissions, rate limiting, payload scanning, anomaly detection, and auditing every verdict to a tamper-proof [libro](https://github.com/MacCracken/libro) hash chain. Named after Tron, the security program that fights the Master Control Program.
 
-> **2.1.12 — cyrius 6.6.20, libro 2.10.8, bote-core 3.3.17, sigil 3.13.10.** Toolchain and dependency refresh with no t-ron source change. `cyrius.cyml` no longer commits `path` lines, so a local build compiles the same tags CI does, and `cyrius.lock` carries commit pins again. `dist/t-ron.deps` drops from 29 stdlib leaves to the 3 the bundle needs, and the binary is 16 % smaller (2.66 → 2.24 MB). `policy_check` is ~14 % slower (289 → 329 ns), attributed to the 6.6.20 stdlib hashmap and code placement, not to t-ron code. Re-verified with a clean-room consumer that declares only `[deps.t-ron]`. See [CHANGELOG.md](CHANGELOG.md) and [`docs/development/roadmap.md`](docs/development/roadmap.md).
+> **2.2.0 — cyrius 6.7.9, libro 2.11.0, bote-core 3.4.10, sigil 3.13.11.** bote 3.4.8 now refuses malformed tool definitions, and it refused t-ron's own four MCP tools, which had always passed `Str` values where bote stores C strings (on older bote they were listed with garbage bytes). Fixed, with a test that would have caught it. CI and the release now resolve with `cyrius deps --locked`, which catches a committed lock missing an entry; the old `deps` + `--verify` pair passed one. Clients of a SecurityGate-wrapped server see bote 3.4.x's spec-conformance changes (e.g. unknown tool `-32601` → `-32602`, schema violations as `isError` results). Benches within ±3 %. See [CHANGELOG.md](CHANGELOG.md).
 >
 > **Note — audit-chain hashes changed upstream.** libro 2.8.11 alters the entry-hash preimage, so a chain written by libro ≤ 2.8.10 will not verify against 2.8.12; there is no migration path, because the old preimage was unsound. **No known deployment is affected** — t-ron has no production consumer with a live chain as of 2.1.9, which is why this landed as a routine patch. If you are carrying a chain from an older build, re-export and re-anchor before upgrading.
 
@@ -18,20 +18,20 @@ Same t-ron pipeline, two implementations. Full methodology in
 [`docs/benchmarks-rust-v-cyrius.md`](docs/benchmarks-rust-v-cyrius.md).
 
 ⚠️ **The Rust and Cyrius-2.0.0 columns were measured same-box,
-same-day; the 2.1.12 column was not** — it is this box on 2026-11-03.
+same-day; the 2.2.0 column was not** — it is this box on 2026-11-03.
 Treat the `Δ vs Rust` column as an order-of-magnitude read, not a
 controlled comparison.
 
-| | Rust 0.90.0 | Cyrius 2.0.0 (4.8.4) | Cyrius 2.1.12 (6.6.20) | Δ vs Rust |
+| | Rust 0.90.0 | Cyrius 2.0.0 (4.8.4) | Cyrius 2.2.0 (6.7.9) | Δ vs Rust |
 |---|---:|---:|---:|---:|
-| **Binary (what ships)** | 2.59 MB rlib + 193 MB dep closure | 375 KB static ELF | 2.24 MB static ELF | ~87× smaller |
+| **Binary (what ships)** | 2.59 MB rlib + 193 MB dep closure | 375 KB static ELF | 2.28 MB static ELF | ~86× smaller |
 | **Source LOC** (`src/`) | 6 611 | 4 546 | 4 722 | −29 % |
 | External runtime deps | tokio, serde, dashmap, regex, chrono, uuid, ed25519-dalek, chacha20poly1305, thiserror, libro, bote … | libro + bote + sigil (all Cyrius) | libro + bote-core + sigil (all Cyrius) | — |
-| `policy_check` | 38 ns | 719 ns | **329 ns** | 9× slower |
-| `tron_check` (full pipeline) | 2.4 µs | 52 µs | **17.2 µs** | 7× slower (was 22×) |
-| Throughput per thread | ~ 415 k checks/sec | ~ 19 k checks/sec | **~ 58 k checks/sec** | Still far above real-world MCP load |
+| `policy_check` | 38 ns | 719 ns | **334 ns** | 9× slower |
+| `tron_check` (full pipeline) | 2.4 µs | 52 µs | **16.9 µs** | 7× slower (was 22×) |
+| Throughput per thread | ~ 415 k checks/sec | ~ 19 k checks/sec | **~ 59 k checks/sec** | Still far above real-world MCP load |
 
-⚠️ **The binary grew 1.12 MB (2.1.0) → 2.24 MB, and that is a
+⚠️ **The binary grew 1.12 MB (2.1.0) → 2.28 MB, and that is a
 deliberate trade, not a regression.** Two causes: the 6.x stdlib
 snapshot is larger, and t-ron pins the **full** `dist/sigil.cyr`
 bundle rather than inheriting libro's thin sigil sub-bundles —
@@ -127,8 +127,8 @@ Build and run:
 
 ```sh
 cyrius deps                              # resolve deps from cyrius.cyml
-cyrius build src/main.cyr build/t-ron    # compile (2.93 MB static x86_64 ELF)
-cyrius test tests/t-ron.tcyr             # 323 assertions
+cyrius build src/main.cyr build/t-ron    # compile (2.28 MB static x86_64 ELF)
+cyrius test tests/t-ron.tcyr             # 332 assertions
 cyrius test tests/t-ron-crypto.tcyr      # 30 assertions (signal + crypto + export)
 cyrius test tests/t-ron-safety.tcyr      # 48 assertions (safety engine)
 cyrius bench tests/t-ron.bcyr            # 5 pipeline benchmarks
@@ -187,26 +187,26 @@ bote.
 
 ## Benchmarks
 
-Cyrius 6.6.20, x86_64, 2026-11-03 (see
+Cyrius 6.7.9, x86_64, 2026-11-03 (see
 [`bench-history.csv`](bench-history.csv) for full history and
 [`docs/benchmarks-rust-v-cyrius.md`](docs/benchmarks-rust-v-cyrius.md)
 for the side-by-side):
 
 | Operation | Avg | Min | Iters |
 |---|---|---|---|
-| `policy_check` | **328 ns** | 323 ns | 100 000 |
-| `scanner_clean_text` | 3.53 µs | 3.45 µs | 100 000 |
-| `scanner_sql_detect` | 1.13 µs | 1.11 µs | 100 000 |
-| `audit_log` (ring buffer + libro chain + SHA-256) | 10.4 µs | 10.1 µs | 1 000 |
-| `tron_check_allow` (full pipeline) | **17.2 µs** | 15.9 µs | 1 000 |
+| `policy_check` | **327 ns** | 322 ns | 100 000 |
+| `scanner_clean_text` | 3.49 µs | 3.42 µs | 100 000 |
+| `scanner_sql_detect` | 1.10 µs | 1.08 µs | 100 000 |
+| `audit_log` (ring buffer + libro chain + SHA-256) | 10.2 µs | 10.1 µs | 1 000 |
+| `tron_check_allow` (full pipeline) | **16.8 µs** | 15.4 µs | 1 000 |
 
-Measured against a **same-session** 2.1.11 baseline (the previous
+Measured against a **same-session** 2.1.12 baseline (the previous
 stack built sibling-free and re-benchmarked on this box, three
-interleaved rounds each): `policy_check` **+13.7 %** (289 → 329 ns);
-the other four rows are within ±1.1 %. A file-swap A/B puts ~9 ns of
-that on cyrius 6.6.20's stdlib `hashmap.cyr` and ~30 ns on code
-placement (same source, same size, different bytes) — see the 2.1.12
-CHANGELOG entry.
+interleaved rounds each): every row within ±3 %. `policy_check` is
+the one that moved, +2.8 % (325 → 334 ns), with its stdlib source
+unchanged as code, so it is the 6.7.9 compiler. At 2.1.12 it had
+moved +13.7 %, ~9 ns from cyrius 6.6.20's `hashmap.cyr` and ~30 ns
+from code placement — see those CHANGELOG entries.
 
 ⚠️ Do not compare these absolutes against rows recorded on other
 dates — this box's speed drifts between sessions, so only
@@ -239,11 +239,11 @@ the full roadmap. Highlights:
 
 | Source | Relevance | Location |
 |---|---|---|
-| [bote](https://github.com/MacCracken/bote) | MCP protocol layer — t-ron wraps its Dispatcher via SecurityGate | `../bote` (tag 3.3.17, `dist/bote-core.cyr`) |
-| [libro](https://github.com/MacCracken/libro) | Cryptographic audit chain — t-ron writes every verdict to libro | `../libro` (tag 2.10.8) |
-| [cyrius](https://github.com/MacCracken/cyrius) | Language toolchain | 6.6.20 |
+| [bote](https://github.com/MacCracken/bote) | MCP protocol layer — t-ron wraps its Dispatcher via SecurityGate | `../bote` (tag 3.4.10, `dist/bote-core.cyr`) |
+| [libro](https://github.com/MacCracken/libro) | Cryptographic audit chain — t-ron writes every verdict to libro | `../libro` (tag 2.11.0) |
+| [cyrius](https://github.com/MacCracken/cyrius) | Language toolchain | 6.7.9 |
 | [hoosh](https://github.com/MacCracken/hoosh) | LLM-assisted prompt injection detection | `../hoosh` (HTTP API, tag 2.0.0) |
-| [sigil](https://github.com/MacCracken/sigil) | Ed25519 + SHA-256 primitives — first-party pin since 2.1.8 | `../sigil` (tag 3.13.10, `dist/sigil.cyr`) |
+| [sigil](https://github.com/MacCracken/sigil) | Ed25519 + SHA-256 primitives — first-party pin since 2.1.8 | `../sigil` (tag 3.13.11, `dist/sigil.cyr`) |
 | [SecureYeoman](https://github.com/MacCracken/SecureYeoman) | T.Ron personality consumes query API and MCP tools | `../SecureYeoman` |
 
 ## License

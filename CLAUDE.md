@@ -9,7 +9,7 @@ detection, anomaly analysis.
 - **Type**: Flat Cyrius library crate (consumed via
   `dist/t-ron.cyr` per `DEPS-PATTERN.md`).
 - **Language**: Cyrius (pin in `cyrius.cyml`,
-  `cyrius = "6.6.20"` as of 2.1.12). `cyrius.cyml
+  `cyrius = "6.7.9"` as of 2.2.0). `cyrius.cyml
   [package].cyrius` is the single source of truth — the legacy
   `.cyrius-toolchain` file was retired at 2.1.3. CI and release
   both read the pin from the manifest; there is no second place
@@ -43,7 +43,7 @@ bote, patra via libro). Since 6.6.18 the sidecar lists only the leaves
 the bundle's compile-verify proves it needs (`regex`, `net`,
 `syscalls`); the named deps' own `# Requires` blocks bring the rest.
 Consumers need a `[deps] stdlib` array only for stdlib modules their
-own code calls. Re-verified end-to-end at 2.1.12 (cyrius 6.6.20) with a
+own code calls. Re-verified end-to-end at 2.2.0 (cyrius 6.7.9) with a
 clean-room consumer.
 
 ### ⚠️ Dep-name ↔ module-basename rule (load-bearing)
@@ -79,7 +79,8 @@ intelligence.
    `cyrius test tests/t-ron.tcyr`, `-crypto.tcyr`, `-safety.tcyr`;
    `./scripts/bench-history.sh`.
 2. Cleanliness check:
-   - `cyrius deps --verify` (lockfile hash match)
+   - `cyrius deps --locked` (the tags resolve to exactly the committed
+     `cyrius.lock`; writes nothing — what CI and the release run)
    - `cyrius build src/main.cyr build/t-ron` (clean compile under
      `CYRIUS_DCE=1`)
    - `CYRIUS_STATS=1 cyrius build ...` (capacity meter — fn_table
@@ -136,7 +137,7 @@ intelligence.
 - **Never skip benchmarks.** Numbers don't lie. The CSV history
   is the proof.
 - **Tests + benchmarks are the way.** Minimum 80 % coverage
-  target; the 401-assertion baseline (323 + 30 + 48) is the
+  target; the 410-assertion baseline (332 + 30 + 48) is the
   current floor.
 - **Own the stack.** If an AGNOS crate wraps an external lib,
   depend on the AGNOS crate.

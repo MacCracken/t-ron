@@ -129,7 +129,7 @@ sidecar listing the stdlib leaves the fold needs in scope. Since
 cyrius 6.5.x, `cyrius deps` reads that sidecar and resolves the whole
 tree itself — stdlib *and* t-ron's own named deps. Since 6.6.18 the
 sidecar holds exactly the leaves `distlib`'s compile-verify proves the
-bundle needs — `regex`, `net`, `syscalls` at 2.1.12, mirrored by a
+bundle needs — `regex`, `net`, `syscalls` at 2.2.0, mirrored by a
 `# Requires` include block at the top of `dist/t-ron.cyr` — and the
 named deps' own `# Requires` blocks supply the rest. A consumer
 therefore declares only:
@@ -137,18 +137,23 @@ therefore declares only:
 ```toml
 [deps.t-ron]
 git = "https://github.com/MacCracken/t-ron.git"
-tag = "2.1.12"
+tag = "2.2.0"
 modules = ["dist/t-ron.cyr"]
 ```
 
-✅ **Re-verified at 2.1.12** (cyrius 6.6.20), not assumed: a
+⚠️ **t-ron 2.2.0 needs cyrius ≥ 6.7.2 in the consumer**, because its
+bote-core 3.4.10 dep does. Measured: a consumer pinned at 6.6.20 fails
+to build; at 6.7.2 it builds and runs.
+
+✅ **Re-verified at 2.2.0** (cyrius 6.7.9), not assumed: a
 clean-room project declaring only the block above — with no sibling
 checkouts, so every transitive dep is cloned at its tag, and t-ron
 itself supplied through a `path` override because the tag did not
-exist yet — runs `cyrius deps` (**6 deps resolved, 0 errors**): t-ron,
-`libro`, `bote-core` and `sigil`, plus `majra` (via bote) and `patra`
-(via libro), each commit-pinned in the consumer's lock, with the
-stdlib coming from the sidecar and the deps' `# Requires` blocks. It
+exist yet (from cyrius 6.7.6 a `path` is read only in local mode, so
+the probe ran with `CYRIUS_LOCAL=t-ron`) — runs `cyrius deps` (**6
+deps resolved, 0 errors**): t-ron, `libro`, `bote-core` and `sigil`,
+plus `majra` (via bote) and `patra` (via libro), with the stdlib
+coming from the sidecar and the deps' `# Requires` blocks. It
 then compiles against `dist/t-ron.cyr` and executes, returning a
 correct `deny` verdict for `ark_install` from an unregistered agent.
 

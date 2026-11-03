@@ -796,7 +796,7 @@ fn _make_gate(config) {
     registry_register(reg, tool_def_new(
         "echo",
         "Echo input",
-        schema_new(str_from("object"), vec_new(), vec_new())));
+        schema_new("object", vec_new(), vec_new())));
     var d = dispatcher_new(reg);
     dispatcher_handle(d, "echo", &_echo_handler);
     var g = security_gate_new(tron, d);
@@ -1289,6 +1289,15 @@ fn test_tron_tool_defs() {
     test_group("tron tool defs");
     var defs = tron_tool_defs();
     assert_eq(vec_len(defs), 4, "4 tool defs");
+    #  bote 3.4.8+ refuses a malformed definition at registration, so a def
+    #  that only counts as present can still be missing from tools/list.
+    var reg = tool_registry_new();
+    for (var i = 0; i < vec_len(defs); i = i + 1) {
+        var def = vec_get(defs, i);
+        assert_eq(registry_check_tool_def(def), 0, "def passes bote's check");
+        assert_eq(registry_register(reg, def), 0, "def registers");
+    }
+    assert_eq(vec_len(registry_names(reg)), 4, "4 tools registered");
     return 0;
 }
 

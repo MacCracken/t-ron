@@ -1,6 +1,6 @@
 # Testing Guide
 
-**Current for t-ron 2.1.12** (cyrius 6.6.20).
+**Current for t-ron 2.2.0** (cyrius 6.7.9).
 
 > ⚠️ **Rewritten at 2.1.9.** Every prior revision of this file was the
 > **Rust-era** guide — `cargo test`, `make clippy`, `serde` round-trips,
@@ -15,12 +15,12 @@
 Three suites, run separately:
 
 ```sh
-cyrius test tests/t-ron.tcyr          # 323 assertions — core pipeline
+cyrius test tests/t-ron.tcyr          # 332 assertions — core pipeline
 cyrius test tests/t-ron-crypto.tcyr   #  30 assertions — signal, crypto, export
 cyrius test tests/t-ron-safety.tcyr   #  48 assertions — AGNOS safety engine
 ```
 
-**401 assertions total** (323 + 30 + 48) across 144 groups. That total
+**410 assertions total** (332 + 30 + 48) across 144 groups. That total
 is the **floor**, per `CLAUDE.md`: a change may raise it, never lower
 it. Coverage target is 80 %.
 
@@ -35,7 +35,7 @@ cyrius bench tests/t-ron.bcyr         # 5 pipeline benchmarks
 
 | Suite | Groups | Assertions | Covers |
 |---|---:|---:|---|
-| `tests/t-ron.tcyr` | 113 | 323 | error codes, gate verdicts, policy engine, rate limiter, scanner, pattern analyzer, audit ring buffer + libro chain, risk scoring, query API, correlation, middleware |
+| `tests/t-ron.tcyr` | 113 | 332 | error codes, gate verdicts, policy engine, rate limiter, scanner, pattern analyzer, audit ring buffer + libro chain, risk scoring, query API, correlation, middleware |
 | `tests/t-ron-crypto.tcyr` | 10 | 30 | SIGHUP signalfd reload, ChaCha20, Ed25519 policy signing, encrypted audit export round-trip + tamper rejection |
 | `tests/t-ron-safety.tcyr` | 21 | 48 | safety policies, severity, enforcement, 7 rule types, circuit breaker |
 
@@ -104,7 +104,7 @@ Per the `CLAUDE.md` development loop, tests are one leg of a four-part
 check that must be green before and after any audit phase:
 
 ```sh
-cyrius deps --verify                                  # lockfile hashes match
+cyrius deps --locked                                  # tags resolve to exactly cyrius.lock
 CYRIUS_DCE=1 cyrius build src/main.cyr build/t-ron    # clean compile
 CYRIUS_STATS=1 cyrius build src/main.cyr build/t-ron  # capacity meter
 cyrius distlib && git diff --exit-code dist/t-ron.cyr # bundle matches source

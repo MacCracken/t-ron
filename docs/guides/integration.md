@@ -1,8 +1,8 @@
 # Integration Guide
 
 Step-by-step walkthrough for embedding t-ron in a bote-based MCP
-service. **Current for t-ron 2.1.12** (cyrius 6.6.20 · libro 2.10.8 ·
-bote-core 3.3.17 · sigil 3.13.10).
+service. **Current for t-ron 2.2.0** (cyrius 6.7.9 · libro 2.11.0 ·
+bote-core 3.4.10 · sigil 3.13.11).
 
 > ⚠️ **Rewritten at 2.1.9.** Through 2.1.8 this guide still described
 > the 2.0.0 shape: a `cyrius.toml` manifest, cyrius 4.8.4, and
@@ -11,7 +11,7 @@ bote-core 3.3.17 · sigil 3.13.10).
 > `cyrius.cyml`, libro and bote ship single-file dist bundles, and
 > `json` / `base64` / `bigint` folded into `bayan` at the 2.1.6 carve.
 > The §1–§2 sample is **verified**: it was built and run against
-> t-ron 2.1.12 on cyrius 6.6.20, in a clean-room project, before being
+> t-ron 2.2.0 on cyrius 6.7.9, in a clean-room project, before being
 > written down. (Re-verifying it at 2.1.11 caught that its `if`
 > condition lacked the parentheses cyrius requires.) §3 is **not** —
 > see the warning there.
@@ -25,7 +25,8 @@ Add one block to your `cyrius.cyml`:
 name = "your-service"
 version = "0.1.0"
 language = "cyrius"
-cyrius = "6.6.20"
+# t-ron 2.2.0 needs cyrius >= 6.7.2
+cyrius = "6.7.9"
 
 [build]
 entry = "src/main.cyr"
@@ -33,7 +34,7 @@ output = "build/your-service"
 
 [deps.t-ron]
 git = "https://github.com/MacCracken/t-ron.git"
-tag = "2.1.12"
+tag = "2.2.0"
 modules = ["dist/t-ron.cyr"]
 ```
 
@@ -137,7 +138,7 @@ misconfiguration.
 ## 3. Construct the gate
 
 > ⚠️ **Not verified — at 2.1.11 this sample did not compile as
-> written, and it was not re-tested at 2.1.12.** cyrius rejected the multi-line string passed to
+> written, and it was not re-tested at 2.1.12 or 2.2.0.** cyrius rejected the multi-line string passed to
 > `tron_load_policy` (`expected ')', got string`), and
 > `your_echo_handler` predates the bote 2.0 `fn h(args, claims)`
 > handler ABI. Build the policy string explicitly and give handlers
@@ -172,7 +173,7 @@ fn build_gate() {
     }
     registry_register(reg, tool_def_new(
         "echo", "Echo the arguments back",
-        schema_new(str_from("object"), vec_new(), vec_new())));
+        schema_new("object", vec_new(), vec_new())));
 
     # Wire handlers on the dispatcher.
     var d = dispatcher_new(reg);

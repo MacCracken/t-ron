@@ -12,11 +12,14 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # `cyrius deps` populates ./lib/ from the version-pinned snapshot,
-  # which then shadows ~/.cyrius/versions/<V>/lib/. That's intentional
-  # (cwd lib IS the version-pinned content cyrius deps just copied)
-  # but cyrius emits an informational note about it on every build.
-  # Silence it across all CI steps — mirrors bote / libro / agnosys.
+  # Every verb resolves the tags, checks the result against the committed
+  # cyrius.lock, and compiles that proven resolution from
+  # build/locked-deps/. Nothing writes lib/ or cyrius.lock, so CI builds
+  # exactly what the lock records (cyrius >= 6.7.6).
+  CYRIUS_LOCKED: "1"
+  # Silences cyrius's note when a vendored ./lib/ shadows the pinned
+  # snapshot. CI has no ./lib/; kept for runs of these steps on a
+  # checkout that has one.
   CYRIUS_NO_WARN_SHADOW_LIB: "1"
   # Whole-program dead-code elimination — keeps the binary lean and
   # matches the first-party convention.
@@ -51,22 +54,13 @@ jobs:
       - name: Verify toolchain
         run: cyrius --version
 
-      - name: Resolve dependencies
-        # Populates ./lib/ from the version-pinned stdlib snapshot
-        # plus [deps.libro] / [deps.bote] at their tagged versions.
-        # ./lib/ is gitignored — first-party convention.
-        run: cyrius deps
-
-      - name: Verify dep hashes
-        # Skip on the first push that introduces a new dep before
-        # cyrius.lock has been generated and committed. After it
-        # lands in-tree, this step starts enforcing hash match.
-        run: |
-          if [ -f cyrius.lock ]; then
-            cyrius deps --verify
-          else
-            echo "::warning::cyrius.lock not committed — skipping hash verification"
-          fi
+      - name: Locked resolve (cyrius.lock is exactly what the tags resolve)
+        # Fails, naming each difference, when any hash, lock line or
+        # commit pin disagrees with what the tags resolve. It replaces
+        # `cyrius deps` + `cyrius deps --verify`: there the first step
+        # wrote the lock the second checked, so a committed lock missing
+        # an entry passed (deps re-added the line). ./lib/ stays absent.
+        run: cyrius deps --locked
 
       - name: Manifest completeness ([lib] modules ⊇ main.cyr src/ includes)
         run: |
