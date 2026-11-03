@@ -199,10 +199,9 @@ fn _tron_result_text(text, is_error) {
 #  Handler ABI (bote 2.0+): fn h(args_cstr, claims) → result_cstr.
 #  t-ron's introspection tools currently ignore `claims` — these
 #  endpoints expose project-wide audit / risk / policy state, not
-#  caller-private data. A 2.2.x candidate is to gate `tron_audit`
-#  / `tron_policy` on caller identity once the agnosticos claims
-#  schema firms up; the param is plumbed through here so the ABI
-#  is correct now.
+#  caller-private data. Gating `tron_audit` / `tron_policy` on caller
+#  identity waits on the agnosticos claims schema (see the roadmap);
+#  the param is plumbed through here so the ABI is correct now.
 
 fn tron_status_handler(args, claims) {
     var audit = tron_audit(_tools_tron);

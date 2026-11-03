@@ -14,7 +14,7 @@ project conventions.
 ## Prerequisites
 
 - **Cyrius toolchain** — version pinned in `cyrius.cyml`
-  (`cyrius = "6.7.18"` as of 2.2.1). Install per the
+  (`cyrius = "6.7.18"` as of 2.2.2). Install per the
   [cyrius README](https://github.com/MacCracken/cyrius).
   `cyrius.cyml [package].cyrius` is the **single source of truth** —
   CI and the release workflow both read the pin from it, so there is

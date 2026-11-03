@@ -78,14 +78,14 @@ jobs:
         # dist/t-ron.cyr = broken `cyrius deps` for every consumer.
         # Mirrors libro / bote release flow. See DEPS-PATTERN.md.
         run: |
-          cyrius distlib || true
+          cyrius distlib
           test -s dist/t-ron.cyr || { echo "FAIL: dist/t-ron.cyr not produced"; exit 1; }
           echo "dist/t-ron.cyr: $(wc -l < dist/t-ron.cyr) lines, $(wc -c < dist/t-ron.cyr) bytes"
 
-      - name: Verify dist bundle matches committed copy
+      - name: Verify dist bundle and sidecar match the committed copies
         run: |
-          if ! git diff --exit-code dist/t-ron.cyr; then
-            echo "FAIL: dist/t-ron.cyr is stale. Regenerate via 'cyrius distlib' and commit before tagging."
+          if ! git diff --exit-code -- dist/t-ron.cyr dist/t-ron.deps; then
+            echo "FAIL: dist/ is stale. Regenerate via 'cyrius distlib' and commit before tagging."
             exit 1
           fi
 

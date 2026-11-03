@@ -4,11 +4,11 @@
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 [![Language: Cyrius](https://img.shields.io/badge/Language-Cyrius-brightgreen.svg)](https://github.com/MacCracken/cyrius)
-[![Version: 2.2.1](https://img.shields.io/badge/Version-2.2.1-informational.svg)](VERSION)
+[![Version: 2.2.2](https://img.shields.io/badge/Version-2.2.2-informational.svg)](VERSION)
 
 T-Ron is a [Cyrius](https://github.com/MacCracken/cyrius) security-middleware module set that sits between [bote](https://github.com/MacCracken/bote) (MCP protocol layer) and tool handlers, enforcing per-agent permissions, rate limiting, payload scanning, anomaly detection, and auditing every verdict to a tamper-proof [libro](https://github.com/MacCracken/libro) hash chain. Named after Tron, the security program that fights the Master Control Program.
 
-> **2.2.1 — cyrius 6.7.18, libro 2.11.3, bote-core 3.8.0, sigil 3.13.15.** Security fix: `tron_risk` and `tron_audit` wrote caller-supplied IDs into fixed-size buffers (a 2 KB `agent_id` overran `tron_risk`'s 256 bytes), and spliced them into JSON unescaped. Both handlers now size each reply exactly and escape every value; output for ordinary input is byte-identical. The binary drops from 2.28 MB to 676 KB because cyrius 6.7.18 removes dead code that 6.7.9 only NOPed, and `policy_check` is 11 % faster. See [CHANGELOG.md](CHANGELOG.md).
+> **2.2.2 — cyrius 6.7.18, libro 2.11.3, bote-core 3.8.1, sigil 3.13.15.** `policy_check` does one hash lookup instead of two and is 27 % faster (290 → 211 ns, isolated by an A/B). The last build warning is gone, and CI's dist gate now also checks the `dist/t-ron.deps` sidecar. The roadmap is reorganized: **2.2.3 is the P(-1) audit sweep**, and feature work resumes from 2.3.x. 2.2.1 fixed a buffer overrun in the `tron_risk` / `tron_audit` tool handlers; if you run 2.2.0 or earlier, take it. See [CHANGELOG.md](CHANGELOG.md).
 >
 > **Note — audit-chain hashes changed upstream.** libro 2.8.11 alters the entry-hash preimage, so a chain written by libro ≤ 2.8.10 will not verify against 2.8.12; there is no migration path, because the old preimage was unsound. **No known deployment is affected** — t-ron has no production consumer with a live chain as of 2.1.9, which is why this landed as a routine patch. If you are carrying a chain from an older build, re-export and re-anchor before upgrading.
 
@@ -18,20 +18,20 @@ Same t-ron pipeline, two implementations. Full methodology in
 [`docs/benchmarks-rust-v-cyrius.md`](docs/benchmarks-rust-v-cyrius.md).
 
 ⚠️ **The Rust and Cyrius-2.0.0 columns were measured same-box,
-same-day; the 2.2.1 column was not** — it is this box on 2026-11-03.
+same-day; the 2.2.2 column was not** — it is this box on 2026-11-03.
 Treat the `Δ vs Rust` column as an order-of-magnitude read, not a
 controlled comparison.
 
-| | Rust 0.90.0 | Cyrius 2.0.0 (4.8.4) | Cyrius 2.2.1 (6.7.18) | Δ vs Rust |
+| | Rust 0.90.0 | Cyrius 2.0.0 (4.8.4) | Cyrius 2.2.2 (6.7.18) | Δ vs Rust |
 |---|---:|---:|---:|---:|
-| **Binary (what ships)** | 2.59 MB rlib + 193 MB dep closure | 375 KB static ELF | 676 KB static ELF | ~290× smaller |
-| **Source LOC** (`src/`) | 6 611 | 4 546 | 4 806 | −27 % |
+| **Binary (what ships)** | 2.59 MB rlib + 193 MB dep closure | 375 KB static ELF | 677 KB static ELF | ~290× smaller |
+| **Source LOC** (`src/`) | 6 611 | 4 546 | 4 786 | −28 % |
 | External runtime deps | tokio, serde, dashmap, regex, chrono, uuid, ed25519-dalek, chacha20poly1305, thiserror, libro, bote … | libro + bote + sigil (all Cyrius) | libro + bote-core + sigil (all Cyrius) | — |
-| `policy_check` | 38 ns | 719 ns | **297 ns** | 8× slower |
+| `policy_check` | 38 ns | 719 ns | **211 ns** | 6× slower |
 | `tron_check` (full pipeline) | 2.4 µs | 52 µs | **17.0 µs** | 7× slower (was 22×) |
 | Throughput per thread | ~ 415 k checks/sec | ~ 19 k checks/sec | **~ 59 k checks/sec** | Still far above real-world MCP load |
 
-**The binary is 676 KB at 2.2.1, down from 2.28 MB at 2.2.0, with
+**The binary is 677 KB at 2.2.2, down from 2.28 MB at 2.2.0, with
 nothing removed from t-ron.** cyrius 6.7.18 deletes the dead code that
 earlier toolchains only NOPed in place (1.99 MB of it in this build).
 t-ron still pins the **full** `dist/sigil.cyr` bundle rather than
@@ -125,7 +125,7 @@ Build and run:
 
 ```sh
 cyrius deps                              # resolve deps from cyrius.cyml
-cyrius build src/main.cyr build/t-ron    # compile (676 KB static x86_64 ELF)
+cyrius build src/main.cyr build/t-ron    # compile (677 KB static x86_64 ELF)
 cyrius test tests/t-ron.tcyr             # 348 assertions
 cyrius test tests/t-ron-crypto.tcyr      # 30 assertions (signal + crypto + export)
 cyrius test tests/t-ron-safety.tcyr      # 48 assertions (safety engine)
@@ -192,20 +192,18 @@ for the side-by-side):
 
 | Operation | Avg | Min | Iters |
 |---|---|---|---|
-| `policy_check` | **294 ns** | 290 ns | 100 000 |
-| `scanner_clean_text` | 3.52 µs | 3.46 µs | 100 000 |
-| `scanner_sql_detect` | 1.11 µs | 1.10 µs | 100 000 |
-| `audit_log` (ring buffer + libro chain + SHA-256) | 10.3 µs | 10.1 µs | 1 000 |
-| `tron_check_allow` (full pipeline) | **16.9 µs** | 15.6 µs | 1 000 |
+| `policy_check` | **212 ns** | 207 ns | 100 000 |
+| `scanner_clean_text` | 3.54 µs | 3.45 µs | 100 000 |
+| `scanner_sql_detect` | 1.11 µs | 1.09 µs | 100 000 |
+| `audit_log` (ring buffer + libro chain + SHA-256) | 10.3 µs | 10.2 µs | 1 000 |
+| `tron_check_allow` (full pipeline) | **17.0 µs** | 15.6 µs | 1 000 |
 
-Measured against a **same-session** 2.2.0 baseline (the previous
+Measured against a **same-session** 2.2.1 baseline (the previous
 stack built sibling-free and re-benchmarked on this box, three
-interleaved rounds each): `policy_check` **−11.0 %** (334 → 297 ns);
-the other four rows are within ±0.5 %. Neither t-ron's policy code
-nor the stdlib `hashmap.cyr` / `regex.cyr` it calls changed, so the
-gain is the 6.7.18 toolchain: `vec_get`'s abort path moved out of
-line, and dead-code compaction re-laid out the binary. The two were
-not separated — see the 2.2.1 CHANGELOG entry.
+interleaved rounds each): `policy_check` **−28.5 %** (295 → 211 ns);
+the other four rows are within ±1 %. A third build, 2.2.2 with
+2.2.1's `src/policy.cyr`, puts 79 ns of that on the single-lookup
+change — see the 2.2.2 CHANGELOG entry.
 
 ⚠️ Do not compare these absolutes against rows recorded on other
 dates — this box's speed drifts between sessions, so only
@@ -219,26 +217,25 @@ the full roadmap. Highlights:
 - **Done in 2.0.0** — full pipeline, libro chain integration, signing,
   SIGHUP reload, ChaCha20+Ed25519 encrypted export, LLM-assisted scan,
   AI safety submodule, security audit with 10 CVE-class fixes.
-- **2.1.x — modernization arc** (in progress) — now at cyrius
-  6.6.20 + libro 2.10.8 + bote-core 3.3.17 + sigil 3.13.10. bote 2.0
-  handler-ABI fully observed, manifest modernization, CI/release
-  installer parity with bote/libro, `docs/doc-health.md` ledger,
-  `dist/t-ron.cyr` consumer bundle via `cyrius distlib`, and a CI
-  gate validating the dist sidecar against the toolchain stdlib.
-  Every toolchain crossing 5.10 → 6.6 landed as a *patch* — the
-  JSON-RPC boundary and SecurityGate signature never moved, so
-  2.2.x stays reserved for a wire-shape change.
-- **Phase 2 — Advanced detection** (post-2.1.x) — ML-based anomaly
-  detection, privilege escalation, time-of-day, capability-source
-  policy / L3 agent-injection defense.
-- **Phase 3 — Hardening** (post-2.1.x) — daimon event-bus alerts,
-  aethersafha dashboard, edge fleet policy distribution.
+- **2.1.x — modernization arc** (closed at 2.1.12) — cyrius 5.10 →
+  6.6 as thirteen patches on an unchanged wire shape: `cyrius.cyml` +
+  `cyrius.lock`, the `dist/t-ron.cyr` consumer bundle, CI gates for the
+  bundle, the sidecar and capacity, and the `docs/doc-health.md` ledger.
+- **2.2.x — current line.** 2.2.0 moved to cyrius 6.7.x and CI to
+  `cyrius deps --locked`; 2.2.1 fixed the tool handlers' buffer
+  overrun; 2.2.2 is a quick-item bundle. **Next: 2.2.3, the P(-1)
+  audit, refactor, hardening and optimization sweep.**
+- **2.3.x onward — one feature line per minor**: MCP tool titles and
+  output schemas, and claims-based authorization (2.3.x); daimon
+  alerts, agnoshi intents and the aethersafha dashboard (2.4.x);
+  capability-source policy, L3 of agent-injection defense (2.5.x);
+  ML anomaly detection and edge-fleet policy (2.6.x+).
 
 ## Reference Code
 
 | Source | Relevance | Location |
 |---|---|---|
-| [bote](https://github.com/MacCracken/bote) | MCP protocol layer — t-ron wraps its Dispatcher via SecurityGate | `../bote` (tag 3.8.0, `dist/bote-core.cyr`) |
+| [bote](https://github.com/MacCracken/bote) | MCP protocol layer — t-ron wraps its Dispatcher via SecurityGate | `../bote` (tag 3.8.1, `dist/bote-core.cyr`) |
 | [libro](https://github.com/MacCracken/libro) | Cryptographic audit chain — t-ron writes every verdict to libro | `../libro` (tag 2.11.3) |
 | [cyrius](https://github.com/MacCracken/cyrius) | Language toolchain | 6.7.18 |
 | [hoosh](https://github.com/MacCracken/hoosh) | LLM-assisted prompt injection detection | `../hoosh` (HTTP API, tag 2.0.0) |

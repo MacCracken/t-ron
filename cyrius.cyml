@@ -125,5 +125,5 @@ modules = ["dist/libro.cyr"]
 # take the full dist/bote.cyr. majra arrives through bote's own deps.majra.
 [deps.bote-core]
 git = "https://github.com/MacCracken/bote"
-tag = "3.8.0"
+tag = "3.8.1"
 modules = ["dist/bote-core.cyr"]

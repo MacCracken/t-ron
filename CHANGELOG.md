@@ -16,6 +16,139 @@ top. Mirrors bote 2.7.0's flow.
 
 _(empty)_
 
+## [2.2.2] — 2026-11-03 · bote-core 3.8.1 + the quick-item bundle — `policy_check` 27 % faster, no warnings left, and the roadmap reorganized
+
+bote-core **3.8.0 → 3.8.1**, plus every open item small enough to land
+without the full audit. That audit is now scheduled as 2.2.3. The roadmap is
+reorganized: 2.2.3 is the P(-1) sweep, and open features sit one line per
+minor from 2.3.x. **426 assertions** (348 · 30 · 48) pass. `policy_check` is
+**27 % faster**; the other benches are flat. Every build and suite now prints
+**zero warnings**.
+
+### Changed — `policy_check` does one hash lookup, not two
+
+`policy_get` and `policy_get_or_create` (`src/policy.cyr`) did `map_has`, then
+`map_get`: two hashes and two probes of the same key. `map_get` returns 0 for a
+missing key, and a stored policy is always a non-zero 24-byte allocation, so
+one `map_get` answers both questions.
+
+**Isolated by an A/B** (three interleaved rounds, mean):
+
+| `policy_check` build | mean |
+|---|---|
+| 2.2.1 | 294.7 ns |
+| 2.2.2 with 2.2.1's `src/policy.cyr` | 289.7 ns |
+| **2.2.2** | **210.7 ns** |
+
+The change alone is **−79 ns (−27 %)**. The other ~5 ns is bote 3.8.1 or noise.
+So one string hash and probe costs ~80 ns at 6.7.18. That also sizes the ten
+remaining double lookups 2.2.3 will take, several of them on `tron_check`'s
+path.
+
+### Changed — bote-core 3.8.0 → 3.8.1
+
+bote 3.8.1 pins the same cyrius 6.7.18, libro 2.11.3 and majra 2.13.0, so only
+`lib/bote-core.cyr` and its commit pin (`9e28f67`, matching the remote tag)
+move in the lock. It adds titles, icons and server instructions, all opt-in.
+It also fixes ten defects in 3.8.0. The one that reaches t-ron's result shape
+refuses a result naming `content`, `structuredContent` or `isError` twice, and
+t-ron's results never repeat a key. None of the 17 bote functions t-ron calls
+changed. Binary 675,640 → 677,336 B (+1,696 B).
+
+### Fixed — the last warning in any build
+
+`tests/t-ron-crypto.tcyr` sent itself SIGHUP with raw x86_64
+`syscall(39, 0)` / `syscall(62, …)`. It printed `syscall arity mismatch` on
+every run since at least 2.1.10, and was wrong off x86_64. It now calls stdlib
+`sys_kill(sys_getpid(), SIGHUP)`. The build and all three suites print no
+warnings.
+
+### Changed — CI's dist gate checks the sidecar, and no longer hides a `distlib` failure
+
+`ci.yml`'s freshness step ran `cyrius distlib || true` and diffed only
+`dist/t-ron.cyr`, and `release.yml` did the same. Both now run `cyrius distlib`
+unguarded and diff `dist/t-ron.cyr` **and** `dist/t-ron.deps`. Tested on a
+CI-shaped copy (no `lib/`, `CYRIUS_LOCKED=1`): `distlib` exits 0 there, so
+`|| true` could only hide a real failure.
+
+**Mutation-checked**: an `assert` line planted in the committed
+`dist/t-ron.deps` passed the old gate *and* the sidecar validity gate, because
+`assert` is a real stdlib leaf. The new diff fails on it. libro 2.10.7 made the
+same change.
+
+### Changed — docs and comments
+
+- **The roadmap is reorganized.**
+  - It states how patch and minor versions are used.
+  - The closed 2.1.x arc collapses to one paragraph; its rows stay in Shipped.
+  - **2.2.3** lists the P(-1) sweep's known inputs.
+  - Open features sit one line per minor: **2.3.x** MCP surface and
+    authorization, **2.4.x** ecosystem integration, **2.5.x** capability-source
+    policy, **2.6.x+** ML detection and edge fleet.
+  - Every blocker was re-checked against the sibling repos instead of carried
+    forward. agnoshi (2.2.0) and aethersafha (0.17.7) now exist, so two
+    "not available" blockers are gone. daimon's `msg_bus_publish` moved to
+    `src/ipc.cyr:268`. The claims schema and bote's description-hash
+    primitive are still missing.
+  - The cyrius 6.7.6 note is done and became a resolved row.
+- **The cyrius 5.10.x `assert(streq(call(…), "lit") == 1, …)` watch row is
+  closed.** A probe of exactly that shape compiles and evaluates correctly at
+  6.7.18.
+- **`src/main.cyr`'s comments state present-tense rules**, not release history
+  ("2.1.3 picks up…", "(migration 2.1.7)"). Every include-order reason was
+  re-checked against the 6.7.18 sources first, and two were corrected:
+  - **bayan** is there for libro's canonical JSON; sigil makes no base64 or
+    bigint calls.
+  - **process** precedes sigil, whose agnosys helpers call `exec_capture`; libro
+    makes no `process_` calls.
+  - **fs** is called by nothing in `src/` or the deps (2.2.3 decides whether it
+    stays).
+  - The non-comment lines are byte-identical.
+- `tests/t-ron.tcyr`'s `_echo_handler` takes the bote 2.0 handler ABI's two
+  arguments.
+- `src/tools.cyr`'s note on claims-gated tools names its blocker, not a version.
+
+### Performance
+
+Same session, three interleaved rounds, mean. The 2.2.1 column is the committed
+tree built sibling-free (675,640 B, as released).
+
+| bench | 2.2.1 | 2.2.2 | Δ |
+|---|---|---|---|
+| `policy_check` | 294.7 ns | 210.7 ns | **−28.5 %** (−27 % from `src/policy.cyr`, above) |
+| `scanner_clean_text` | 3.556 µs | 3.527 µs | −0.8 % |
+| `scanner_sql_detect` | 1.123 µs | 1.113 µs | −0.9 % |
+| `audit_log` | 10.377 µs | 10.341 µs | −0.3 % |
+| `tron_check_allow` | 17.110 µs | 16.986 µs | −0.7 % |
+
+`tron_check` calls `policy_check` once, and 79 ns of ~17 µs is ~0.5 %, inside
+this bench's spread. Recorded in `bench-history.csv`.
+
+### Verified
+
+- **`ci.yml`'s build-and-test job, run step by step from the YAML** with its
+  own `env:` under `bash -e`, on a CI-shaped copy (fresh git, no `lib/`). Every
+  step passes: locked resolve, manifest completeness, build, ELF, capacity,
+  smoke, the three suites, the new dist gate, sidecar validity, bench.
+  `lib/` is never created.
+- **Clean-room consumer** (local mode; tag 2.2.2 is not on GitHub yet), from the
+  integration guide's §1–§2: 6 deps resolved, bote-core 3.8.1, 0 undefined,
+  0 duplicate, **`deny`**.
+- **All four examples** build with 0 undefined and 0 duplicate diagnostics and
+  pass.
+- **Capacity**: `fn_table` 5,818 / 131,072 (4 %), `identifiers` 165,011 /
+  8,388,608 (2 %), `code_size` 154,920 / 67,108,864 (0.2 %). Binary
+  **677,336 B**.
+
+### Known — recorded for 2.2.3
+
+- `cyrius distlib` warns that 12 names are undefined on **x86_64-windows only**,
+  the same 12 as 2.2.1. t-ron's signalfd SIGHUP path (`src/signal.cyr`) owns 6;
+  deps own the rest. No other target is affected.
+- `audit_export_encrypted` calls `ed25519_sign` twice, the first over the wrong
+  bytes.
+- These and the rest of the sweep's inputs are in the roadmap's 2.2.3 table.
+
 ## [2.2.1] — 2026-11-03 · cyrius 6.7.18 + libro 2.11.3 / bote-core 3.8.0 / sigil 3.13.15 — the tool handlers escape what they echo, and stop overrunning their buffers
 
 Toolchain **6.7.9 → 6.7.18**, dependencies to their latest releases, with bote

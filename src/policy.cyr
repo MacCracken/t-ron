@@ -80,21 +80,20 @@ fn policy_engine_clear(e) {
 }
 
 #  Look up an agent's policy, or create an empty one if missing.
+#  One lookup: map_get returns 0 for a missing key, and a stored policy
+#  is never 0.
 fn policy_get_or_create(e, agent_id) {
     var m = load64(e);
-    if (map_has(m, agent_id) == 1) {
-        return map_get(m, agent_id);
-    }
-    var p = agent_policy_new();
+    var p = map_get(m, agent_id);
+    if (p != 0) { return p; }
+    p = agent_policy_new();
     map_set(m, agent_id, p);
     return p;
 }
 
 #  Look up an agent's policy; returns 0 if agent is unknown.
 fn policy_get(e, agent_id) {
-    var m = load64(e);
-    if (map_has(m, agent_id) == 0) { return 0; }
-    return map_get(m, agent_id);
+    return map_get(load64(e), agent_id);
 }
 
 fn policy_grant(e, agent_id, pattern) {

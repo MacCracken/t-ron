@@ -782,7 +782,7 @@ fn test_corr_threshold() {
     return 0;
 }
 
-fn _echo_handler(args) {
+fn _echo_handler(args, claims) {
     return args;
 }
 

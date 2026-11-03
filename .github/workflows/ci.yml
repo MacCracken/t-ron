@@ -180,24 +180,23 @@ jobs:
           done
           [ $fail -eq 0 ] || exit 1
 
-      - name: dist/t-ron.cyr is up-to-date
-        # `cyrius distlib` reads cyrius.cyml [lib] modules and emits
-        # dist/t-ron.cyr deterministically. The committed bundle must
-        # match the regenerated bundle byte-for-byte; otherwise a
-        # downstream consumer cloning at our tag gets stale code under
-        # `cyrius deps`. Mirrors libro / bote freshness gate.
-        # cyrius emits an informational note about unresolved symbols
-        # in consumer-included bundles (expected — stdlib is supplied
-        # by the consumer); the bundle is still emitted, we only fail
-        # on a stale diff.
+      - name: dist/t-ron.cyr and dist/t-ron.deps are up-to-date
+        # `cyrius distlib` reads cyrius.cyml [lib] modules, compile-verifies
+        # the bundle, and emits dist/t-ron.cyr plus the dist/t-ron.deps
+        # sidecar deterministically. Both committed files must match the
+        # regenerated ones byte-for-byte: a downstream consumer cloning at
+        # our tag gets the bundle's code and resolves its stdlib leaves from
+        # the sidecar. distlib exits 0 on a good tree, so a failure here is
+        # a real one and fails the step. The sidecar validity gate below
+        # cannot catch a stale leaf that is a real stdlib module.
         run: |
-          cyrius distlib || true
+          cyrius distlib
           test -s dist/t-ron.cyr || { echo "FAIL: dist/t-ron.cyr not produced"; exit 1; }
-          if ! git diff --exit-code dist/t-ron.cyr; then
-            echo "FAIL: dist/t-ron.cyr is stale. Run 'cyrius distlib' and commit."
+          if ! git diff --exit-code -- dist/t-ron.cyr dist/t-ron.deps; then
+            echo "FAIL: dist/ is stale. Run 'cyrius distlib' and commit."
             exit 1
           fi
-          echo "dist/t-ron.cyr matches src/ ($(wc -l < dist/t-ron.cyr) lines)"
+          echo "dist/ matches src/ (dist/t-ron.cyr $(wc -l < dist/t-ron.cyr) lines, dist/t-ron.deps $(grep -cvE '^[[:space:]]*(#|$)' dist/t-ron.deps) leaves)"
 
       - name: Dist sidecar validity gate
         # `cyrius distlib` writes dist/t-ron.deps — the stdlib leaves a

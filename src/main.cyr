@@ -1,12 +1,9 @@
-# t-ron — MCP security monitor (Cyrius port)
+# t-ron — MCP security monitor: the binary's entry point.
 #
-# 2.1.x — modernization arc. 2.1.3 picks up cyrius 5.10.44 +
-# libro 2.6.3 + bote 2.7.2 and flips [deps.bote] to the opt-in
-# dist/bote-core.cyr bundle (the consumer-side fix for the
-# 2 MB compile-source cap that previously blocked the dist
-# adoption). The src/_libro_compat.cyr shim retires here —
-# libro 2.6.3's dist bundle calls ct_eq_bytes_lens directly.
-# See docs/development/roadmap.md.
+# Consumers take dist/t-ron.cyr (see DEPS-PATTERN.md), not this file.
+# `cyrius build` prepends cyrius.cyml's deps in manifest order; these
+# includes give the same order to a build without them. cyrius is
+# single-pass, so each include must follow everything it references.
 
 include "lib/string.cyr"
 include "lib/fmt.cyr"
@@ -25,48 +22,33 @@ include "lib/regex.cyr"
 include "lib/chrono.cyr"
 include "lib/freelist.cyr"
 include "lib/sakshi.cyr"
-# bayan — consolidated json / base64 / bigint / u128 stdlib bundle
-# (cyrius 6.1.25 carve; standalone json.cyr / base64.cyr / bigint.cyr
-# retired from the 6.1.35+ snapshot). t-ron makes no direct stdlib
-# json_* / base64_* / bigint_* calls; bayan is pulled transitively for
-# libro's canonical-JSON hashing and sigil. (2.1.6)
+# bayan: json / base64 / bigint / u128. t-ron's src/ calls none of it;
+# libro's canonical-JSON hashing does.
 include "lib/bayan.cyr"
 include "lib/net.cyr"
-# atomic / thread / thread_local must precede sigil — sigil 3.7.8's
-# crypto path self-installs a per-thread TLS scratch bank on the
-# serial hash path (`cbank()` -> `thread_local_get`, cyrius >= 6.0.52)
-# and its parallel batch verify spawns `thread_create`/`thread_join`
-# workers; `thread` builds on `atomic`. Missing these, the SHA-256 in
-# libro's `chain_append` traps with SIGILL. (2.1.5, cyrius 6.1.24)
+# atomic / thread / thread_local before sigil: its hash path takes a
+# per-thread scratch bank (`cbank()` -> `thread_local_get`), and its batch
+# verify spawns threads; `thread` builds on `atomic`. Without them the
+# SHA-256 in libro's `chain_append` traps with SIGILL at run time.
 include "lib/atomic.cyr"
 include "lib/thread.cyr"
 include "lib/thread_local.cyr"
-# ct / keccak / random must precede sigil — sigil 3.12.1's
-# ML-DSA surface references ct_eq_bytes_lens / ct_select / _keccak_* /
-# shake256 / random_bytes, and cyrius is single-pass.
+# ct / keccak / random before sigil: its ML-DSA surface calls
+# ct_eq_bytes_lens, ct_select, shake256 and random_bytes.
 include "lib/ct.cyr"
 include "lib/keccak.cyr"
 include "lib/random.cyr"
-# fs / process must precede libro on the 6.3.x+ line: libro's dist
-# bundle's .deps sidecar declares both as required stdlib leaves (the
-# file-backed chain + subprocess-audit paths), and cyrius is single-pass.
-# On 6.2.x they were folded into libro's own bundle; 6.3.x carves them
-# back out to the consumer. (migration 2.1.7)
+# process before sigil: sigil's agnosys helpers call exec_capture.
+# fs is in cyrius.cyml's stdlib list; nothing in src/ or the deps calls it.
 include "lib/fs.cyr"
 include "lib/process.cyr"
-# sigil — full dist/sigil.cyr bundle, now via t-ron's own [deps.sigil]
-# pin (tag 3.12.1). libro 2.8.0 thinned its *transitive* sigil surface to
-# the mldsa/sha folds; t-ron keeps the full bundle so `sigil` stays a
-# recognized named dep (basename ↔ dep name) and is excluded from the
-# generated dist sidecar — see cyrius.cyml [deps.sigil]. Carries the
-# trust-layer verify_data() the signing path uses. (migration 2.1.8)
+# sigil, the full dist/sigil.cyr bundle (cyrius.cyml deps.sigil): only it
+# carries the verify_data() src/signing.cyr calls.
 include "lib/sigil.cyr"
 
 include "lib/libro.cyr"
 
-# bote opt-in core bundle — 9 transport-free modules. Replaces the
-# per-module cherry-pick shipped at 2.1.0–2.1.2 with a single
-# include. See cyrius.cyml [deps.bote] for the rationale.
+# bote's transport-free core profile (cyrius.cyml deps.bote-core).
 include "lib/bote-core.cyr"
 
 include "src/error.cyr"

@@ -135,8 +135,7 @@ fn test_sighup_triggers_reload() {
 
     var updated = "[agent.\"post\"]\nallow = [\"*\"]\n";
     _write_file(path, updated, strlen(updated));
-    var pid = syscall(39, 0);                      # SYS_getpid
-    syscall(62, pid, SIGHUP);                      # SYS_kill(self, SIGHUP)
+    sys_kill(sys_getpid(), SIGHUP);                # signal ourselves
 
     assert_eq(sighup_drain_and_reload(fd, t), TRON_ERR_NONE, "drain+reload ok");
     var k, r = policy_check(tron_policy(t), "post", "any");
