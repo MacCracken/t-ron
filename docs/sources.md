@@ -6,11 +6,15 @@ and cryptographic modules; keep it current as specifications evolve.
 
 ## Cryptography
 
-- **ChaCha20 stream cipher** — RFC 7539 §2.3 and §2.4. Test vector
+- **ChaCha20 stream cipher** — RFC 8439 §2.3 and §2.4 (which obsoletes
+  RFC 7539; the algorithm and test vectors are unchanged). Test vector
   in §2.4.2 ("Ladies and Gentlemen…"). Implemented in
   `src/crypto_chacha20.cyr`; verification in
-  `tests/t-ron-crypto.tcyr:test_chacha20_rfc_vector`.
-  <https://datatracker.ietf.org/doc/html/rfc7539>
+  `tests/t-ron-crypto.tcyr:test_chacha20_rfc_vector`. The 32-bit block
+  counter bounds one key and nonce to 2^32 blocks (§2.4, 256 GB);
+  `cc20_xor` refuses a length that would wrap it
+  (`test_chacha20_counter_guard`).
+  <https://datatracker.ietf.org/doc/html/rfc8439>
 - **Ed25519** — RFC 8032 (Edwards-curve Digital Signature Algorithm).
   Used via sigil's `ed25519_sign` / `ed25519_verify` (Cyrius stdlib).
   sigil is the reviewed constant-time implementation; t-ron does not
@@ -19,13 +23,16 @@ and cryptographic modules; keep it current as specifications evolve.
 - **SHA-256** — FIPS 180-4. Used via libro's hasher (and indirectly
   through sigil where needed).
   <https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.180-4.pdf>
-- **UUID v4** — RFC 4122. libro's `uuid_v4` uses `/dev/urandom`;
-  fail-closed on short read (audit F2).
+- **UUID v4** — RFC 4122. libro's `uuid_v4` draws its 16 bytes with one
+  `random_bytes` call (libro 2.10.3); fail-closed on a short read
+  (audit F2).
   <https://datatracker.ietf.org/doc/html/rfc4122>
-- **AEAD construction** — Sign-then-Encrypt with Ed25519 + ChaCha20
-  as documented in [ADR-005](architecture/adr-005-chacha20-ed25519-aead.md).
-  Alternative to ChaCha20-Poly1305 (RFC 7539 §2.8), chosen to reuse
-  sigil rather than re-implement Poly1305.
+- **Encrypted-export construction** — encrypt-then-sign with ChaCha20 +
+  Ed25519, as documented in
+  [ADR-005](architecture/adr-005-chacha20-ed25519-aead.md), including the
+  gaps that keep it short of a full AEAD. Alternative to
+  ChaCha20-Poly1305 (RFC 8439 §2.8), chosen to reuse sigil rather than
+  re-implement Poly1305.
 
 ## Protocols
 
@@ -39,9 +46,15 @@ and cryptographic modules; keep it current as specifications evolve.
 - **RFC 3339 / ISO 8601** — audit-chain timestamps use libro's
   `timestamp_rfc3339`.
   <https://datatracker.ietf.org/doc/html/rfc3339>
-- **TOML 1.0** — policy file format (subset: only `[agent."NAME"]`
-  and `[agent."NAME".rate_limit]` sections used).
+- **TOML 1.0** — policy file format. t-ron parses a strict subset: only
+  `[agent."NAME"]` and `[agent."NAME".rate_limit]` sections, `allow` /
+  `deny` string arrays and `calls_per_minute`; anything else is refused
+  (`src/policy.cyr`).
   <https://toml.io/en/v1.0.0>
+- **JSON string escaping** — RFC 8259 §7: `"`, `\` and every byte
+  below 0x20 must be escaped. `src/json_text.cyr` implements it for every
+  JSON value t-ron writes.
+  <https://datatracker.ietf.org/doc/html/rfc8259#section-7>
 
 ## Attack classes (security audit)
 

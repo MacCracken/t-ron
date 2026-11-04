@@ -28,7 +28,8 @@ Build the audit-export AEAD from **ChaCha20 (confidentiality) +
 Ed25519 (authenticity)** instead of ChaCha20-Poly1305. Wire format:
 
 ```
-offset 0    nonce (12 bytes, caller-supplied, must be unique per key)
+offset 0    nonce (12 bytes: caller-supplied and unique per key, or drawn by
+            t-ron from random_bytes when the caller passes 0)
 offset 12   Ed25519 signature over (nonce || ciphertext) (64 bytes)
 offset 76   ciphertext (N bytes, same length as plaintext)
 ```
@@ -97,3 +98,26 @@ offset 76   ciphertext (N bytes, same length as plaintext)
   different verifying key fails.
 
 All in `tests/t-ron-crypto.tcyr`, all passing as of 2.0.0.
+
+## Amendment — 2.2.3
+
+The 2.2.3 audit confirmed the construction is sound where it claims to
+be: encrypt-then-sign, verify before decrypt, a constant-time signature
+compare, and rejection of a flipped nonce, ciphertext or signature byte
+and of a truncated envelope. It also fixed what was not: the encrypt
+path signed twice (the first signature, over the wrong bytes, was
+overwritten before it left the process), ignored a signing failure, and
+left the ChaCha20 state and the plaintext JSON unwiped. A caller may now
+pass a 0 nonce to have t-ron draw one.
+
+It is **not a full AEAD**, and three gaps remain open for an envelope
+format revision (a format change, so not in a patch):
+
+- **The symmetric key is not bound to the ciphertext.** Decrypting with
+  the wrong ChaCha20 key returns garbage as success; the signature
+  authenticates the signer, not the key.
+- **No domain separation.** The signature covers raw `nonce ||
+  ciphertext`. If the export signing key is also a trusted policy key,
+  an envelope can be presented as a signed policy file. Keep the two
+  keys apart.
+- **No replay binding.** An old envelope still verifies.

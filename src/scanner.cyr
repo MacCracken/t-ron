@@ -4,26 +4,68 @@
 #
 #  The Rust version uses `regex` crate with four LazyLock regexes.
 #  Cyrius has no regex engine, so patterns are hand-rolled as
-#  case-insensitive keyword scans with word-boundary checks. The
-#  rules match the Rust regex semantics for the test payloads:
+#  case-insensitive scans with word-boundary checks. Every rule is one
+#  forward pass, or a bounded number of them, so a leaf scans in O(N):
+#  the gate is synchronous and a crafted payload must not stall it.
+#  Rules, in check order (the first that matches names the threat):
 #
-#    SQL:     keyword-from-set-A (union|select|insert|update|delete|drop|
-#             alter|exec|execute) AND keyword-from-set-B (from|into|table|
-#             where|set)   OR   `--` comment   OR   `;` followed somewhere
-#             by drop|delete|update
-#    Shell:   delimiter char (; & | backtick $) then optional whitespace
-#             then a shell binary name (rm cat curl wget nc bash sh python
-#             perl ruby chmod chown) on a word boundary
-#    Template:{{...}} containing `.`, `__`, config, self, or request
-#             <%...%>
-#             ${...} containing `.`, Runtime, Process, or exec
-#    Path:    ../   ..\   %2e%2e  (case-insensitive on the hex)
+#    NUL:     any 0x00 byte (a decoded \u0000 keyword splitter)
+#    SQL:     keyword-A (union select insert update delete drop alter
+#             exec execute truncate) AND keyword-B (from into table
+#             where set)   OR   union followed by select   OR   `--`
+#             OR   `/*!` (MySQL versioned comment)   OR   a quote then
+#             `#` / `/*` (comments out the rest: admin'#)   OR   a quote
+#             tautology (' OR 1=1, ' OR 'a'='a)   OR   drop|delete|
+#             update|truncate|grant after the first `;`   OR   xp_cmdshell
+#    Shell:   delimiter (; & | backtick $ LF CR), then filler (spaces,
+#             `(` `{`, $IFS, $9, ${...} of at most 64 bytes), then a
+#             command word read as the shell reads it -- quotes and
+#             backslashes removed, a path prefix up to the last `/`
+#             dropped -- naming rm cat curl wget nc ncat socat bash sh
+#             zsh dash ksh busybox chmod chown, or python perl ruby php
+#             node with an optional version suffix (python3)
+#    Template:{{ .. }} and {% .. %}, each one span from the FIRST open to
+#             the LAST close, containing `.` `__` `(` `[` `~` `|attr`
+#             `\x` config self request;   <% with %>;   <# (FreeMarker);
+#             ${ *{ @{ ~{ .. } containing `.` Runtime Process exec;
+#             #{ .. } containing `.`
+#    Path:    two dots then a separator, a dot being `.` %2e %252e
+#             %25%32%45 %c0%ae or overlong C0 AE, a separator / \ %2f
+#             %5c %252f %255c %c0%af or overlong C0 AF; an encoded dot
+#             pair (%2e%2e, .%2e, C0 AE C0 AE, ...) needs no separator
 #
 #  The JSON walker parses raw text (so no nested parser needed): every
-#  quoted string leaf is scanned, and object/array depth is tracked to
-#  abort on pathological nesting.
+#  quoted string leaf is JSON-decoded (\" \\ \/ \b \f \n \r \t \uXXXX,
+#  surrogate pairs to UTF-8) into a reusable scratch buffer, and the
+#  decoded bytes -- what a handler acts on -- are scanned. Nesting deeper
+#  than SCAN_MAX_DEPTH is itself reported as a threat.
 
 var SCAN_MAX_DEPTH = 64;
+var SCAN_FILLER_BRACE_MAX = 64;     #  longest ${...} the shell filler skips
+var SCAN_SQL_SKIP_MAX     = 64;     #  bound on each skip in the quote rules
+
+#  Byte classes for the one-pass prefilter in scanner_scan_text: a rule
+#  runs only when the bytes it needs are present at all.
+enum _ScByteClass {
+    _SC_C_NUL     = 1;
+    _SC_C_SHELL   = 2;      #  ; & | ` $ LF CR
+    _SC_C_BRACE   = 4;      #  {
+    _SC_C_LT      = 8;      #  <
+    _SC_C_PATH    = 16;     #  . %  and bytes >= 0x80 (overlong forms)
+    _SC_C_QUOTE   = 32;     #  ' "
+    _SC_C_COMMENT = 64;     #  - /
+    _SC_C_WORD    = 128;    #  0-9 A-Z a-z _
+}
+
+#  SQL keyword roles; one word can carry several.
+enum _ScSqlRole {
+    _SC_K_A      = 1;       #  statement verb
+    _SC_K_B      = 2;       #  clause word
+    _SC_K_MOD    = 4;       #  destructive once a `;` has ended the statement
+    _SC_K_UNION  = 8;
+    _SC_K_SELECT = 16;
+    _SC_K_ALONE  = 32;      #  sufficient on its own
+}
 
 #  ============================================================
 #  Byte helpers
@@ -73,161 +115,341 @@ fn _sc_ci_find(buf, buflen, start, needle, nlen) {
     return 0 - 1;
 }
 
-#  Check that a keyword match at [pos..pos+nlen] is word-bounded.
-fn _sc_word_bounded(buf, buflen, pos, nlen) {
-    if (pos > 0) {
-        if (_sc_is_word_char(load8(buf + pos - 1)) == 1) { return 0; }
+#  Find the first `target` byte in [start..buflen); return its index or -1.
+fn _sc_find_byte(buf, buflen, start, target) {
+    var i = start;
+    while (i < buflen) {
+        if (load8(buf + i) == target) { return i; }
+        i = i + 1;
     }
-    if (pos + nlen < buflen) {
-        if (_sc_is_word_char(load8(buf + pos + nlen)) == 1) { return 0; }
-    }
-    return 1;
+    return 0 - 1;
 }
 
-#  Locate a word-bounded case-insensitive keyword; return first idx or -1.
-fn _sc_find_keyword(buf, buflen, needle) {
+#  1 if `needle` occurs (case-insensitively) inside [start..endp).
+fn _sc_contains_ci(buf, start, endp, needle) {
     var nlen = strlen(needle);
-    var i = 0;
-    while (1 == 1) {
-        i = _sc_ci_find(buf, buflen, i, needle, nlen);
-        if (i < 0) { return 0 - 1; }
-        if (_sc_word_bounded(buf, buflen, i, nlen) == 1) { return i; }
+    var buflen = endp;
+    var i = start;
+    if (nlen == 0) { return 1; }
+    while (i + nlen <= buflen) {
+        if (_sc_ci_memeq(buf, i, needle, nlen) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+#  Find the first two-byte delimiter at/after `start` within [start..buflen).
+#  Returns idx or -1. O(N) — no restart, no backtrack.
+fn _sc_find_delim2(buf, buflen, start, a, b) {
+    var i = start;
+    while (i + 1 < buflen) {
+        if (load8(buf + i) == a && load8(buf + i + 1) == b) { return i; }
         i = i + 1;
     }
     return 0 - 1;
 }
 
 #  ============================================================
-#  Pattern checks
+#  Lazy tables  --  byte classes, SQL words, shell commands
 #  ============================================================
 
-#  Return 1 if any of the word-bounded keywords appear in buf.
-fn _sc_has_any(buf, buflen, keywords, count) {
+var _sc_cls     = 0;        #  256 byte-class bytes
+var _sc_sql_kw  = 0;        #  {word, len, roles} x _sc_sql_n, 24 bytes each
+var _sc_sql_n   = 0;
+var _sc_sh_bins = 0;        #  {word, len, versioned} x _sc_sh_n, 24 bytes each
+var _sc_sh_n    = 0;
+var _sc_tpl_brace_kw  = 0;
+var _sc_tpl_dollar_kw = 0;
+
+fn _sc_tab_add(t, idx, word, v) {
+    var e = t + idx * 24;
+    store64(e,      word);
+    store64(e + 8,  strlen(word));
+    store64(e + 16, v);
+    return idx + 1;
+}
+
+fn _sc_init_cls() {
+    var t = alloc(256);
+    if (t == 0) { return 0 - 1; }
+    var c = 0;
+    while (c < 256) {
+        var f = 0;
+        if (c == 0) { f = _SC_C_NUL; }
+        if (c == 59 || c == 38 || c == 124 || c == 96 || c == 36 || c == 10 || c == 13) {
+            f = _SC_C_SHELL;
+        }
+        if (c == 123) { f = _SC_C_BRACE; }
+        if (c == 60)  { f = _SC_C_LT; }
+        if (c == 46 || c == 37 || c >= 128) { f = _SC_C_PATH; }
+        if (c == 39 || c == 34) { f = _SC_C_QUOTE; }
+        if (c == 45 || c == 47) { f = _SC_C_COMMENT; }
+        if (_sc_is_word_char(c) == 1) { f = _SC_C_WORD; }
+        store8(t + c, f);
+        c = c + 1;
+    }
+    _sc_cls = t;
+    return 0;
+}
+
+fn _sc_init_sql() {
+    var t = alloc(17 * 24);
+    if (t == 0) { return 0 - 1; }
     var k = 0;
-    while (k < count) {
-        var kw = load64(keywords + k * 8);
-        if (_sc_find_keyword(buf, buflen, kw) >= 0) { return 1; }
+    k = _sc_tab_add(t, k, "union",       _SC_K_A | _SC_K_UNION);
+    k = _sc_tab_add(t, k, "select",      _SC_K_A | _SC_K_SELECT);
+    k = _sc_tab_add(t, k, "insert",      _SC_K_A);
+    k = _sc_tab_add(t, k, "update",      _SC_K_A | _SC_K_MOD);
+    k = _sc_tab_add(t, k, "delete",      _SC_K_A | _SC_K_MOD);
+    k = _sc_tab_add(t, k, "drop",        _SC_K_A | _SC_K_MOD);
+    k = _sc_tab_add(t, k, "alter",       _SC_K_A);
+    k = _sc_tab_add(t, k, "exec",        _SC_K_A);
+    k = _sc_tab_add(t, k, "execute",     _SC_K_A);
+    k = _sc_tab_add(t, k, "truncate",    _SC_K_A | _SC_K_MOD);
+    k = _sc_tab_add(t, k, "grant",       _SC_K_MOD);
+    k = _sc_tab_add(t, k, "from",        _SC_K_B);
+    k = _sc_tab_add(t, k, "into",        _SC_K_B);
+    k = _sc_tab_add(t, k, "table",       _SC_K_B);
+    k = _sc_tab_add(t, k, "where",       _SC_K_B);
+    k = _sc_tab_add(t, k, "set",         _SC_K_B);
+    k = _sc_tab_add(t, k, "xp_cmdshell", _SC_K_ALONE);
+    _sc_sql_n = k;
+    _sc_sql_kw = t;
+    return 0;
+}
+
+#  `versioned` = 1: an interpreter whose binary may carry a version
+#  suffix of digits (python3, php8, perl5).
+fn _sc_init_sh() {
+    var t = alloc(20 * 24);
+    if (t == 0) { return 0 - 1; }
+    var k = 0;
+    k = _sc_tab_add(t, k, "rm",      0);
+    k = _sc_tab_add(t, k, "cat",     0);
+    k = _sc_tab_add(t, k, "curl",    0);
+    k = _sc_tab_add(t, k, "wget",    0);
+    k = _sc_tab_add(t, k, "nc",      0);
+    k = _sc_tab_add(t, k, "ncat",    0);
+    k = _sc_tab_add(t, k, "socat",   0);
+    k = _sc_tab_add(t, k, "bash",    0);
+    k = _sc_tab_add(t, k, "sh",      0);
+    k = _sc_tab_add(t, k, "zsh",     0);
+    k = _sc_tab_add(t, k, "dash",    0);
+    k = _sc_tab_add(t, k, "ksh",     0);
+    k = _sc_tab_add(t, k, "busybox", 0);
+    k = _sc_tab_add(t, k, "chmod",   0);
+    k = _sc_tab_add(t, k, "chown",   0);
+    k = _sc_tab_add(t, k, "python",  1);
+    k = _sc_tab_add(t, k, "perl",    1);
+    k = _sc_tab_add(t, k, "ruby",    1);
+    k = _sc_tab_add(t, k, "php",     1);
+    k = _sc_tab_add(t, k, "node",    1);
+    _sc_sh_n = k;
+    _sc_sh_bins = t;
+    return 0;
+}
+
+fn _sc_init_tpl() {
+    var a = alloc(3 * 8);
+    if (a == 0) { return 0 - 1; }
+    store64(a +  0, "config");
+    store64(a +  8, "self");
+    store64(a + 16, "request");
+    var b = alloc(3 * 8);
+    if (b == 0) { return 0 - 1; }
+    store64(b +  0, "Runtime");
+    store64(b +  8, "Process");
+    store64(b + 16, "exec");
+    _sc_tpl_brace_kw = a;
+    _sc_tpl_dollar_kw = b;
+    return 0;
+}
+
+#  0 once every table is built, -1 if an allocation was refused (the
+#  caller then fails closed). _sc_cls is set last, so a refused table is
+#  retried on the next scan rather than left half-built.
+fn _sc_init() {
+    if (_sc_cls != 0) { return 0; }
+    if (_sc_sql_kw == 0)       { if (_sc_init_sql() != 0) { return 0 - 1; } }
+    if (_sc_sh_bins == 0)      { if (_sc_init_sh()  != 0) { return 0 - 1; } }
+    if (_sc_tpl_brace_kw == 0) { if (_sc_init_tpl() != 0) { return 0 - 1; } }
+    return _sc_init_cls();
+}
+
+#  OR of the byte classes present in buf[0..buflen).
+fn _sc_classify(buf, buflen) {
+    var t = _sc_cls;
+    var f = 0;
+    var i = 0;
+    while (i < buflen) {
+        f = f | load8(t + load8(buf + i));
+        i = i + 1;
+    }
+    return f;
+}
+
+fn _sc_word_at(buf, i) {
+    return load8(_sc_cls + load8(buf + i)) & _SC_C_WORD;
+}
+
+#  ============================================================
+#  SQL
+#  ============================================================
+
+#  The roles of the word buf[s..s+n), or 0 if it is not a keyword.
+fn _sc_sql_word_roles(buf, s, n) {
+    if (n < 3 || n > 11) { return 0; }
+    var c0 = _sc_to_lower(load8(buf + s));
+    var k = 0;
+    while (k < _sc_sql_n) {
+        var e = _sc_sql_kw + k * 24;
+        if (load64(e + 8) == n) {
+            var kw = load64(e);
+            if (load8(kw) == c0) {
+                if (_sc_ci_memeq(buf, s, kw, n) == 1) { return load64(e + 16); }
+            }
+        }
         k = k + 1;
     }
     return 0;
 }
 
-var _sc_sql_a_kw = 0;
-var _sc_sql_a_n  = 9;
-var _sc_sql_b_kw = 0;
-var _sc_sql_b_n  = 5;
-var _sc_sql_mod_kw = 0;
-var _sc_sql_mod_n  = 3;
-
-fn _sc_init_sql() {
-    if (_sc_sql_a_kw != 0) { return 0; }
-    var a = alloc(_sc_sql_a_n * 8);
-    store64(a +  0, "union");
-    store64(a +  8, "select");
-    store64(a + 16, "insert");
-    store64(a + 24, "update");
-    store64(a + 32, "delete");
-    store64(a + 40, "drop");
-    store64(a + 48, "alter");
-    store64(a + 56, "exec");
-    store64(a + 64, "execute");
-    _sc_sql_a_kw = a;
-
-    var b = alloc(_sc_sql_b_n * 8);
-    store64(b +  0, "from");
-    store64(b +  8, "into");
-    store64(b + 16, "table");
-    store64(b + 24, "where");
-    store64(b + 32, "set");
-    _sc_sql_b_kw = b;
-
-    var m = alloc(_sc_sql_mod_n * 8);
-    store64(m +  0, "drop");
-    store64(m +  8, "delete");
-    store64(m + 16, "update");
-    _sc_sql_mod_kw = m;
-    return 0;
-}
-
-#  MySQL versioned comments (`/*!50000 UNION */`) and null bytes inside
-#  keywords (`uni\x00on`) are common libinjection-style evasion payloads.
-#  Their mere presence is anomalous in a tool parameter — flag directly.
-fn _sc_has_sql_evasion(buf, buflen) {
+#  `--` anywhere, or a MySQL versioned comment `/*!` (`/*!50000 UNION */`
+#  is a common libinjection-style evasion; it never belongs in a value).
+fn _sc_has_sql_comment(buf, buflen) {
     var i = 0;
-    while (i + 3 < buflen) {
-        if (load8(buf + i) == 47 && load8(buf + i + 1) == 42 && load8(buf + i + 2) == 33) {
-            #  "/*!" — MySQL versioned/conditional comment opener
-            return 1;
+    while (i + 1 < buflen) {
+        var c = load8(buf + i);
+        var d = load8(buf + i + 1);
+        if (c == 45 && d == 45) { return 1; }
+        if (c == 47 && d == 42 && i + 2 < buflen) {
+            if (load8(buf + i + 2) == 33) { return 1; }
         }
-        i = i + 1;
-    }
-    #  Null bytes inside an ASCII-looking quoted parameter are suspicious
-    #  (keyword splitters: uni\x00on, se\x00lect, etc.).
-    i = 0;
-    while (i < buflen) {
-        if (load8(buf + i) == 0) { return 1; }
         i = i + 1;
     }
     return 0;
 }
 
-fn _sc_check_sql(buf, buflen) {
-    _sc_init_sql();
-
-    if (_sc_has_sql_evasion(buf, buflen) == 1) { return 1; }
-
-    #  -- comment
-    if (buflen >= 2) {
-        var i = 0;
-        while (i + 1 < buflen) {
-            if (load8(buf + i) == 45 && load8(buf + i + 1) == 45) { return 1; }
-            i = i + 1;
-        }
+#  Skip whitespace and parentheses from `i`, at most SCAN_SQL_SKIP_MAX bytes.
+fn _sc_skip_sql_ws(buf, buflen, i) {
+    var lim = i + SCAN_SQL_SKIP_MAX;
+    if (lim > buflen) { lim = buflen; }
+    while (i < lim) {
+        var c = load8(buf + i);
+        if (_sc_is_space(c) == 0 && c != 40 && c != 41) { return i; }
+        i = i + 1;
     }
+    return i;
+}
 
-    #  ; followed somewhere after by drop|delete|update
-    var si = 0;
-    while (si < buflen) {
-        if (load8(buf + si) == 59) {
-            var j = 0;
-            while (j < _sc_sql_mod_n) {
-                var kw = load64(_sc_sql_mod_kw + j * 8);
-                var found = _sc_find_keyword(buf, buflen, kw);
-                if (found >= 0 && found > si) { return 1; }
-                j = j + 1;
+#  1 if a comment that discards the rest of the query starts at `i`.
+fn _sc_sql_comment_at(buf, buflen, i) {
+    if (i >= buflen) { return 0; }
+    var c = load8(buf + i);
+    if (c == 35) { return 1; }                                 #  #
+    if (i + 1 < buflen) {
+        var d = load8(buf + i + 1);
+        if (c == 47 && d == 42) { return 1; }                  #  /*
+        if (c == 45 && d == 45) { return 1; }                  #  --
+    }
+    return 0;
+}
+
+#  Index after one SQL operand at `i` -- a quoted literal (closed within
+#  SCAN_SQL_SKIP_MAX bytes) or a number / identifier -- or -1.
+fn _sc_skip_sql_operand(buf, buflen, i) {
+    if (i >= buflen) { return 0 - 1; }
+    var c = load8(buf + i);
+    if (c == 39 || c == 34) {
+        var lim = i + 1 + SCAN_SQL_SKIP_MAX;
+        if (lim > buflen) { lim = buflen; }
+        var e = _sc_find_byte(buf, lim, i + 1, c);
+        if (e < 0) { return 0 - 1; }
+        return e + 1;
+    }
+    if (_sc_word_at(buf, i) == 0) { return 0 - 1; }
+    while (i < buflen && _sc_word_at(buf, i) != 0) { i = i + 1; }
+    return i;
+}
+
+#  A quote that ends the application's string literal, followed by
+#  something only injected SQL does there:
+#    '#   '/*   '--          comment out the rest of the query (admin'#)
+#    ' OR x = y              tautology (' OR 1=1, ' OR 'a'='a, ' or ''=')
+#  The operand comparison is = < > or !=, or the tautology may itself be
+#  cut off by a comment (' OR TRUE#). Every skip is bounded, so a run of
+#  quotes stays O(N).
+fn _sc_has_sql_quote_break(buf, buflen) {
+    var q = 0;
+    while (q < buflen) {
+        var qc = load8(buf + q);
+        if (qc == 39 || qc == 34) {
+            var p = _sc_skip_sql_ws(buf, buflen, q + 1);
+            if (_sc_sql_comment_at(buf, buflen, p) == 1) { return 1; }
+            if (p + 2 <= buflen) {
+                if (_sc_to_lower(load8(buf + p)) == 111 && _sc_to_lower(load8(buf + p + 1)) == 114) {
+                    var a = p + 2;
+                    var bounded = 1;
+                    if (a < buflen) { if (_sc_word_at(buf, a) != 0) { bounded = 0; } }
+                    if (bounded == 1) {
+                        a = _sc_skip_sql_operand(buf, buflen, _sc_skip_sql_ws(buf, buflen, a));
+                        if (a >= 0) {
+                            a = _sc_skip_sql_ws(buf, buflen, a);
+                            if (a < buflen) {
+                                var op = load8(buf + a);
+                                if (op == 61 || op == 60 || op == 62) { return 1; }
+                                if (op == 33 && a + 1 < buflen) {
+                                    if (load8(buf + a + 1) == 61) { return 1; }
+                                }
+                            }
+                            if (_sc_sql_comment_at(buf, buflen, a) == 1) { return 1; }
+                        }
+                    }
+                }
             }
         }
-        si = si + 1;
-    }
-
-    #  keyword-A AND keyword-B
-    if (_sc_has_any(buf, buflen, _sc_sql_a_kw, _sc_sql_a_n) == 1) {
-        if (_sc_has_any(buf, buflen, _sc_sql_b_kw, _sc_sql_b_n) == 1) { return 1; }
+        q = q + 1;
     }
     return 0;
 }
 
-var _sc_sh_bins = 0;
-var _sc_sh_n    = 12;
+#  One pass over the words: keyword-A with keyword-B anywhere, union
+#  followed by select, a destructive verb after the first `;`, or a word
+#  that is sufficient alone. Word-bounded by construction -- a word is a
+#  maximal run of [0-9A-Za-z_], so `selected` never reads as `select`.
+fn _sc_check_sql(buf, buflen, f) {
+    if ((f & _SC_C_COMMENT) != 0) {
+        if (_sc_has_sql_comment(buf, buflen) == 1) { return 1; }
+    }
+    if ((f & _SC_C_QUOTE) != 0) {
+        if (_sc_has_sql_quote_break(buf, buflen) == 1) { return 1; }
+    }
+    #  Only the first `;` matters: every later one is followed by a
+    #  subset of what follows it.
+    var semi = 0 - 1;
+    if ((f & _SC_C_SHELL) != 0) { semi = _sc_find_byte(buf, buflen, 0, 59); }
 
-fn _sc_init_sh() {
-    if (_sc_sh_bins != 0) { return 0; }
-    var a = alloc(_sc_sh_n * 8);
-    store64(a +  0, "rm");
-    store64(a +  8, "cat");
-    store64(a + 16, "curl");
-    store64(a + 24, "wget");
-    store64(a + 32, "nc");
-    store64(a + 40, "bash");
-    store64(a + 48, "sh");
-    store64(a + 56, "python");
-    store64(a + 64, "perl");
-    store64(a + 72, "ruby");
-    store64(a + 80, "chmod");
-    store64(a + 88, "chown");
-    _sc_sh_bins = a;
+    var seen = 0;
+    var i = 0;
+    while (i < buflen) {
+        if (_sc_word_at(buf, i) == 0) { i = i + 1; continue; }
+        var s = i;
+        while (i < buflen && _sc_word_at(buf, i) != 0) { i = i + 1; }
+        var roles = _sc_sql_word_roles(buf, s, i - s);
+        if (roles != 0) {
+            if ((roles & _SC_K_ALONE) != 0) { return 1; }
+            if ((roles & _SC_K_MOD) != 0 && semi >= 0 && s > semi) { return 1; }
+            if ((roles & _SC_K_SELECT) != 0 && (seen & _SC_K_UNION) != 0) { return 1; }
+            seen = seen | roles;
+            if ((seen & _SC_K_A) != 0 && (seen & _SC_K_B) != 0) { return 1; }
+        }
+    }
     return 0;
 }
+
+#  ============================================================
+#  Shell
+#  ============================================================
 
 fn _sc_is_shell_delim(c) {
     if (c == 59)  { return 1; }      #  ;
@@ -235,13 +457,17 @@ fn _sc_is_shell_delim(c) {
     if (c == 124) { return 1; }      #  |
     if (c == 96)  { return 1; }      #  backtick
     if (c == 36)  { return 1; }      #  $
+    if (c == 10)  { return 1; }      #  LF  (a new command line)
+    if (c == 13)  { return 1; }      #  CR
     return 0;
 }
 
 #  Skip shell-metachar filler after a delimiter so we see the real command.
-#  Handles `$IFS`, `${IFS}`, `${IFS$9}`, brace groups opening `{`, and
-#  whitespace. Returns the position of the first bytes that look like a
-#  command name.
+#  Handles whitespace, `$IFS`, `$9`, `${IFS}` / `${IFS$9}` (at most
+#  SCAN_FILLER_BRACE_MAX bytes -- an unclosed `${` must not cost a search
+#  of the rest of the buffer per delimiter), brace groups opening `{`
+#  and subshells opening `(` / `$(`. Returns the position of the first
+#  byte that looks like a command name.
 fn _sc_skip_shell_filler(buf, buflen, pos) {
     var i = pos;
     while (i < buflen) {
@@ -249,7 +475,9 @@ fn _sc_skip_shell_filler(buf, buflen, pos) {
         if (_sc_is_space(c) == 1) { i = i + 1; }
         elif (c == 36 && i + 1 < buflen && load8(buf + i + 1) == 123) {
             #  ${...}: skip entirely (bash variable expansion, IFS trick, etc.)
-            var close = _sc_find_byte(buf, buflen, i + 2, 125);
+            var lim = i + 2 + SCAN_FILLER_BRACE_MAX;
+            if (lim > buflen) { lim = buflen; }
+            var close = _sc_find_byte(buf, lim, i + 2, 125);
             if (close < 0) { return i; }
             i = close + 1;
         }
@@ -275,189 +503,241 @@ fn _sc_skip_shell_filler(buf, buflen, pos) {
                 return i;
             }
         }
-        elif (c == 123) { i = i + 1; }       #  opening brace of {rm,-rf,/}
+        elif (c == 123 || c == 40) { i = i + 1; }      #  {rm,-rf,/}  (rm)  $(rm)
         else { return i; }
     }
     return i;
 }
 
+#  1 if the lower-case word w[0..wl) names a listed command.
+fn _sc_shell_word_match(w, wl) {
+    var k = 0;
+    while (k < _sc_sh_n) {
+        var e = _sc_sh_bins + k * 24;
+        var bl = load64(e + 8);
+        if (wl >= bl && memeq(w, load64(e), bl) == 1) {
+            if (wl == bl) { return 1; }
+            if (load64(e + 16) == 1) {
+                var j = bl;
+                while (j < wl && load8(w + j) >= 48 && load8(w + j) <= 57) { j = j + 1; }
+                if (j == wl) { return 1; }               #  python3, php8
+            }
+        }
+        k = k + 1;
+    }
+    return 0;
+}
+
+#  Read the command word at `pos` the way the shell would: `'` `"` `\`
+#  are removed (quote removal: \rm, 'r'm, "rm"), and a path prefix up to
+#  the last `/` is dropped (/bin/rm, ../../bin/sh). Of the final path
+#  segment, its leading run of word characters is the name matched, so
+#  rm.exe and rm-x read as rm (as before). The walk stops at the first
+#  byte that cannot be part of a word or path, and every delimiter is
+#  such a byte, so walks from different delimiters never overlap.
+fn _sc_shell_cmd_at(buf, buflen, pos) {
+    var wb[32];
+    var w = &wb;
+    var wl = 0;
+    var run = 1;            #  still inside the segment's leading word run
+    var i = pos;
+    while (i < buflen) {
+        var c = load8(buf + i);
+        if (c == 39 || c == 34 || c == 92) { i = i + 1; }
+        elif (c == 47) { wl = 0; run = 1; i = i + 1; }
+        elif (_sc_is_word_char(c) == 1) {
+            if (run == 1) {
+                if (wl < 32) { store8(w + wl, _sc_to_lower(c)); wl = wl + 1; }
+                else { wl = 33; run = 0; }               #  longer than any command name
+            }
+            i = i + 1;
+        }
+        elif (c == 46 || c == 45) { run = 0; i = i + 1; }
+        else { break; }
+    }
+    if (wl == 0 || wl > 32) { return 0; }
+    return _sc_shell_word_match(w, wl);
+}
+
 fn _sc_check_shell(buf, buflen) {
-    _sc_init_sh();
     var i = 0;
+    var filler_end = 0;
     while (i < buflen) {
-        if (_sc_is_shell_delim(load8(buf + i)) == 1) {
-            var j = _sc_skip_shell_filler(buf, buflen, i + 1);
-            var k = 0;
-            while (k < _sc_sh_n) {
-                var bin = load64(_sc_sh_bins + k * 8);
-                var blen = strlen(bin);
-                if (j + blen <= buflen) {
-                    if (_sc_ci_memeq(buf, j, bin, blen) == 1) {
-                        #  Right word-boundary: byte after must not continue the name.
-                        if (j + blen == buflen) { return 1; }
-                        if (_sc_is_word_char(load8(buf + j + blen)) == 0) { return 1; }
-                    }
+        var c = load8(buf + i);
+        if (_sc_is_shell_delim(c) == 1) {
+            #  A LF/CR inside the filler of an earlier delimiter is a
+            #  whitespace token of that filler: its own skip would end at
+            #  the same command, already checked. Skipping it keeps a run
+            #  of newlines O(N) instead of O(N^2).
+            var dup = 0;
+            if ((c == 10 || c == 13) && i < filler_end) { dup = 1; }
+            if (dup == 0) {
+                var j = _sc_skip_shell_filler(buf, buflen, i + 1);
+                if (j > filler_end) { filler_end = j; }
+                if (_sc_shell_cmd_at(buf, buflen, j) == 1) { return 1; }
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+#  ============================================================
+#  Template
+#  ============================================================
+
+#  {{ .. }} / {% .. %}: ONE span from the first open to the last close.
+#  Ending at the first close would let a close inside a string literal
+#  ({{'}}'~lipsum.__globals__...}}) hide everything after it. The span
+#  holds an expression if it has attribute / call / index / filter /
+#  concat syntax or a hex escape -- `.` `__` `(` `[` `~` `|attr` `\x` --
+#  or names config, self or request. O(N): one pass plus three.
+fn _sc_check_tpl_span(buf, buflen, oa, ob, ca, cb) {
+    var open = _sc_find_delim2(buf, buflen, 0, oa, ob);
+    if (open < 0) { return 0; }
+    var s = open + 2;
+    var close = buflen - 2;
+    while (close >= s) {
+        if (load8(buf + close) == ca && load8(buf + close + 1) == cb) { break; }
+        close = close - 1;
+    }
+    if (close < s) { return 0; }
+    var i = s;
+    while (i < close) {
+        var c = load8(buf + i);
+        if (c == 46 || c == 40 || c == 91 || c == 126) { return 1; }     #  . ( [ ~
+        if (i + 1 < close) {
+            var d = load8(buf + i + 1);
+            if (c == 95 && d == 95) { return 1; }                        #  __
+            if (c == 92 && (d == 120 || d == 88)) { return 1; }          #  \x
+            if (c == 124 && i + 5 <= close) {
+                if (_sc_ci_memeq(buf, i + 1, "attr", 4) == 1) { return 1; }   #  |attr
+            }
+        }
+        i = i + 1;
+    }
+    var k = 0;
+    while (k < 3) {
+        if (_sc_contains_ci(buf, s, close, load64(_sc_tpl_brace_kw + k * 8)) == 1) { return 1; }
+        k = k + 1;
+    }
+    return 0;
+}
+
+#  ${ .. }  JSP-EL / Spring;  *{ .. } @{ .. } ~{ .. }  Thymeleaf selection,
+#  link and fragment expressions: `.` Runtime Process exec.
+#  #{ .. }  Ruby / ERB interpolation: `.`.
+#  Each region ends at its first `}`. When no `}` follows an open, no later
+#  open can close either, so the loop stops (it does not return: the other
+#  template checks still run).
+fn _sc_check_tpl_dollar(buf, buflen) {
+    var i = 0;
+    while (i + 1 < buflen) {
+        var c = load8(buf + i);
+        var opener = 0;
+        if (load8(buf + i + 1) == 123) {
+            if (c == 36 || c == 42 || c == 64 || c == 126 || c == 35) { opener = 1; }
+        }
+        if (opener == 1) {
+            var close = _sc_find_byte(buf, buflen, i + 2, 125);
+            if (close < 0) { break; }
+            if (_sc_find_byte(buf, close, i + 2, 46) >= 0) { return 1; }
+            if (c != 35) {
+                var k = 0;
+                while (k < 3) {
+                    if (_sc_contains_ci(buf, i + 2, close, load64(_sc_tpl_dollar_kw + k * 8)) == 1) { return 1; }
+                    k = k + 1;
                 }
-                k = k + 1;
-            }
-        }
-        i = i + 1;
-    }
-    return 0;
-}
-
-#  Find the first `end` byte after `start`; return end index or -1.
-fn _sc_find_byte(buf, buflen, start, target) {
-    var i = start;
-    while (i < buflen) {
-        if (load8(buf + i) == target) { return i; }
-        i = i + 1;
-    }
-    return 0 - 1;
-}
-
-fn _sc_contains_ci(buf, start, endp, needle) {
-    var nlen = strlen(needle);
-    var buflen = endp;
-    var i = start;
-    if (nlen == 0) { return 1; }
-    while (i + nlen <= buflen) {
-        if (_sc_ci_memeq(buf, i, needle, nlen) == 1) { return 1; }
-        i = i + 1;
-    }
-    return 0;
-}
-
-#  Find the first two-byte delimiter at/after `start` within [start..buflen).
-#  Returns idx or -1. O(N) — no restart, no backtrack.
-fn _sc_find_delim2(buf, buflen, start, a, b) {
-    var i = start;
-    while (i + 1 < buflen) {
-        if (load8(buf + i) == a && load8(buf + i + 1) == b) { return i; }
-        i = i + 1;
-    }
-    return 0 - 1;
-}
-
-#  Scan every `open`..`close` region in buf. Returns 1 if any region
-#  contains one of the keyword triggers (dot via `dot_triggers`, plus each
-#  string in `kw` list). Scans each delimiter pair exactly once — O(N).
-fn _sc_scan_paired_regions(buf, buflen, open_a, open_b, close_a, close_b, check_dot, kw_arr, kw_n) {
-    var i = 0;
-    while (1 == 1) {
-        var open = _sc_find_delim2(buf, buflen, i, open_a, open_b);
-        if (open < 0) { return 0; }
-        var content = open + 2;
-        var close = _sc_find_delim2(buf, buflen, content, close_a, close_b);
-        if (close < 0) { return 0; }           #  no close means no more complete regions
-        if (check_dot == 1) {
-            if (_sc_find_byte(buf, close, content, 46) >= 0) { return 1; }
-        }
-        var k = 0;
-        while (k < kw_n) {
-            if (_sc_contains_ci(buf, content, close, load64(kw_arr + k * 8)) == 1) { return 1; }
-            k = k + 1;
-        }
-        i = close + 2;                         #  advance past close
-    }
-    return 0;
-}
-
-#  Lazy-init for template-specific keyword lists.
-var _sc_tpl_brace_kw = 0;
-var _sc_tpl_dollar_kw = 0;
-
-fn _sc_init_tpl() {
-    if (_sc_tpl_brace_kw != 0) { return 0; }
-    var a = alloc(4 * 8);
-    store64(a +  0, "__");
-    store64(a +  8, "config");
-    store64(a + 16, "self");
-    store64(a + 24, "request");
-    _sc_tpl_brace_kw = a;
-    var b = alloc(3 * 8);
-    store64(b +  0, "Runtime");
-    store64(b +  8, "Process");
-    store64(b + 16, "exec");
-    _sc_tpl_dollar_kw = b;
-    return 0;
-}
-
-fn _sc_check_template(buf, buflen) {
-    _sc_init_tpl();
-
-    #  {{ ... }}  Jinja-style expressions: dot, __, config, self, request
-    if (_sc_scan_paired_regions(buf, buflen, 123, 123, 125, 125, 1, _sc_tpl_brace_kw, 4) == 1) {
-        return 1;
-    }
-
-    #  {% ... %}  Jinja-style statements: dot, __, config, self, request
-    if (_sc_scan_paired_regions(buf, buflen, 123, 37,  37,  125, 1, _sc_tpl_brace_kw, 4) == 1) {
-        return 1;
-    }
-
-    #  <% ... %>  ERB/EJS/JSP: any content flags (execution context itself)
-    if (_sc_find_delim2(buf, buflen, 0, 60, 37) >= 0) {
-        if (_sc_find_delim2(buf, buflen, 0, 37, 62) >= 0) { return 1; }
-    }
-
-    #  <# ... >  FreeMarker directives: any tag within a quoted param is suspect.
-    #  We require the close `>` strictly after the open; naive scan suffices.
-    if (_sc_find_delim2(buf, buflen, 0, 60, 35) >= 0) { return 1; }
-
-    #  ${ ... }  JSP-EL / shell-like: dot, Runtime, Process, exec
-    var i = 0;
-    while (i + 1 < buflen) {
-        if (load8(buf + i) == 36 && load8(buf + i + 1) == 123) {
-            var close = _sc_find_byte(buf, buflen, i + 2, 125);
-            if (close < 0) { return 0; }
-            if (_sc_find_byte(buf, close, i + 2, 46) >= 0) { return 1; }
-            var k = 0;
-            while (k < 3) {
-                if (_sc_contains_ci(buf, i + 2, close, load64(_sc_tpl_dollar_kw + k * 8)) == 1) { return 1; }
-                k = k + 1;
             }
             i = close + 1;
         }
         else { i = i + 1; }
     }
+    return 0;
+}
 
-    #  #{ ... }  ERB / Ruby string interpolation: dot or any method call
-    i = 0;
-    while (i + 1 < buflen) {
-        if (load8(buf + i) == 35 && load8(buf + i + 1) == 123) {
-            var close = _sc_find_byte(buf, buflen, i + 2, 125);
-            if (close < 0) { return 0; }
-            if (_sc_find_byte(buf, close, i + 2, 46) >= 0) { return 1; }
-            i = close + 1;
+fn _sc_check_template(buf, buflen, f) {
+    if ((f & _SC_C_BRACE) != 0) {
+        #  {{ ... }}  Jinja / Twig / Go expressions
+        if (_sc_check_tpl_span(buf, buflen, 123, 123, 125, 125) == 1) { return 1; }
+        #  {% ... %}  Jinja-style statements
+        if (_sc_check_tpl_span(buf, buflen, 123, 37,  37,  125) == 1) { return 1; }
+        if (_sc_check_tpl_dollar(buf, buflen) == 1) { return 1; }
+    }
+    if ((f & _SC_C_LT) != 0) {
+        #  <% ... %>  ERB/EJS/JSP: any content flags (execution context itself)
+        if (_sc_find_delim2(buf, buflen, 0, 60, 37) >= 0) {
+            if (_sc_find_delim2(buf, buflen, 0, 37, 62) >= 0) { return 1; }
         }
-        else { i = i + 1; }
+        #  <#  FreeMarker directive opener: flagged on its own, no close needed.
+        if (_sc_find_delim2(buf, buflen, 0, 60, 35) >= 0) { return 1; }
     }
     return 0;
 }
 
+#  ============================================================
+#  Path traversal
+#  ============================================================
+
+#  1 if buf[i..] starts with the (lower-case) `lit` of `n` bytes, ignoring case.
+fn _sc_lit_at(buf, buflen, i, lit, n) {
+    if (i + n > buflen) { return 0; }
+    return _sc_ci_memeq(buf, i, lit, n);
+}
+
+#  Length of a traversal dot at `i` -- `.`, %2e, %252e, %25%32%45,
+#  %c0%ae, or overlong UTF-8 C0 AE (RFC 3629 forbids it; it only appears
+#  as a bypass) -- or 0.
+fn _sc_path_dot(buf, buflen, i) {
+    if (i >= buflen) { return 0; }
+    var c = load8(buf + i);
+    if (c == 46) { return 1; }
+    if (c == 0xC0) {
+        if (i + 1 < buflen && load8(buf + i + 1) == 0xAE) { return 2; }
+        return 0;
+    }
+    if (c != 37) { return 0; }
+    if (_sc_lit_at(buf, buflen, i, "%2e", 3) == 1)       { return 3; }
+    if (_sc_lit_at(buf, buflen, i, "%252e", 5) == 1)     { return 5; }
+    if (_sc_lit_at(buf, buflen, i, "%c0%ae", 6) == 1)    { return 6; }
+    if (_sc_lit_at(buf, buflen, i, "%25%32%45", 9) == 1) { return 9; }
+    return 0;
+}
+
+#  Length of a path separator at `i` -- / \ %2f %5c %252f %255c %c0%af or
+#  overlong C0 AF -- or 0.
+fn _sc_path_sep(buf, buflen, i) {
+    if (i >= buflen) { return 0; }
+    var c = load8(buf + i);
+    if (c == 47 || c == 92) { return 1; }
+    if (c == 0xC0) {
+        if (i + 1 < buflen && load8(buf + i + 1) == 0xAF) { return 2; }
+        return 0;
+    }
+    if (c != 37) { return 0; }
+    if (_sc_lit_at(buf, buflen, i, "%2f", 3) == 1)    { return 3; }
+    if (_sc_lit_at(buf, buflen, i, "%5c", 3) == 1)    { return 3; }
+    if (_sc_lit_at(buf, buflen, i, "%252f", 5) == 1)  { return 5; }
+    if (_sc_lit_at(buf, buflen, i, "%255c", 5) == 1)  { return 5; }
+    if (_sc_lit_at(buf, buflen, i, "%c0%af", 6) == 1) { return 6; }
+    return 0;
+}
+
+#  Two dots then a separator, each in any of its spellings (..%2f, .%2e/,
+#  %2e%2e%5c). An encoded dot pair is flagged without a separator, as
+#  %2e%2e always was: a literal `..` alone is ordinary text, an encoded
+#  one is not.
 fn _sc_check_path(buf, buflen) {
     var i = 0;
-    while (i + 2 < buflen) {
-        var c0 = load8(buf + i);
-        var c1 = load8(buf + i + 1);
-        var c2 = load8(buf + i + 2);
-        if (c0 == 46 && c1 == 46 && c2 == 47) { return 1; }     #  ../
-        if (c0 == 46 && c1 == 46 && c2 == 92) { return 1; }     #  ..\
-        i = i + 1;
-    }
-    #  Single-layer URL encoding
-    if (_sc_contains_ci(buf, 0, buflen, "%2e%2e") == 1) { return 1; }
-    #  Double-layer URL encoding (%25 -> %, then %2e -> .)
-    if (_sc_contains_ci(buf, 0, buflen, "%252e%252e") == 1) { return 1; }
-    #  Fully-encoded percent sequences (%25 = %, %32 = 2, %45 = E)
-    if (_sc_contains_ci(buf, 0, buflen, "%25%32%45%25%32%45") == 1) { return 1; }
-    #  Overlong UTF-8 representations of `.` (0xC0 0xAE) — RFC 3629 forbids these
-    #  sequences, they only appear as bypass payloads.
-    i = 0;
-    while (i + 3 < buflen) {
-        if (load8(buf + i)     == 0xC0 && load8(buf + i + 1) == 0xAE
-         && load8(buf + i + 2) == 0xC0 && load8(buf + i + 3) == 0xAE) { return 1; }
+    while (i + 1 < buflen) {
+        var d1 = _sc_path_dot(buf, buflen, i);
+        if (d1 > 0) {
+            var d2 = _sc_path_dot(buf, buflen, i + d1);
+            if (d2 > 0) {
+                if (d1 > 1 || d2 > 1) { return 1; }
+                if (_sc_path_sep(buf, buflen, i + 2) > 0) { return 1; }
+            }
+        }
         i = i + 1;
     }
     return 0;
@@ -467,14 +747,143 @@ fn _sc_check_path(buf, buflen) {
 #  Top-level: classify a single string leaf
 #  ============================================================
 #
-#  Returns a threat-label C-string, or 0 if clean.
+#  Returns a threat-label C-string, or 0 if clean. `buf` is the decoded
+#  leaf; it may contain NUL bytes (buflen bounds it, not a terminator).
 
 fn scanner_scan_text(buf, buflen) {
-    if (_sc_check_sql(buf, buflen)      == 1) { return "SQL injection pattern"; }
-    if (_sc_check_shell(buf, buflen)    == 1) { return "shell injection pattern"; }
-    if (_sc_check_template(buf, buflen) == 1) { return "template injection pattern"; }
-    if (_sc_check_path(buf, buflen)     == 1) { return "path traversal pattern"; }
+    if (_sc_init() != 0) { return "scanner tables unavailable"; }
+    var f = _sc_classify(buf, buflen);
+    if ((f & _SC_C_NUL) != 0) { return "NUL byte in payload"; }
+    if (_sc_check_sql(buf, buflen, f) == 1) { return "SQL injection pattern"; }
+    if ((f & _SC_C_SHELL) != 0) {
+        if (_sc_check_shell(buf, buflen) == 1) { return "shell injection pattern"; }
+    }
+    if ((f & (_SC_C_BRACE | _SC_C_LT)) != 0) {
+        if (_sc_check_template(buf, buflen, f) == 1) { return "template injection pattern"; }
+    }
+    if ((f & _SC_C_PATH) != 0) {
+        if (_sc_check_path(buf, buflen) == 1) { return "path traversal pattern"; }
+    }
     return 0;
+}
+
+#  ============================================================
+#  JSON string decoding
+#  ============================================================
+
+#  Value of four hex digits at src[i..i+4) (bounded by n), or -1.
+fn _sc_hex4(src, i, n) {
+    if (i + 4 > n) { return 0 - 1; }
+    var v = 0;
+    var k = 0;
+    while (k < 4) {
+        var c = load8(src + i + k);
+        var d = 0 - 1;
+        if (c >= 48 && c <= 57) { d = c - 48; }
+        elif (c >= 97 && c <= 102) { d = c - 87; }
+        elif (c >= 65 && c <= 70) { d = c - 55; }
+        if (d < 0) { return 0 - 1; }
+        v = v * 16 + d;
+        k = k + 1;
+    }
+    return v;
+}
+
+#  Code point `cp` (at most 0x10FFFF) as UTF-8 at dst + o; returns the new offset.
+fn _sc_utf8_put(dst, o, cp) {
+    if (cp < 0x80) { store8(dst + o, cp); return o + 1; }
+    if (cp < 0x800) {
+        store8(dst + o,     0xC0 | (cp >> 6));
+        store8(dst + o + 1, 0x80 | (cp & 0x3F));
+        return o + 2;
+    }
+    if (cp < 0x10000) {
+        store8(dst + o,     0xE0 | (cp >> 12));
+        store8(dst + o + 1, 0x80 | ((cp >> 6) & 0x3F));
+        store8(dst + o + 2, 0x80 | (cp & 0x3F));
+        return o + 3;
+    }
+    store8(dst + o,     0xF0 | (cp >> 18));
+    store8(dst + o + 1, 0x80 | ((cp >> 12) & 0x3F));
+    store8(dst + o + 2, 0x80 | ((cp >> 6) & 0x3F));
+    store8(dst + o + 3, 0x80 | (cp & 0x3F));
+    return o + 4;
+}
+
+#  Decode the JSON string body src[0..n) (the bytes between its quotes,
+#  escapes as written) into dst, per RFC 8259 §7; returns the decoded
+#  length, never more than n -- no escape decodes longer than it is
+#  written (\uXXXX is 6 bytes for at most 3, a surrogate pair 12 for 4).
+#  A lone surrogate becomes U+FFFD. An escape JSON does not define (`\x`,
+#  `\u` without four hex digits) is kept as written, both bytes, so the
+#  rules still see it.
+fn _sc_json_unescape(dst, src, n) {
+    var i = 0;
+    var o = 0;
+    while (i < n) {
+        var c = load8(src + i);
+        if (c != 92 || i + 1 >= n) {
+            store8(dst + o, c);
+            o = o + 1;
+            i = i + 1;
+            continue;
+        }
+        var e = load8(src + i + 1);
+        var b = 0 - 1;
+        if (e == 34 || e == 92 || e == 47) { b = e; }
+        elif (e == 98)  { b = 8; }
+        elif (e == 102) { b = 12; }
+        elif (e == 110) { b = 10; }
+        elif (e == 114) { b = 13; }
+        elif (e == 116) { b = 9; }
+        if (b >= 0) {
+            store8(dst + o, b);
+            o = o + 1;
+            i = i + 2;
+            continue;
+        }
+        var cp = 0 - 1;
+        if (e == 117) { cp = _sc_hex4(src, i + 2, n); }
+        if (cp < 0) {
+            store8(dst + o, 92);
+            store8(dst + o + 1, e);
+            o = o + 2;
+            i = i + 2;
+            continue;
+        }
+        i = i + 6;
+        if (cp >= 0xD800 && cp <= 0xDBFF) {
+            #  A high surrogate joins a following \uDC00..\uDFFF into one code point.
+            var lo = 0 - 1;
+            if (i + 1 < n && load8(src + i) == 92 && load8(src + i + 1) == 117) {
+                lo = _sc_hex4(src, i + 2, n);
+            }
+            if (lo >= 0xDC00 && lo <= 0xDFFF) {
+                cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                i = i + 6;
+            } else { cp = 0xFFFD; }
+        } elif (cp >= 0xDC00 && cp <= 0xDFFF) { cp = 0xFFFD; }
+        o = _sc_utf8_put(dst, o, cp);
+    }
+    return o;
+}
+
+#  Decode scratch, reused across leaves and calls (t-ron is single-
+#  threaded; see docs/architecture/overview.md). Grows geometrically, so
+#  steady-state scanning allocates nothing.
+var _sc_scratch     = 0;
+var _sc_scratch_cap = 0;
+
+fn _sc_scratch_for(n) {
+    if (n <= _sc_scratch_cap && _sc_scratch != 0) { return _sc_scratch; }
+    var cap = _sc_scratch_cap * 2;
+    if (cap < 256) { cap = 256; }
+    if (cap < n)   { cap = n; }
+    var b = alloc(cap);
+    if (b == 0) { return 0; }
+    _sc_scratch = b;
+    _sc_scratch_cap = cap;
+    return b;
 }
 
 #  ============================================================
@@ -482,14 +891,19 @@ fn scanner_scan_text(buf, buflen) {
 #  ============================================================
 #
 #  Rather than build a nested Value tree, we walk the raw JSON bytes
-#  with quote/depth awareness. Every double-quoted string is handed
-#  to scanner_scan_text(). Depth > MAX_DEPTH aborts (matches Rust).
+#  with quote/depth awareness. Every double-quoted string (keys too) is
+#  decoded and handed to scanner_scan_text(): the handler acts on the
+#  decoded text, so `"x; rm -rf /"` must read as `x; rm -rf /`. A
+#  leaf without a backslash is scanned in place. Nesting deeper than
+#  SCAN_MAX_DEPTH is reported as a threat -- the walk cannot vouch for
+#  what lies below it, so the call is denied rather than passed.
 #
 #  `params` is a null-terminated C string of the JSON parameters
 #  (serialised form). Caller is responsible for passing valid JSON;
 #  the walker is lenient on malformed input (it just stops scanning).
 
 fn scanner_scan(params) {
+    if (params == 0) { return 0; }
     var n = strlen(params);
     var pos = 0;
     var depth = 0;
@@ -497,7 +911,7 @@ fn scanner_scan(params) {
         var c = load8(params + pos);
         if (c == 123 || c == 91) {
             depth = depth + 1;
-            if (depth > SCAN_MAX_DEPTH) { return 0; }
+            if (depth > SCAN_MAX_DEPTH) { return "JSON nesting too deep"; }
             pos = pos + 1;
         }
         elif (c == 125 || c == 93) {
@@ -507,13 +921,25 @@ fn scanner_scan(params) {
         elif (c == 34) {
             var start = pos + 1;
             var k = start;
+            var esc = 0;
             while (k < n) {
                 var cc = load8(params + k);
-                if (cc == 92 && k + 1 < n) { k = k + 2; }
+                if (cc == 92) {
+                    esc = 1;
+                    if (k + 1 < n) { k = k + 2; } else { k = k + 1; }
+                }
                 elif (cc == 34) { break; }
                 else { k = k + 1; }
             }
-            var threat = scanner_scan_text(params + start, k - start);
+            var len = k - start;
+            var threat = 0;
+            if (esc == 0) {
+                threat = scanner_scan_text(params + start, len);
+            } else {
+                var sb = _sc_scratch_for(len);
+                if (sb == 0) { return "scanner scratch unavailable"; }
+                threat = scanner_scan_text(sb, _sc_json_unescape(sb, params + start, len));
+            }
             if (threat != 0) { return threat; }
             pos = k + 1;
         }

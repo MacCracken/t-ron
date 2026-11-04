@@ -41,6 +41,7 @@ include "lib/sigil.cyr"
 include "lib/libro.cyr"
 
 include "src/error.cyr"
+include "src/json_text.cyr"
 include "src/gate.cyr"
 include "src/policy.cyr"
 include "src/rate.cyr"
@@ -274,6 +275,216 @@ fn test_audit_decrypt_rejects_wrong_key() {
     return 0;
 }
 
+#  ---- 2.2.3 regressions ------------------------------------------------
+
+fn _t_has(hay, needle) {
+    var hn = strlen(hay);
+    var nn = strlen(needle);
+    var i = 0;
+    while (i + nn <= hn) {
+        if (memeq(hay + i, needle, nn) == 1) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+#  Sign `content` with sk into path + path.sig.
+fn _t_write_signed(path, sig_path, content, sk) {
+    var sig = alloc(64);
+    ed25519_sign(sk, content, strlen(content), sig);
+    _write_file(path, content, strlen(content));
+    _write_file(sig_path, sig, 64);
+    return 0;
+}
+
+fn test_signed_reload_reverifies() {
+    test_group("signing: SIGHUP reload of a signed policy re-verifies it");
+    var sk = alloc(64);
+    var pk = alloc(32);
+    ed25519_generate_keypair(sk, pk);
+    var path = "/tmp/tron_signed_reload.toml";
+    _t_write_signed(path, "/tmp/tron_signed_reload.toml.sig",
+        "[agent.\"trusted\"]\nallow = [\"tarang_*\"]\n", sk);
+    var verifier = policy_verifier_new();
+    policy_verifier_add_key(verifier, pk);
+    var t = tron_new(tron_config_default());
+    assert_eq(tron_verify_and_load_policy(t, verifier, path), TRON_ERR_NONE, "signed load");
+    assert_eq(tron_policy_signed(t), 1, "signed mode on");
+
+    #  Overwrite the policy without re-signing it, then reload.
+    var evil = "[agent.\"evil\"]\nallow = [\"*\"]\n";
+    _write_file(path, evil, strlen(evil));
+    assert_eq(tron_reload_policy(t), TRON_ERR_SIGNATURE, "tampered file refused on reload");
+    var k1, r1 = policy_check(tron_policy(t), "evil", "anything");
+    assert_eq(k1, PR_UNKNOWN_AGENT, "tampered policy not installed");
+    var k2, r2 = policy_check(tron_policy(t), "trusted", "tarang_probe");
+    assert_eq(k2, PR_ALLOW, "signed policy still active");
+
+    #  A properly re-signed file reloads.
+    _t_write_signed(path, "/tmp/tron_signed_reload.toml.sig",
+        "[agent.\"trusted2\"]\nallow = [\"*\"]\n", sk);
+    assert_eq(tron_reload_policy(t), TRON_ERR_NONE, "re-signed file reloads");
+    var k3, r3 = policy_check(tron_policy(t), "trusted2", "x");
+    assert_eq(k3, PR_ALLOW, "re-signed policy active");
+    return 0;
+}
+
+fn test_signed_mode_refuses_unsigned_loads() {
+    test_group("signing: signed mode refuses unsigned loads");
+    var sk = alloc(64);
+    var pk = alloc(32);
+    ed25519_generate_keypair(sk, pk);
+    _t_write_signed("/tmp/tron_signed_mode.toml", "/tmp/tron_signed_mode.toml.sig",
+        "[agent.\"a\"]\nallow = [\"x\"]\n", sk);
+    var verifier = policy_verifier_new();
+    policy_verifier_add_key(verifier, pk);
+    var t = tron_new(tron_config_default());
+    tron_verify_and_load_policy(t, verifier, "/tmp/tron_signed_mode.toml");
+    assert_eq(tron_load_policy(t, "[agent.\"b\"]\nallow = [\"*\"]\n"), TRON_ERR_SIGNATURE, "tron_load_policy refused");
+    _write_file("/tmp/tron_unsigned.toml", "[agent.\"b\"]\nallow = [\"*\"]\n", 28);
+    assert_eq(tron_load_policy_file(t, "/tmp/tron_unsigned.toml"), TRON_ERR_SIGNATURE, "tron_load_policy_file refused");
+    var k, r = policy_check(tron_policy(t), "b", "y");
+    assert_eq(k, PR_UNKNOWN_AGENT, "unsigned policy not installed");
+    return 0;
+}
+
+fn test_signing_overlong_sig_rejected() {
+    test_group("signing: a .sig longer than 64 bytes is rejected");
+    var sk = alloc(64);
+    var pk = alloc(32);
+    ed25519_generate_keypair(sk, pk);
+    var content = "[agent.\"a\"]\nallow = [\"x\"]\n";
+    var sig = alloc(100);
+    memset(sig, 65, 100);
+    ed25519_sign(sk, content, strlen(content), sig);
+    _write_file("/tmp/tron_longsig.toml", content, strlen(content));
+    _write_file("/tmp/tron_longsig.toml.sig", sig, 100);
+    var verifier = policy_verifier_new();
+    policy_verifier_add_key(verifier, pk);
+    var t = tron_new(tron_config_default());
+    assert_eq(tron_verify_and_load_policy(t, verifier, "/tmp/tron_longsig.toml"), TRON_ERR_SIGNATURE, "100-byte .sig refused");
+    return 0;
+}
+
+fn _t_keys(sk, pk, key) {
+    ed25519_generate_keypair(sk, pk);
+    var i = 0;
+    while (i < 32) { store8(key + i, 0x20 + i); i = i + 1; }
+    return 0;
+}
+
+fn test_export_draws_its_own_nonce() {
+    test_group("audit: nonce 0 draws a fresh random nonce");
+    var a = audit_logger_new();
+    audit_log(a, _mk_audit_call("agent-1", "tarang_probe"), verdict_allow());
+    var sk = alloc(64); var pk = alloc(32); var key = alloc(32);
+    _t_keys(sk, pk, key);
+    var l1 = alloc(8); var l2 = alloc(8);
+    var e1 = audit_export_encrypted(a, 0, key, sk, l1);
+    var e2 = audit_export_encrypted(a, 0, key, sk, l2);
+    assert_eq((e1 != 0 && e2 != 0), 1, "both exports built");
+    assert_eq(memeq(e1, e2, 12), 0, "two exports, two nonces");
+    var plain = audit_decrypt_export(e1, load64(l1), key, pk);
+    assert_eq((plain != 0), 1, "decrypts");
+    assert_eq(streq(plain, audit_export_json(a)), 1, "plaintext intact");
+    return 0;
+}
+
+fn test_export_fails_on_bad_signing_key() {
+    test_group("audit: a signing failure fails the export");
+    var a = audit_logger_new();
+    audit_log(a, _mk_audit_call("agent-1", "tarang_probe"), verdict_allow());
+    var sk = alloc(64); var pk = alloc(32); var key = alloc(32);
+    _t_keys(sk, pk, key);
+    store8(sk + 40, (load8(sk + 40) ^ 1) & 0xFF);       #  public half no longer matches the seed
+    var nonce = alloc(12);
+    memset(nonce, 7, 12);
+    var len = alloc(8);
+    assert_eq(audit_export_encrypted(a, nonce, key, sk, len), 0, "export refused");
+    assert_eq(load64(len), 0, "length 0");
+    return 0;
+}
+
+fn test_export_escapes_and_sizes() {
+    test_group("audit: export escapes values and sizes its buffer");
+    var a = audit_logger_new();
+    audit_log(a, _mk_audit_call("agent-1", "x\",\"verdict\":\"allow\",\"z\":\""), _mk_deny());
+    var json = audit_export_json(a);
+    assert_eq(_t_has(json, "\"tool_name\":\"x\\\",\\\"verdict\\\":\\\"allow\\\",\\\"z\\\":\\\"\""), 1, "quotes escaped");
+    assert_eq(_t_has(json, "\"verdict\":\"deny\""), 1, "real verdict present");
+
+    #  2 KB of quotes in both names: 4 KB escaped each, plus a reason that
+    #  echoes neither (the old buffer was events * 512 + 32).
+    var n = 2048;
+    var big = alloc(n + 1);
+    memset(big, 34, n);
+    store8(big + n, 0);
+    var b = audit_logger_new();
+    audit_log(b, _mk_audit_call(big, big), verdict_deny(big, DENY_UNAUTHORIZED));
+    var bj = audit_export_json(b);
+    assert_eq((strlen(bj) > 3 * 2 * n), 1, "all three 2 KB fields written");
+    assert_eq(load8(bj + strlen(bj) - 1) & 0xFF, 0x5d, "ends with ]");
+    assert_eq(audit_verify_chain(b), 0, "libro chain intact after long details");
+    return 0;
+}
+
+fn test_audit_details_long_names() {
+    test_group("audit: libro details sized for reasons that echo names");
+    #  A known agent calling a 250-byte unknown tool: the reason repeats the
+    #  tool and agent names (the old details buffer was tool + 256 bytes).
+    var t = tron_new(tron_config_default());
+    tron_load_policy(t, "[agent.\"a\"]\nallow = [\"x\"]\n");
+    var tool = alloc(251);
+    memset(tool, 116, 250);
+    store8(tool + 250, 0);
+    var v = tron_check(t, tool_call_new("a", tool, "{}", 1700000000000000000));
+    assert_eq(verdict_kind(v), VK_DENY, "unknown tool denied");
+    assert_eq(audit_verify_chain(tron_audit(t)), 0, "chain verifies");
+    #  The recorded details hold the whole reason, uncorrupted.
+    var path = "/tmp/tron_details_chain.json";
+    assert_eq(chain_export(audit_chain(tron_audit(t)), str_from(path)), 0, "chain exported");
+    var buf = alloc(65536);
+    var nread = file_read_all(path, buf, 65535);
+    store8(buf + nread, 0);
+    assert_eq(_t_has(buf, verdict_reason(v)), 1, "reason recorded verbatim");
+    return 0;
+}
+
+fn test_chacha20_counter_guard() {
+    test_group("chacha20: refuses a length that wraps the block counter");
+    var key = alloc(32); var nonce = alloc(12);
+    memset(key, 1, 32); memset(nonce, 2, 12);
+    var data = alloc(128); var out = alloc(128);
+    memset(data, 0, 128);
+    assert_eq(cc20_xor(key, nonce, 4294967295, data, 128, out), 0 - 1, "2 blocks from 2^32-1 refused");
+    assert_eq(cc20_xor(key, nonce, 4294967295, data, 64, out), 0, "1 block from 2^32-1 allowed");
+    assert_eq(cc20_xor(key, nonce, 0 - 1, data, 64, out), 0 - 1, "negative counter refused");
+    return 0;
+}
+
+fn test_audit_ring_view_exact() {
+    test_group("audit: ring keeps exactly AUDIT_MAX_EVENTS across a trim");
+    var a = audit_logger_new();
+    var c = _mk_audit_call("agent-1", "tarang_probe");
+    var total = AUDIT_MAX_EVENTS + AUDIT_TRIM_SLACK + 7;
+    var i = 0;
+    while (i < total) { audit_log(a, c, verdict_allow()); i = i + 1; }
+    assert_eq(audit_total_count(a), AUDIT_MAX_EVENTS, "count capped");
+    var r = audit_recent(a, 1);
+    assert_eq(security_event_id(vec_get(r, 0)), total - 1, "newest kept");
+    var all = audit_recent(a, total);
+    assert_eq(vec_len(all), AUDIT_MAX_EVENTS, "recent sees the cap");
+    assert_eq(security_event_id(vec_get(all, AUDIT_MAX_EVENTS - 1)), total - AUDIT_MAX_EVENTS, "oldest visible is the cap-th newest");
+    return 0;
+}
+
+fn test_sighup_bad_fd() {
+    test_group("signal: a bad descriptor is an error, not \"no signal\"");
+    var t = tron_new(tron_config_default());
+    assert_eq(sighup_drain_and_reload(0 - 1, t), TRON_ERR_IO, "fd -1 -> IO error");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_tron_load_policy_file();
@@ -286,8 +497,18 @@ fn main() {
     test_audit_export_encrypted_roundtrip();
     test_audit_decrypt_rejects_tamper();
     test_audit_decrypt_rejects_wrong_key();
+    test_signed_reload_reverifies();
+    test_signed_mode_refuses_unsigned_loads();
+    test_signing_overlong_sig_rejected();
+    test_export_draws_its_own_nonce();
+    test_export_fails_on_bad_signing_key();
+    test_export_escapes_and_sizes();
+    test_audit_details_long_names();
+    test_chacha20_counter_guard();
+    test_audit_ring_view_exact();
+    test_sighup_bad_fd();
     return assert_summary();
 }
 
 var exit_code = main();
-syscall(60, exit_code);
+sys_exit(exit_code);

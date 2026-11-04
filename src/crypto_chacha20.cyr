@@ -5,6 +5,9 @@
 #  word are always zero. Verified against RFC 7539 section 2.4.2 test
 #  vectors (tests/t-ron-crypto.tcyr:test_chacha20_rfc_vector).
 
+#  Process-wide scratch: the state (key words in the clear), its working
+#  copy, and one keystream block. Each is wiped before the function that
+#  filled it returns. Single-threaded, like the rest of t-ron.
 var cc20_state_g   = 0;
 var cc20_working_g = 0;
 var cc20_ks_g      = 0;
@@ -64,11 +67,14 @@ fn cc20_init(state, key, counter, nonce) {
     return 0;
 }
 
+#  One 64-byte keystream block into `out`. Returns 0, or -1 if the
+#  scratch could not be allocated.
 fn cc20_block(key, counter, nonce, out) {
     if (cc20_state_g == 0) {
         cc20_state_g   = alloc(128);
         cc20_working_g = alloc(128);
     }
+    if (cc20_state_g == 0 || cc20_working_g == 0) { return 0 - 1; }
     cc20_init(cc20_state_g, key, counter, nonce);
     memcpy(cc20_working_g, cc20_state_g, 128);
     var r = 0;
@@ -89,15 +95,24 @@ fn cc20_block(key, counter, nonce, out) {
         cc20_st32(out, i * 4, sum);
         i = i + 1;
     }
+    memset(cc20_state_g, 0, 128);
+    memset(cc20_working_g, 0, 128);
     return 0;
 }
 
+#  XOR `len` bytes of `data` with the keystream into `out`, starting at
+#  block `counter`. Returns 0, or -1 when the 32-bit block counter would
+#  wrap (RFC 8439: at most 2^32 blocks per key and nonce) or scratch could
+#  not be allocated.
 fn cc20_xor(key, nonce, counter, data, len, out) {
+    if (counter < 0 || len < 0) { return 0 - 1; }
+    if (counter + (len + 63) / 64 > 0x100000000) { return 0 - 1; }
     if (cc20_ks_g == 0) { cc20_ks_g = alloc(64); }
+    if (cc20_ks_g == 0) { return 0 - 1; }
     var processed = 0;
     var ctr = counter;
     while (processed < len) {
-        cc20_block(key, ctr, nonce, cc20_ks_g);
+        if (cc20_block(key, ctr, nonce, cc20_ks_g) != 0) { memset(cc20_ks_g, 0, 64); return 0 - 1; }
         var remaining = len - processed;
         var take = 64;
         if (remaining < take) { take = remaining; }
@@ -111,5 +126,6 @@ fn cc20_xor(key, nonce, counter, data, len, out) {
         processed = processed + take;
         ctr = cc20_u32(ctr + 1);
     }
+    memset(cc20_ks_g, 0, 64);
     return 0;
 }

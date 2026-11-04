@@ -168,7 +168,7 @@ jobs:
       - name: Run tests
         run: |
           fail=0
-          for tcyr in tests/t-ron.tcyr tests/t-ron-crypto.tcyr tests/t-ron-safety.tcyr; do
+          for tcyr in tests/t-ron.tcyr tests/t-ron-crypto.tcyr tests/t-ron-safety.tcyr tests/t-ron-detect.tcyr; do
             echo "--- $tcyr ---"
             out=$(cyrius test "$tcyr" 2>&1)
             tail=$(echo "$out" | tail -3)
@@ -256,13 +256,44 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Scan for dangerous patterns
+
+      - name: No raw syscalls (stdlib wrappers only)
+        # A raw `syscall(N, …)` hard-codes one target's ABI: 60 is exit on
+        # x86_64 Linux only. t-ron reaches the kernel through stdlib wrappers
+        # (sys_exit, sys_kill, sys_getpid, …). Comments are stripped first,
+        # so prose that names a syscall is fine. `|| true` per file: grep
+        # exits 1 on a clean file.
         run: |
-          WARN=0
-          if grep -rn '"/etc/' src/ 2>/dev/null; then
-            echo "WARN: hardcoded /etc paths"; WARN=1
+          HITS=$(for f in src/*.cyr tests/*.tcyr tests/*.bcyr docs/examples/*.cyr; do
+            sed -E 's/#.*$//' "$f" | grep -nE '\bsyscall[[:space:]]*\(' | sed "s|^|$f:|" || true
+          done)
+          if [ -n "$HITS" ]; then
+            echo "FAIL: raw syscall(...) — call the stdlib wrapper instead:"
+            echo "$HITS"
+            exit 1
           fi
-          echo "security scan complete (warnings: $WARN)"
+          echo "No raw syscalls in src/, tests/ or docs/examples/."
+
+      - name: No fixed-size buffer fed by strlen
+        # The overrun class fixed in 2.2.1 (tool handlers) and 2.2.3 (audit
+        # export): a function allocates a literal size, then memcpy's a
+        # string of unbounded length into it. Size the buffer from the
+        # lengths it will hold instead. Per function: a literal `alloc(N)`
+        # and a `memcpy(…, strlen(…))` in the same body fail the step.
+        run: |
+          HITS=$(for f in src/*.cyr; do
+            sed -E 's/#.*$//' "$f" | awk -v F="$f" '
+              /^fn [A-Za-z_0-9]+\(/ { name = $2; sub(/\(.*/, "", name); lit = 0; sl = 0; start = NR }
+              /alloc\([0-9]+\)/ { lit = 1 }
+              /memcpy\([^;]*strlen\(/ { sl = 1 }
+              /^}/ { if (lit && sl) printf "%s:%d %s\n", F, start, name; lit = 0; sl = 0 }'
+          done)
+          if [ -n "$HITS" ]; then
+            echo "FAIL: a literal-size alloc and a memcpy of strlen bytes in one function:"
+            echo "$HITS"
+            exit 1
+          fi
+          echo "No fixed-size buffer is fed an unbounded string in src/."
 
   docs:
     name: Documentation

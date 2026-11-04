@@ -30,7 +30,7 @@ enum PolicyResult {
 #  Layout (24 bytes):
 #    +0   allow     vec<cstring>   allow-list patterns
 #    +8   deny      vec<cstring>   deny-list patterns
-#    +16  rate_cpm  i64            calls per minute (0 = unlimited)
+#    +16  rate_cpm  i64            calls per minute (0 = the limiter's default)
 
 fn agent_policy_new() {
     var p = alloc(24);
@@ -200,53 +200,94 @@ fn _dup_cstr(src, start, end) {
     return buf;
 }
 
+#  Skip spaces and tabs, not line ends.
+fn _skip_blank(src, i, n) {
+    while (i < n) {
+        var c = load8(src + i);
+        if (c != 32 && c != 9) { return i; }
+        i = i + 1;
+    }
+    return i;
+}
+
+#  After a value or a header only blanks and an optional `# comment` may
+#  follow on the line. Returns the index of the line end, or -1.
+fn _expect_eol(src, i, n) {
+    i = _skip_blank(src, i, n);
+    if (i >= n) { return i; }
+    var c = load8(src + i);
+    if (c == 35) { return _skip_to_eol(src, i, n); }
+    if (c == 10 || c == 13) { return i; }
+    return 0 - 1;
+}
+
 #  Parse a double-quoted string starting at src[i] (which must point at ").
-#  Returns (new_i, cstr_ptr). No escape handling beyond skipping \X.
+#  Returns (new_i, cstr_ptr), or (-1, 0) when the closing quote is missing
+#  on that line. No escape handling beyond skipping \X.
 fn _parse_qstring(src, i, n) {
     i = i + 1;                #  skip opening "
     var start = i;
     while (i < n) {
         var c = load8(src + i);
         if (c == 34) { break; }
+        if (c == 10) { return (0 - 1, 0); }
         if (c == 92 && i + 1 < n) { i = i + 2; }
         else { i = i + 1; }
     }
+    if (i >= n) { return (0 - 1, 0); }
     var s = _dup_cstr(src, start, i);
-    if (i < n) { i = i + 1; }    #  skip closing "
-    return (i, s);
+    return (i + 1, s);
 }
 
-#  Parse a string array: ["a", "b", "c"].
-#  Appends each element (as cstring) into dst_vec. Returns new i.
+#  Parse a string array: ["a", "b", "c"], with line ends and `# comments`
+#  allowed between elements and a trailing comma allowed. Appends each
+#  element (as cstring) into dst_vec. Returns the index after `]`, or -1
+#  on anything else: a stray byte, a missing or doubled comma, or an
+#  unterminated string or array. A quoted word inside a comment is never
+#  read as an element.
 fn _parse_str_array(src, i, n, dst_vec) {
-    i = _skip_ws(src, i, n);
-    if (i >= n || load8(src + i) != 91) { return i; }    #  no [
+    i = _skip_blank(src, i, n);
+    if (i >= n || load8(src + i) != 91) { return 0 - 1; }
     i = i + 1;
+    var want_value = 1;
     while (i < n) {
         i = _skip_ws(src, i, n);
-        if (i >= n) { return i; }
+        if (i >= n) { return 0 - 1; }
         var c = load8(src + i);
-        if (c == 93) { return i + 1; }                   #  close ]
-        if (c == 44) { i = i + 1; }                      #  comma
+        if (c == 35) { i = _skip_to_eol(src, i, n); }
+        elif (c == 93) { return i + 1; }
+        elif (c == 44) {
+            if (want_value == 1) { return 0 - 1; }
+            want_value = 1;
+            i = i + 1;
+        }
         elif (c == 34) {
+            if (want_value == 0) { return 0 - 1; }
             var ni, s = _parse_qstring(src, i, n);
+            if (ni < 0) { return 0 - 1; }
             vec_push(dst_vec, s);
+            want_value = 0;
             i = ni;
         }
-        else { i = i + 1; }                              #  tolerate stray chars
+        else { return 0 - 1; }
     }
-    return i;
+    return 0 - 1;
 }
 
-#  Parse an integer (decimal, non-negative). Returns (new_i, value).
+#  Parse a non-negative decimal integer. Returns (new_i, value), or (-1, 0)
+#  when there is no digit or the value would overflow an i64.
 fn _parse_int(src, i, n) {
     var v = 0;
+    var digits = 0;
     while (i < n) {
         var c = load8(src + i);
         if (c < 48 || c > 57) { break; }
+        if (v > (9223372036854775807 - (c - 48)) / 10) { return (0 - 1, 0); }
         v = v * 10 + (c - 48);
+        digits = digits + 1;
         i = i + 1;
     }
+    if (digits == 0) { return (0 - 1, 0); }
     return (i, v);
 }
 
@@ -258,52 +299,25 @@ fn _parse_int(src, i, n) {
 #    +16  rate_flag  i64   1 if [agent."...".rate_limit], 0 otherwise
 #    +24  name       i64   cstring pointer (0 if not an agent section)
 fn _parse_section(src, i, n) {
-    i = i + 1;                #  skip [
-    i = _skip_ws(src, i, n);
-
-    #  Match literal "agent"
-    var header_start = i;
-    if (i + 5 > n) {
-        return _section_result(_skip_to_eol(src, i, n), 0, 0, 0);
-    }
-    if (load8(src + i)     != 97)  { return _section_result(_skip_to_eol(src, header_start, n), 0, 0, 0); }
-    if (load8(src + i + 1) != 103) { return _section_result(_skip_to_eol(src, header_start, n), 0, 0, 0); }
-    if (load8(src + i + 2) != 101) { return _section_result(_skip_to_eol(src, header_start, n), 0, 0, 0); }
-    if (load8(src + i + 3) != 110) { return _section_result(_skip_to_eol(src, header_start, n), 0, 0, 0); }
-    if (load8(src + i + 4) != 116) { return _section_result(_skip_to_eol(src, header_start, n), 0, 0, 0); }
-    i = i + 5;
-    i = _skip_ws(src, i, n);
-    if (i >= n || load8(src + i) != 46) {
-        return _section_result(_skip_to_eol(src, header_start, n), 0, 0, 0);
-    }
-    i = i + 1;                #  skip .
-    i = _skip_ws(src, i, n);
-    if (i >= n || load8(src + i) != 34) {
-        return _section_result(_skip_to_eol(src, header_start, n), 0, 0, 0);
-    }
-
+    i = _skip_blank(src, i + 1, n);           #  skip [
+    if (i + 5 > n || memeq(src + i, "agent", 5) == 0) { return _section_result(0 - 1, 0, 0, 0); }
+    i = _skip_blank(src, i + 5, n);
+    if (i >= n || load8(src + i) != 46) { return _section_result(0 - 1, 0, 0, 0); }
+    i = _skip_blank(src, i + 1, n);
+    if (i >= n || load8(src + i) != 34) { return _section_result(0 - 1, 0, 0, 0); }
     var ni, name = _parse_qstring(src, i, n);
-    i = ni;
-    i = _skip_ws(src, i, n);
-
+    if (ni < 0 || strlen(name) == 0) { return _section_result(0 - 1, 0, 0, 0); }
+    i = _skip_blank(src, ni, n);
     #  Optional .rate_limit suffix
     var is_rate = 0;
     if (i < n && load8(src + i) == 46) {
-        i = i + 1;
-        i = _skip_ws(src, i, n);
-        #  Expect literal "rate_limit" -- 10 bytes
-        if (i + 10 <= n
-            && load8(src + i)     == 114 && load8(src + i + 1) == 97
-            && load8(src + i + 2) == 116 && load8(src + i + 3) == 101
-            && load8(src + i + 4) == 95  && load8(src + i + 5) == 108
-            && load8(src + i + 6) == 105 && load8(src + i + 7) == 109
-            && load8(src + i + 8) == 105 && load8(src + i + 9) == 116) {
-            is_rate = 1;
-            i = i + 10;
-        }
+        i = _skip_blank(src, i + 1, n);
+        if (i + 10 > n || memeq(src + i, "rate_limit", 10) == 0) { return _section_result(0 - 1, 0, 0, 0); }
+        is_rate = 1;
+        i = _skip_blank(src, i + 10, n);
     }
-
-    return _section_result(_skip_to_eol(src, i, n), 1, is_rate, name);
+    if (i >= n || load8(src + i) != 93) { return _section_result(0 - 1, 0, 0, 0); }
+    return _section_result(_expect_eol(src, i + 1, n), 1, is_rate, name);
 }
 
 fn _section_result(new_i, is_agent, rate_flag, name) {
@@ -315,20 +329,24 @@ fn _section_result(new_i, is_agent, rate_flag, name) {
     return r;
 }
 
-#  Load policy from a TOML C-string. Replaces all existing agents.
+#  Load policy from a TOML C-string, replacing every agent. The text is
+#  parsed into a fresh engine that is swapped in only when all of it
+#  parses, so a malformed, truncated or empty file leaves the loaded policy
+#  as it was. A policy must define at least one agent: an empty file is
+#  what a truncate-then-write deploy looks like halfway. Returns
+#  TRON_ERR_NONE, or TRON_ERR_POLICY_CONFIG.
 fn policy_load_toml(e, src) {
+    if (src == 0) { return TRON_ERR_POLICY_CONFIG; }
     var n = strlen(src);
-    policy_engine_clear(e);
-
+    var fresh = policy_engine_new();
+    var agents = 0;
     var cur_agent  = 0;        #  AgentPolicy ptr of current section
     var in_rate    = 0;        #  1 if inside [...rate_limit]
     var i = 0;
-
     while (i < n) {
         i = _skip_ws(src, i, n);
         if (i >= n) { break; }
         var c = load8(src + i);
-
         #  Comment
         if (c == 35) {
             i = _skip_to_eol(src, i, n);
@@ -337,47 +355,44 @@ fn policy_load_toml(e, src) {
         elif (c == 91) {
             var sr = _parse_section(src, i, n);
             i = load64(sr);
-            if (load64(sr + 8) == 1) {
-                cur_agent = policy_get_or_create(e, load64(sr + 24));
-                in_rate   = load64(sr + 16);
-            }
-            else {
-                cur_agent = 0;
-                in_rate   = 0;
-            }
+            if (i < 0) { return TRON_ERR_POLICY_CONFIG; }
+            cur_agent = policy_get_or_create(fresh, load64(sr + 24));
+            in_rate   = load64(sr + 16);
+            agents = agents + 1;
         }
-        #  key = value
-        elif (cur_agent != 0) {
-            #  read key until = or whitespace
+        #  key = value, only inside an [agent."NAME"] section
+        else {
+            if (cur_agent == 0) { return TRON_ERR_POLICY_CONFIG; }
             var kstart = i;
             while (i < n) {
                 var kc = load8(src + i);
-                if (kc == 61 || kc == 32 || kc == 9 || kc == 10) { break; }
+                if (kc == 61 || kc == 32 || kc == 9 || kc == 10 || kc == 13) { break; }
                 i = i + 1;
             }
             var key = _dup_cstr(src, kstart, i);
-            i = _skip_ws(src, i, n);
-            if (i < n && load8(src + i) == 61) {
-                i = i + 1;
-                i = _skip_ws(src, i, n);
-
-                if (in_rate == 1 && streq(key, "calls_per_minute") == 1) {
-                    var ni, v = _parse_int(src, i, n);
-                    agent_policy_set_rate(cur_agent, v);
-                    i = ni;
-                }
-                elif (streq(key, "allow") == 1) {
-                    i = _parse_str_array(src, i, n, load64(cur_agent));
-                }
-                elif (streq(key, "deny") == 1) {
-                    i = _parse_str_array(src, i, n, load64(cur_agent + 8));
-                }
-                i = _skip_to_eol(src, i, n);
+            i = _skip_blank(src, i, n);
+            if (i >= n || load8(src + i) != 61) { return TRON_ERR_POLICY_CONFIG; }
+            i = _skip_blank(src, i + 1, n);
+            if (in_rate == 1) {
+                if (streq(key, "calls_per_minute") == 0) { return TRON_ERR_POLICY_CONFIG; }
+                var ni, v = _parse_int(src, i, n);
+                if (ni < 0) { return TRON_ERR_POLICY_CONFIG; }
+                agent_policy_set_rate(cur_agent, v);
+                i = ni;
             }
-        }
-        else {
-            i = _skip_to_eol(src, i, n);
+            elif (streq(key, "allow") == 1) {
+                i = _parse_str_array(src, i, n, load64(cur_agent));
+            }
+            elif (streq(key, "deny") == 1) {
+                i = _parse_str_array(src, i, n, load64(cur_agent + 8));
+            }
+            else { return TRON_ERR_POLICY_CONFIG; }
+            if (i < 0) { return TRON_ERR_POLICY_CONFIG; }
+            i = _expect_eol(src, i, n);
+            if (i < 0) { return TRON_ERR_POLICY_CONFIG; }
         }
     }
+    if (agents == 0) { return TRON_ERR_POLICY_CONFIG; }
+    store64(e, load64(fresh));
     return TRON_ERR_NONE;
 }

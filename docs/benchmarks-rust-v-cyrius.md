@@ -17,16 +17,24 @@ under comparable load.
 
 ## Same-op benchmarks
 
-Time per iteration, nanoseconds, averaged. Both columns are from fresh
-runs on 2026-04-14.
+Time per iteration, nanoseconds, averaged. The Rust and 2.0.0 columns
+are fresh runs from 2026-04-14; see the note under the table for 2.2.3.
 
-| Operation | Rust | Cyrius | Ratio (C/R) |
-|---|---:|---:|---:|
-| `policy_check` (ACL glob match) | 38 ns | 719 ns | **19×** |
-| `scanner_clean` (no-threat string) | 269 ns | 4 000 ns | **15×** |
-| `scanner_injection` (SQL detect) | 36 ns | 1 000 ns | **28×** |
-| `audit_log` (ring buffer + libro chain + SHA-256) | 1 773 ns | 41 000 ns | **23×** |
-| `tron_check` — full pipeline, allow path | 2 412 ns | 52 000 ns | **22×** |
+| Operation | Rust | Cyrius 2.0.0 | Ratio | Cyrius 2.2.3 | Ratio |
+|---|---:|---:|---:|---:|---:|
+| `policy_check` (ACL glob match) | 38 ns | 719 ns | 19× | 222 ns | **5.8×** |
+| `scanner_clean` (no-threat string) | 269 ns | 4 000 ns | 15× | 382 ns | **1.4×** |
+| `scanner_injection` (SQL detect) | 36 ns | 1 000 ns | 28× | 360 ns | **10×** |
+| `audit_log` (ring buffer + libro chain + SHA-256) | 1 773 ns | 41 000 ns | 23× | 10 462 ns | **5.9×** |
+| `tron_check` — full pipeline, allow path | 2 412 ns | 52 000 ns | 22× | 17 291 ns | **7.2×** |
+
+⚠️ **The 2.2.3 column was not measured alongside the other two.** It is
+the mean of three interleaved rounds on 2026-11-03 (cyrius 6.7.18,
+against a same-session 2.2.2 baseline), on a different day and toolchain
+from the 2026-04-14 Rust and 2.0.0 runs. Read its ratios as an order of
+magnitude, not a controlled comparison. The 2.2.3 scanner is a
+single-pass rewrite that also decodes every JSON string first, so it
+does more work per call than 2.0.0's and still runs 10× faster.
 
 ## Rust-only benches
 
@@ -45,11 +53,14 @@ additions — the underlying functions all exist in the Cyrius port):
 
 ### Binary artifact
 
-| | Rust | Cyrius |
-|---|---:|---:|
-| Library artifact | `libt_ron.rlib` 2.59 MB | — |
-| Full standalone binary | (needs app host) | **`build/t-ron` 375 KB** |
-| Transitive dep closure | `target/release/deps/` 193 MB of `.rlib` files | — |
+| | Rust | Cyrius 2.0.0 | Cyrius 2.2.3 |
+|---|---:|---:|---:|
+| Library artifact | `libt_ron.rlib` 2.59 MB | — | — |
+| Full standalone binary | (needs app host) | **`build/t-ron` 375 KB** | **684 KB** |
+| Transitive dep closure | `target/release/deps/` 193 MB of `.rlib` files | — | — |
+
+The 2.2.3 binary carries libro's audit chain, bote's core, and the full
+sigil bundle; cyrius 6.7.18 drops the dead code (2.06 MB of it).
 
 The Rust column lists library + closure because `t-ron 0.90.0` was a
 crate — an actual deployable needed tokio, serde, chrono, dashmap,
@@ -59,9 +70,9 @@ single static ELF.
 
 ### Lines of code
 
-| | Rust | Cyrius | Δ |
-|---|---:|---:|---:|
-| Source (`src/`) | 6 611 | 4 546 | **−31 %** |
+| | Rust | Cyrius 2.0.0 | Δ | Cyrius 2.2.3 |
+|---|---:|---:|---:|---:|
+| Source (`src/`) | 6 611 | 4 546 | **−31 %** | 6 862 |
 | Tests | 3 431 | 1 968 | −43 % |
 | Benches | 179 | 123 | −31 % |
 | **Total** | **10 221** | **6 637** | **−35 %** |

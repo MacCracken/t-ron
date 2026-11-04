@@ -17,6 +17,13 @@
 #
 #  Confidence / score values use basis points 0..=1000 (same convention
 #  as the rest of the t-ron port).
+#
+#  Fail-closed contract: every enum is tail-extensible and an unknown
+#  value takes the strict branch (unknown enforcement = SE_BLOCK,
+#  unknown rule type = Blocked, unknown severity = CRITICAL weight). A
+#  rule missing a required parameter, a null pattern / path entry, a
+#  null action target and an engine with no enabled policy all yield
+#  Blocked.
 
 #  ============================================================
 #  SafetySeverity  --  enum with weight in basis points
@@ -29,12 +36,14 @@ enum SafetySeverity {
     SS_LOW      = 3;
 }
 
+#  An unknown severity weighs as CRITICAL: an out-of-range value must
+#  not make a violation free.
 fn safety_sev_weight_bp(sev) {
     if (sev == SS_CRITICAL) { return 1000; }
     if (sev == SS_HIGH)     { return 700; }
     if (sev == SS_MEDIUM)   { return 400; }
     if (sev == SS_LOW)      { return 100; }
-    return 0;
+    return 1000;
 }
 
 fn safety_sev_label(sev) {
@@ -48,6 +57,9 @@ fn safety_sev_label(sev) {
 #  ============================================================
 #  SafetyEnforcement  --  what the engine does on rule trigger
 #  ============================================================
+#
+#  Any value other than SE_WARN or SE_AUDIT_ONLY is enforced as
+#  SE_BLOCK.
 
 enum SafetyEnforcement {
     SE_BLOCK      = 0;
@@ -68,38 +80,71 @@ enum ActionType {
     AT_PRIVILEGE_ESCALATION = 5;
 }
 
+#  SafetyRule action filter wildcard: the rule applies to every
+#  ActionType (the default for a new rule).
+var SAFETY_ACTION_ANY = 0 - 1;
+
 #  ============================================================
 #  SafetyRuleType  --  tagged kinds, payload in extra fields
 #  ============================================================
 
 enum SafetyRuleType {
-    SRT_RESOURCE_LIMIT     = 0;
-    SRT_FORBIDDEN_ACTION   = 1;
-    SRT_REQUIRE_APPROVAL   = 2;
-    SRT_RATE_LIMIT         = 3;
-    SRT_CONTENT_FILTER     = 4;
-    SRT_SCOPE_RESTRICTION  = 5;
+    SRT_RESOURCE_LIMIT      = 0;
+    SRT_FORBIDDEN_ACTION    = 1;
+    SRT_REQUIRE_APPROVAL    = 2;
+    SRT_RATE_LIMIT          = 3;
+    SRT_CONTENT_FILTER      = 4;
+    SRT_SCOPE_RESTRICTION   = 5;
     SRT_ESCALATION_REQUIRED = 6;
-    SRT_OUTPUT_VALIDATION  = 7;
+    SRT_OUTPUT_VALIDATION   = 7;
+    SRT_DESTRUCTIVE_COMMAND = 8;   #  str_param names a built-in detector
+}
+
+#  Built-in detectors an SRT_DESTRUCTIVE_COMMAND rule names in its
+#  str_param. They parse the command line (see "Command-line
+#  detectors" below) instead of substring-matching it.
+enum SafetyDetector {
+    SDET_UNKNOWN   = 0;
+    SDET_RM_ROOT   = 1;   #  "rm-root"   recursive rm of `/` or `/*`
+    SDET_MKFS      = 2;   #  "mkfs"      mkfs*, mke2fs, mkswap, mkdosfs, wipefs
+    SDET_DD_DEVICE = 3;   #  "dd-device" dd with an of=/dev/... operand
+}
+
+fn _safety_detector_kind(name) {
+    if (name == 0) { return SDET_UNKNOWN; }
+    if (streq(name, "rm-root") == 1)   { return SDET_RM_ROOT; }
+    if (streq(name, "mkfs") == 1)      { return SDET_MKFS; }
+    if (streq(name, "dd-device") == 1) { return SDET_DD_DEVICE; }
+    return SDET_UNKNOWN;
 }
 
 #  ============================================================
-#  SafetyRule layout (56 bytes)
+#  SafetyRule layout (80 bytes)
 #  ============================================================
 #
-#  +0   rule_id       cstring
-#  +8   description   cstring
-#  +16  severity      i64 (SafetySeverity)
-#  +24  rule_type     i64 (SafetyRuleType)
-#  +32  str_param     cstring | 0      (pattern / action_pattern / resource)
-#  +40  int_param     i64              (max_value / max_per_minute / max_length)
-#  +48  vec_param     vec<cstring> | 0 (forbidden_patterns / allowed / denied)
+#  +0   rule_id        cstring
+#  +8   description    cstring
+#  +16  severity       i64 (SafetySeverity)
+#  +24  rule_type      i64 (SafetyRuleType)
+#  +32  str_param      cstring | 0   pattern (forbidden / approval / rate;
+#                                    "" = any target), resource name
+#                                    (resource limit), detector name
+#                                    (destructive command), from_level
+#                                    (escalation; informational only)
+#  +40  int_param      i64           max_value / max_per_minute / max_length
+#  +48  vec_param      vec<cstring> | 0   forbidden_patterns (content
+#                                         filter), allowed paths (scope)
+#  +56  vec2_param     vec<cstring> | 0   denied paths (scope)
+#  +64  str2_param     cstring | 0   to_level (escalation)
+#  +72  action_filter  i64           ActionType the rule applies to, or
+#                                    SAFETY_ACTION_ANY (default)
 #
-#  ScopeRestriction uses two vecs; we store `allowed` at +48 and
-#  `denied` at a second slot inside the struct — bump size to 72 bytes.
+#  A rule whose type needs str_param / str2_param and has none, or whose
+#  pattern / path list holds a null entry, is a configuration error and
+#  evaluates to Blocked whatever the policy's enforcement.
 
 fn safety_rule_new(rule_id, description, severity, rule_type) {
-    var r = alloc(72);
+    var r = alloc(80);
     store64(r,      rule_id);
     store64(r + 8,  description);
     store64(r + 16, severity);
@@ -109,35 +154,38 @@ fn safety_rule_new(rule_id, description, severity, rule_type) {
     store64(r + 48, 0);
     store64(r + 56, 0);
     store64(r + 64, 0);
+    store64(r + 72, SAFETY_ACTION_ANY);
     return r;
 }
 
-fn safety_rule_id(r)          { return load64(r); }
-fn safety_rule_description(r) { return load64(r + 8); }
-fn safety_rule_severity(r)    { return load64(r + 16); }
-fn safety_rule_type(r)        { return load64(r + 24); }
-fn safety_rule_str(r)         { return load64(r + 32); }
-fn safety_rule_int(r)         { return load64(r + 40); }
-fn safety_rule_vec(r)         { return load64(r + 48); }
-fn safety_rule_vec2(r)        { return load64(r + 56); }
-fn safety_rule_str2(r)        { return load64(r + 64); }
+fn safety_rule_id(r)            { return load64(r); }
+fn safety_rule_description(r)   { return load64(r + 8); }
+fn safety_rule_severity(r)      { return load64(r + 16); }
+fn safety_rule_type(r)          { return load64(r + 24); }
+fn safety_rule_str(r)           { return load64(r + 32); }
+fn safety_rule_int(r)           { return load64(r + 40); }
+fn safety_rule_vec(r)           { return load64(r + 48); }
+fn safety_rule_vec2(r)          { return load64(r + 56); }
+fn safety_rule_str2(r)          { return load64(r + 64); }
+fn safety_rule_action_filter(r) { return load64(r + 72); }
 
-fn safety_rule_set_str(r, s)     { store64(r + 32, s); return r; }
-fn safety_rule_set_int(r, i)     { store64(r + 40, i); return r; }
-fn safety_rule_set_vec(r, v)     { store64(r + 48, v); return r; }
-fn safety_rule_set_vec2(r, v)    { store64(r + 56, v); return r; }
-fn safety_rule_set_str2(r, s)    { store64(r + 64, s); return r; }
+fn safety_rule_set_str(r, s)            { store64(r + 32, s); return r; }
+fn safety_rule_set_int(r, i)            { store64(r + 40, i); return r; }
+fn safety_rule_set_vec(r, v)            { store64(r + 48, v); return r; }
+fn safety_rule_set_vec2(r, v)           { store64(r + 56, v); return r; }
+fn safety_rule_set_str2(r, s)           { store64(r + 64, s); return r; }
+fn safety_rule_set_action_filter(r, at) { store64(r + 72, at); return r; }
 
 #  ============================================================
-#  SafetyPolicy layout (40 bytes)
+#  SafetyPolicy layout (48 bytes)
 #  ============================================================
 #
 #  +0   policy_id     cstring
 #  +8   name          cstring
 #  +16  rules         vec<SafetyRule ptr>
 #  +24  enforcement   i64 (SafetyEnforcement)
-#  +32  priority      i64 (1..=10)
-#  +40  enabled       i64 (0/1)
+#  +32  priority      i64 (1..=10; higher is evaluated first)
+#  +40  enabled       i64 (0 = disabled, any other value = enabled)
 
 fn safety_policy_new(policy_id, name, enforcement, priority) {
     var p = alloc(48);
@@ -204,16 +252,17 @@ fn safety_action_get_param(a, key) {
 #
 #  Tag encoding (i64):
 #    0 = Allowed
-#    1 = Blocked         { reason, rule_id }
-#    2 = RequiresApproval{ reason, rule_id }
-#    3 = RateLimited     { retry_after_secs }
-#    4 = Warning         { message }
+#    1 = Blocked          { reason, rule_id }
+#    2 = RequiresApproval { reason, rule_id }
+#    3 = RateLimited      { retry_after_secs, rule_id }
+#    4 = Warning          { message }
 #
 #  Layout (32 bytes):
 #    +0   tag
 #    +8   field1 (reason cstring / message cstring / retry_after i64)
-#    +16  field2 (rule_id cstring)
-#    +24  _rsv
+#    +16  field2 (rule_id cstring | 0)
+#    +24  flags  (bit 0: configuration-integrity block -- SE_WARN and
+#                 SE_AUDIT_ONLY never downgrade it)
 
 enum SafetyVerdictTag {
     SV_ALLOWED           = 0;
@@ -280,9 +329,49 @@ fn safety_verdict_is_blocked(v) {
     return 0;
 }
 
+#  Blocked because the policy set itself is unusable (unknown rule
+#  type, missing parameter, null entry, null action). Enforcement
+#  cannot downgrade it.
+fn _safety_blocked_hard(reason, rule_id) {
+    var v = safety_verdict_blocked(reason, rule_id);
+    store64(v + 24, 1);
+    return v;
+}
+
+fn _safety_verdict_is_hard(v) {
+    if ((load64(v + 24) & 1) == 1) { return 1; }
+    return 0;
+}
+
+fn _safety_rate_limited_by(retry_after_secs, rule_id) {
+    var v = safety_verdict_rate_limited(retry_after_secs);
+    store64(v + 16, rule_id);
+    return v;
+}
+
+#  Strength order used to pick one verdict across policies:
+#  Blocked > RequiresApproval > RateLimited > Warning > Allowed. An
+#  unknown tag ranks as Blocked.
+fn _safety_verdict_rank(v) {
+    var t = load64(v);
+    if (t == SV_ALLOWED)           { return 0; }
+    if (t == SV_WARNING)           { return 1; }
+    if (t == SV_RATE_LIMITED)      { return 2; }
+    if (t == SV_REQUIRES_APPROVAL) { return 3; }
+    return 4;
+}
+
 #  ============================================================
-#  SafetyViolation layout (40 bytes)
+#  SafetyViolation layout (56 bytes)
 #  ============================================================
+#
+#  +0   violation_id      cstring
+#  +8   agent_id          cstring
+#  +16  timestamp_ns      i64
+#  +24  rule_id           cstring
+#  +32  action_attempted  cstring
+#  +40  verdict           SafetyVerdict ptr
+#  +48  severity          i64 (SafetySeverity)
 
 fn safety_violation_new(violation_id, agent_id, timestamp_ns, rule_id, action_attempted, verdict, severity) {
     var v = alloc(56);
@@ -305,14 +394,40 @@ fn safety_violation_verdict(v)   { return load64(v + 40); }
 fn safety_violation_severity(v)  { return load64(v + 48); }
 
 #  ============================================================
+#  Logging (sakshi)
+#  ============================================================
+
+fn _safety_warn(msg) { sakshi_warn(msg, strlen(msg)); return 0; }
+fn _safety_info(msg) { sakshi_info(msg, strlen(msg)); return 0; }
+
+fn _safety_log_kv(level, msg, key, val) {
+    var s = _safety_s(val);
+    sakshi_log_kv(level, msg, strlen(msg), key, strlen(key), s, strlen(s));
+    return 0;
+}
+
+#  Log a Blocked verdict (rule id as context) and hand it back.
+fn _safety_log_blocked(v) {
+    _safety_log_kv(SK_WARN, "safety: blocked", "rule_id", load64(v + 16));
+    return v;
+}
+
+#  ============================================================
 #  PromptInjectionDetector  --  heuristic substring checks
 #  ============================================================
 #
-#  Normalizes input by stripping zero-width / directional-override
-#  Unicode characters before matching. Result carries a basis-point
-#  confidence (0..=1000) and a cstring-list of matched pattern labels.
+#  Input is normalised (injection_normalize) before matching, so
+#  invisible format characters and whitespace variants cannot split a
+#  phrase. Result carries a basis-point confidence (0..=1000) and a
+#  cstring-list of matched pattern labels.
+#
+#  DEFERRED: Unicode confusables are not folded -- a Cyrillic U+043E in
+#  place of Latin `o` ("ignоre previous instructions") still slips
+#  past the phrase checks.
 
-var SAFETY_INJ_MAX_PATTERNS = 6;
+#  Max bytes between verb -> qualifier -> object in the windowed
+#  "ignore previous instructions" matcher.
+var SAFETY_INJ_WINDOW = 40;
 
 #  InjectionResult layout (24 bytes):
 #    +0   safe            i64 (0/1)
@@ -331,69 +446,237 @@ fn injection_result_safe(r)       { return load64(r); }
 fn injection_result_confidence(r) { return load64(r + 8); }
 fn injection_result_patterns(r)   { return load64(r + 16); }
 
-#  Normalize: strip null bytes and non-ASCII so zero-width Unicode
-#  (U+200B..U+202E, U+2060..U+2064, U+FEFF, U+FE00..U+FE0F) all drop
-#  out via byte-level filtering. In UTF-8 those codepoints encode as
-#  sequences starting 0xE2 0x80 0x8B+ (3 bytes) or 0xEF 0xBB 0xBF (BOM)
-#  -- rejecting the leading byte drops the whole escape.
+#  Byte length of the invisible format character at s+i, or 0.
+fn _safety_inj_invisible_len(s, i, n) {
+    var c = load8(s + i) & 0xFF;
+    if (c < 0xC2) { return 0; }
+    if (i + 1 >= n) { return 0; }
+    var c2 = load8(s + i + 1) & 0xFF;
+    if (c == 0xC2) { if (c2 == 0xAD) { return 2; } return 0; }          #  U+00AD soft hyphen
+    if (c == 0xCD) { if (c2 == 0x8F) { return 2; } return 0; }          #  U+034F CGJ
+    if (i + 2 >= n) { return 0; }
+    var c3 = load8(s + i + 2) & 0xFF;
+    if (c == 0xE1) {                                                    #  U+180E
+        if (c2 == 0xA0 && c3 == 0x8E) { return 3; }
+        return 0;
+    }
+    if (c == 0xE2) {
+        if (c2 == 0x80 && c3 >= 0x8B && c3 <= 0x8F) { return 3; }      #  U+200B..U+200F
+        if (c2 == 0x80 && c3 >= 0xAA && c3 <= 0xAE) { return 3; }      #  U+202A..U+202E
+        if (c2 == 0x81 && c3 >= 0xA0 && c3 <= 0xA4) { return 3; }      #  U+2060..U+2064
+        if (c2 == 0x81 && c3 >= 0xA6 && c3 <= 0xA9) { return 3; }      #  U+2066..U+2069
+        return 0;
+    }
+    if (c == 0xEF) {
+        if (c2 == 0xBB && c3 == 0xBF) { return 3; }                    #  U+FEFF
+        if (c2 == 0xB8 && c3 >= 0x80 && c3 <= 0x8F) { return 3; }      #  U+FE00..U+FE0F
+        return 0;
+    }
+    if (c == 0xF3 && c2 == 0xA0 && (c3 == 0x80 || c3 == 0x81)) {       #  U+E0000..U+E007F
+        if (i + 3 >= n) { return 0; }
+        var c4 = load8(s + i + 3) & 0xFF;
+        if (c4 >= 0x80 && c4 <= 0xBF) { return 4; }
+    }
+    return 0;
+}
+
+#  Byte length of the whitespace character at s+i, or 0.
+fn _safety_inj_space_len(s, i, n) {
+    var c = load8(s + i) & 0xFF;
+    if (c == 32 || (c >= 9 && c <= 13)) { return 1; }
+    if (c == 0xC2) {                                                    #  U+00A0
+        if (i + 1 < n && (load8(s + i + 1) & 0xFF) == 0xA0) { return 2; }
+        return 0;
+    }
+    if (c != 0xE2 && c != 0xE3) { return 0; }
+    if (i + 2 >= n) { return 0; }
+    var c2 = load8(s + i + 1) & 0xFF;
+    var c3 = load8(s + i + 2) & 0xFF;
+    if (c == 0xE2 && c2 == 0x80) {
+        if (c3 >= 0x80 && c3 <= 0x8A) { return 3; }                    #  U+2000..U+200A
+        if (c3 == 0xA8 || c3 == 0xA9 || c3 == 0xAF) { return 3; }      #  U+2028, U+2029, U+202F
+        return 0;
+    }
+    if (c == 0xE2 && c2 == 0x81 && c3 == 0x9F) { return 3; }           #  U+205F
+    if (c == 0xE3 && c2 == 0x80 && c3 == 0x80) { return 3; }           #  U+3000
+    return 0;
+}
+
+#  Normalise for matching (byte-level UTF-8):
+#    * drop invisible format characters -- U+00AD, U+034F, U+180E,
+#      U+200B..U+200F, U+202A..U+202E, U+2060..U+2064, U+2066..U+2069,
+#      U+FE00..U+FE0F, U+FEFF and the tag block U+E0000..U+E007F;
+#    * map whitespace -- ASCII TAB/LF/VT/FF/CR/SP, U+00A0,
+#      U+2000..U+200A, U+2028, U+2029, U+202F, U+205F, U+3000 -- to a
+#      space, collapsing each run to one space.
+#  Visible punctuation (U+2010..U+2027: dashes, curly quotes) is kept.
+#  Any other byte, including a truncated sequence, is copied as is.
 fn injection_normalize(input) {
+    if (input == 0) { input = ""; }
     var n = strlen(input);
     var out = alloc(n + 1);
     var j = 0;
     var i = 0;
+    var in_space = 0;
     while (i < n) {
-        var c = load8(input + i) & 0xFF;
-        if (c == 0)                  { i = i + 1; }                     #  null
-        elif (c == 0xE2 && i + 2 < n) {                                  #  U+200x..U+206x (3-byte UTF-8)
-            var c2 = load8(input + i + 1) & 0xFF;
-            var c3 = load8(input + i + 2) & 0xFF;
-            if ((c2 == 0x80 && c3 >= 0x8B && c3 <= 0xAE)
-             || (c2 == 0x81 && c3 >= 0xA0 && c3 <= 0xA4)) {
-                i = i + 3;
+        var k = _safety_inj_invisible_len(input, i, n);
+        if (k > 0) {
+            i = i + k;
+        } else {
+            k = _safety_inj_space_len(input, i, n);
+            if (k > 0) {
+                if (in_space == 0) { store8(out + j, 32); j = j + 1; in_space = 1; }
+                i = i + k;
             } else {
-                store8(out + j, c); j = j + 1; i = i + 1;
+                store8(out + j, load8(input + i)); j = j + 1; in_space = 0; i = i + 1;
             }
-        }
-        elif (c == 0xEF && i + 2 < n) {                                  #  U+FExx (BOM + variation selectors)
-            var v2 = load8(input + i + 1) & 0xFF;
-            var v3 = load8(input + i + 2) & 0xFF;
-            if ((v2 == 0xBB && v3 == 0xBF) || (v2 == 0xB8 && v3 >= 0x80 && v3 <= 0x8F)) {
-                i = i + 3;
-            } else {
-                store8(out + j, c); j = j + 1; i = i + 1;
-            }
-        }
-        else {
-            store8(out + j, c); j = j + 1; i = i + 1;
         }
     }
     store8(out + j, 0);
     return out;
 }
 
-#  Case-insensitive substring search — returns 1 if needle present.
+fn _safety_lower(c) {
+    if (c >= 65 && c <= 90) { return c + 32; }
+    return c;
+}
+
+#  Word byte for boundary tests: ASCII alnum, `_`, or any UTF-8 byte
+#  (so a letter of another script glued to a keyword is no boundary).
+fn _safety_is_wordc(c) {
+    if (c >= 48 && c <= 57)  { return 1; }
+    if (c >= 65 && c <= 90)  { return 1; }
+    if (c >= 97 && c <= 122) { return 1; }
+    if (c == 95 || c >= 0x80) { return 1; }
+    return 0;
+}
+
+#  Case-insensitive compare of n bytes at a and b.
+fn _safety_ci_memeq(a, b, n) {
+    var k = 0;
+    while (k < n) {
+        if (_safety_lower(load8(a + k) & 0xFF) != _safety_lower(load8(b + k) & 0xFF)) { return 0; }
+        k = k + 1;
+    }
+    return 1;
+}
+
+#  Case-insensitive equality of two cstrings.
+fn _safety_ci_eq(a, b) {
+    var n = strlen(a);
+    if (strlen(b) != n) { return 0; }
+    return _safety_ci_memeq(a, b, n);
+}
+
+#  Case-insensitive substring search -- returns 1 if needle present.
 fn _safety_ci_has(hay, needle) {
+    if (hay == 0 || needle == 0) { return 0; }
     var hn = strlen(hay);
     var nn = strlen(needle);
     if (nn == 0) { return 1; }
     if (nn > hn) { return 0; }
+    var first = _safety_lower(load8(needle) & 0xFF);
     var last = hn - nn;
     var i = 0;
     while (i <= last) {
-        if (_sc_ci_memeq(hay, i, needle, nn) == 1) { return 1; }
+        if (_safety_lower(load8(hay + i) & 0xFF) == first) {
+            if (_safety_ci_memeq(hay + i, needle, nn) == 1) { return 1; }
+        }
         i = i + 1;
     }
     return 0;
 }
 
-#  Check for "ignore_previous_instructions" family.
+#  Length of the word at s+i when it starts (case-insensitively) with
+#  `stem`; with need_end the word must be exactly `stem`. 0 otherwise.
+#  The caller has checked that i is a word start.
+fn _safety_word_at(s, n, i, stem, need_end) {
+    var wn = strlen(stem);
+    if (i + wn > n) { return 0; }
+    if (_safety_ci_memeq(s + i, stem, wn) == 0) { return 0; }
+    var k = i + wn;
+    if (need_end == 1) {
+        if (k < n && _safety_is_wordc(load8(s + k) & 0xFF) == 1) { return 0; }
+        return wn;
+    }
+    while (k < n && _safety_is_wordc(load8(s + k) & 0xFF) == 1) { k = k + 1; }
+    return k - i;
+}
+
+fn _safety_inj_verb(s, n, i) {
+    var k = _safety_word_at(s, n, i, "ignor", 0);
+    if (k == 0) { k = _safety_word_at(s, n, i, "disregard", 0); }
+    if (k == 0) { k = _safety_word_at(s, n, i, "forget", 0); }
+    if (k == 0) { k = _safety_word_at(s, n, i, "forgot", 0); }
+    if (k == 0) { k = _safety_word_at(s, n, i, "overrid", 0); }
+    if (k == 0) { k = _safety_word_at(s, n, i, "bypass", 0); }
+    return k;
+}
+
+fn _safety_inj_qualifier(s, n, i) {
+    var k = _safety_word_at(s, n, i, "previous", 1);
+    if (k == 0) { k = _safety_word_at(s, n, i, "previously", 1); }
+    if (k == 0) { k = _safety_word_at(s, n, i, "prior", 1); }
+    if (k == 0) { k = _safety_word_at(s, n, i, "above", 1); }
+    if (k == 0) { k = _safety_word_at(s, n, i, "earlier", 1); }
+    if (k == 0) { k = _safety_word_at(s, n, i, "all", 1); }
+    return k;
+}
+
+fn _safety_inj_object(s, n, i) {
+    var k = _safety_word_at(s, n, i, "instruction", 0);
+    if (k == 0) { k = _safety_word_at(s, n, i, "direction", 0); }
+    if (k == 0) { k = _safety_word_at(s, n, i, "rule", 0); }
+    if (k == 0) { k = _safety_word_at(s, n, i, "prompt", 0); }
+    return k;
+}
+
+#  Windowed matcher: a verb (ignore|disregard|forget|override|bypass),
+#  then within SAFETY_INJ_WINDOW bytes a qualifier (previous|prior|
+#  above|earlier|all), then within SAFETY_INJ_WINDOW bytes an object
+#  (instructions|directions|rules|prompt). Words match on word
+#  boundaries, so "the installation instructions" is not a qualifier
+#  hit. One linear pass: the latest verb / chained qualifier is always
+#  the closest candidate.
+fn _safety_check_ignore_window(s) {
+    var n = strlen(s);
+    var verb_end = 0 - 1;
+    var qual_end = 0 - 1;
+    var i = 0;
+    while (i < n) {
+        var start = 0;
+        if (_safety_is_wordc(load8(s + i) & 0xFF) == 1) {
+            if (i == 0) { start = 1; }
+            elif (_safety_is_wordc(load8(s + i - 1) & 0xFF) == 0) { start = 1; }
+        }
+        if (start == 1) {
+            var k = _safety_inj_verb(s, n, i);
+            if (k > 0) {
+                verb_end = i + k;
+            } else {
+                k = _safety_inj_qualifier(s, n, i);
+                if (k > 0) {
+                    if (verb_end >= 0 && i - verb_end <= SAFETY_INJ_WINDOW) { qual_end = i + k; }
+                } else {
+                    k = _safety_inj_object(s, n, i);
+                    if (k > 0 && qual_end >= 0 && i - qual_end <= SAFETY_INJ_WINDOW) { return 1; }
+                }
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+#  Check for "ignore_previous_instructions" family: the Rust port's
+#  literal phrases plus the windowed verb/qualifier/object matcher.
 fn _safety_check_ignore_previous(s) {
     if (_safety_ci_has(s, "ignore previous instructions") == 1) { return 1; }
     if (_safety_ci_has(s, "ignore all previous")           == 1) { return 1; }
     if (_safety_ci_has(s, "disregard previous")            == 1) { return 1; }
     if (_safety_ci_has(s, "forget previous instructions")  == 1) { return 1; }
     if (_safety_ci_has(s, "ignore your instructions")      == 1) { return 1; }
-    return 0;
+    return _safety_check_ignore_window(s);
 }
 
 fn _safety_check_system_leak(s) {
@@ -414,7 +697,9 @@ fn _safety_check_role_confusion(s) {
     return 0;
 }
 
-#  Special-character ratio: >40% non-alnum/whitespace/.,?
+#  Special-character ratio: >40% of bytes are not alnum, whitespace,
+#  `.` or `,`. Every UTF-8 byte (>= 0x80) counts as a letter, so prose
+#  in CJK / Cyrillic / any non-Latin script does not flag.
 fn _safety_check_special_ratio(s) {
     var n = strlen(s);
     if (n < 20) { return 0; }
@@ -426,6 +711,7 @@ fn _safety_check_special_ratio(s) {
         if (c >= 48 && c <= 57)  { alnum = 1; }
         if (c >= 65 && c <= 90)  { alnum = 1; }
         if (c >= 97 && c <= 122) { alnum = 1; }
+        if (c >= 0x80)           { alnum = 1; }
         var ws = 0;
         if (c == 32 || c == 9 || c == 10 || c == 13) { ws = 1; }
         if (alnum == 0 && ws == 0 && c != 46 && c != 44) { special = special + 1; }
@@ -436,26 +722,36 @@ fn _safety_check_special_ratio(s) {
     return 0;
 }
 
-#  Base64 payload heuristic: >85% base64 chars + has `=`
+#  Base64 payload heuristic: 40+ bytes, >85% base64 alphabet, and a mix
+#  of upper case, lower case and digits. `=` padding is not required
+#  (unpadded base64 is common). All-hex text -- a sha256 digest, any
+#  case -- is excluded: it needs a letter outside a-f / A-F.
 fn _safety_check_base64(s) {
     var n = strlen(s);
     if (n < 40) { return 0; }
     var b64 = 0;
-    var has_eq = 0;
+    var upper = 0;
+    var lower = 0;
+    var digit = 0;
+    var nonhex = 0;
     var i = 0;
     while (i < n) {
         var c = load8(s + i) & 0xFF;
-        var is64 = 0;
-        if (c >= 48 && c <= 57)  { is64 = 1; }                 #  0-9
-        if (c >= 65 && c <= 90)  { is64 = 1; }                 #  A-Z
-        if (c >= 97 && c <= 122) { is64 = 1; }                 #  a-z
-        if (c == 43 || c == 47 || c == 61)  { is64 = 1; }      #  +  /  =
-        if (c == 61) { has_eq = 1; }
-        if (is64 == 1) { b64 = b64 + 1; }
+        if (c >= 48 && c <= 57)  { b64 = b64 + 1; digit = 1; }
+        elif (c >= 65 && c <= 90)  {
+            b64 = b64 + 1; upper = 1;
+            if (c > 70) { nonhex = 1; }
+        }
+        elif (c >= 97 && c <= 122) {
+            b64 = b64 + 1; lower = 1;
+            if (c > 102) { nonhex = 1; }
+        }
+        elif (c == 43 || c == 47 || c == 61) { b64 = b64 + 1; }      #  +  /  =
         i = i + 1;
     }
+    if (upper == 0 || lower == 0 || digit == 0 || nonhex == 0) { return 0; }
     #  ratio > 0.85 -> b64 * 100 > n * 85
-    if (has_eq == 1 && b64 * 100 > n * 85) { return 1; }
+    if (b64 * 100 > n * 85) { return 1; }
     return 0;
 }
 
@@ -466,10 +762,15 @@ fn _safety_check_delimiter(s) {
     return 0;
 }
 
-#  Run all six patterns; return InjectionResult ptr.
+#  Run all six patterns; return InjectionResult ptr. A null input is
+#  unsafe (pattern "null_input", full confidence).
 fn injection_detector_check(input) {
-    var norm = injection_normalize(input);
     var patterns = vec_new();
+    if (input == 0) {
+        vec_push(patterns, "null_input");
+        return injection_result_new(0, 1000, patterns);
+    }
+    var norm = injection_normalize(input);
 
     if (_safety_check_ignore_previous(norm) == 1) { vec_push(patterns, "ignore_previous_instructions"); }
     if (_safety_check_system_leak(norm)     == 1) { vec_push(patterns, "system_prompt_leak"); }
@@ -492,16 +793,59 @@ fn injection_detector_check(input) {
 }
 
 #  ============================================================
+#  Timestamp windows (shared by the breaker and rate buckets)
+#  ============================================================
+
+#  Drop timestamps older than `cutoff` from `v` in place (order kept)
+#  and return the new length. The vec's buffer is reused, so a
+#  long-lived window never reallocates under the bump allocator.
+fn _safety_prune_ts(v, cutoff) {
+    var n = vec_len(v);
+    var w = 0;
+    var i = 0;
+    while (i < n) {
+        var t = vec_get(v, i);
+        if (t >= cutoff) {
+            if (w != i) { vec_set(v, w, t); }
+            w = w + 1;
+        }
+        i = i + 1;
+    }
+    vec_truncate(v, w);
+    return w;
+}
+
+#  Drop the `d` oldest (front) entries of `v` in place.
+fn _safety_drop_oldest(v, d) {
+    var n = vec_len(v);
+    if (d <= 0) { return n; }
+    if (d >= n) { vec_truncate(v, 0); return 0; }
+    var i = 0;
+    while (i + d < n) {
+        vec_set(v, i, vec_get(v, i + d));
+        i = i + 1;
+    }
+    vec_truncate(v, n - d);
+    return n - d;
+}
+
+#  ============================================================
 #  SafetyCircuitBreaker  --  per-agent state machine
 #  ============================================================
 #
 #  Layout (48 bytes):
 #    +0   state              i64 (CircuitState)
-#    +8   threshold          i64 (violations to trip)
+#    +8   threshold          i64 (violations to trip; >= 1)
 #    +16  cooldown_ns        i64 (open -> half_open cooldown)
 #    +24  window_ns          i64 (sliding failure window)
 #    +32  last_failure_ns    i64 (0 = none)
-#    +40  failures           vec<i64 ns timestamps>
+#    +40  failures           vec<i64 ns timestamps>, pruned in place,
+#                            never more than `threshold` entries
+#
+#  Closed --(threshold violations in window)--> Open --(cooldown)-->
+#  HalfOpen. HalfOpen admits calls (check_allowed = 1) until the probe's
+#  outcome is reported: safety_circuit_breaker_record_success closes
+#  it, any violation re-opens it at once.
 
 enum CircuitState {
     CS_CLOSED    = 0;
@@ -509,12 +853,25 @@ enum CircuitState {
     CS_HALF_OPEN = 2;
 }
 
+#  Window / cooldown seconds are clamped to [1, SAFETY_SECS_MAX] so the
+#  nanosecond product cannot overflow i64 and a 0 window still counts.
+var SAFETY_SECS_MAX = 9223372035;
+
+fn _safety_clamp_secs(s) {
+    if (s < 1) { return 1; }
+    if (s > SAFETY_SECS_MAX) { return SAFETY_SECS_MAX; }
+    return s;
+}
+
+#  A threshold below 1 is stored as 1 (trip on the first violation).
 fn safety_circuit_breaker_new(threshold, window_secs, cooldown_secs) {
+    var t = threshold;
+    if (t < 1) { t = 1; }
     var b = alloc(48);
     store64(b,      CS_CLOSED);
-    store64(b + 8,  threshold);
-    store64(b + 16, cooldown_secs * 1000000000);
-    store64(b + 24, window_secs * 1000000000);
+    store64(b + 8,  t);
+    store64(b + 16, _safety_clamp_secs(cooldown_secs) * 1000000000);
+    store64(b + 24, _safety_clamp_secs(window_secs) * 1000000000);
     store64(b + 32, 0);
     store64(b + 40, vec_new());
     return b;
@@ -523,48 +880,54 @@ fn safety_circuit_breaker_new(threshold, window_secs, cooldown_secs) {
 fn safety_circuit_breaker_state(b)      { return load64(b); }
 fn safety_circuit_breaker_threshold(b)  { return load64(b + 8); }
 
-#  Record a violation; may transition Closed -> Open.
+#  Record a violation: Closed -> Open at threshold; HalfOpen -> Open
+#  immediately (the probe failed).
 fn safety_circuit_breaker_record_violation(b) {
     var now = clock_now_ns();
     var failures = load64(b + 40);
-    vec_push(failures, now);
+    var thr = load64(b + 8);
+    if (thr < 1) { thr = 1; }
     store64(b + 32, now);
 
-    #  Prune entries older than the window.
-    var cutoff = now - load64(b + 24);
-    var kept = vec_new();
-    var n = vec_len(failures);
-    var i = 0;
-    while (i < n) {
-        var t = vec_get(failures, i);
-        if (t >= cutoff) { vec_push(kept, t); }
-        i = i + 1;
-    }
-    store64(b + 40, kept);
+    var n = _safety_prune_ts(failures, now - load64(b + 24));
+    _safety_drop_oldest(failures, n - thr + 1);       #  room for `now` under the cap
+    vec_push(failures, now);
 
-    if (vec_len(kept) >= load64(b + 8)) {
+    var state = load64(b);
+    if (state == CS_HALF_OPEN) {
         store64(b, CS_OPEN);
+        _safety_warn("safety: circuit breaker re-opened, half-open probe failed");
+        return 0;
+    }
+    if (state != CS_OPEN && vec_len(failures) >= thr) {
+        store64(b, CS_OPEN);
+        _safety_warn("safety: circuit breaker tripped");
     }
     return 0;
 }
 
 #  Return 1 if the agent is allowed to proceed, 0 if blocked.
 fn safety_circuit_breaker_check_allowed(b) {
-    if (load64(b) == CS_OPEN) {
-        var last = load64(b + 32);
-        var elapsed = clock_now_ns() - last;
-        if (elapsed >= load64(b + 16)) {
+    var state = load64(b);
+    if (state == CS_OPEN) {
+        if (clock_now_ns() - load64(b + 32) >= load64(b + 16)) {
             store64(b, CS_HALF_OPEN);
+            state = CS_HALF_OPEN;
+            _safety_info("safety: circuit breaker half-open, probe admitted");
         }
     }
-    var state = load64(b);
     if (state == CS_CLOSED)    { return 1; }
-    if (state == CS_OPEN)      { return 0; }
-    if (state == CS_HALF_OPEN) {
-        #  One test call; success closes the breaker.
+    if (state == CS_HALF_OPEN) { return 1; }   #  until record_success / record_violation
+    return 0;
+}
+
+#  Report that an action admitted while HalfOpen succeeded: closes the
+#  breaker and clears the failure window. No-op in any other state.
+fn safety_circuit_breaker_record_success(b) {
+    if (load64(b) == CS_HALF_OPEN) {
         store64(b, CS_CLOSED);
-        store64(b + 40, vec_new());
-        return 1;
+        vec_truncate(load64(b + 40), 0);
+        _safety_info("safety: circuit breaker closed, probe succeeded");
     }
     return 0;
 }
@@ -572,7 +935,7 @@ fn safety_circuit_breaker_check_allowed(b) {
 fn safety_circuit_breaker_reset(b) {
     store64(b,      CS_CLOSED);
     store64(b + 32, 0);
-    store64(b + 40, vec_new());
+    vec_truncate(load64(b + 40), 0);
     return 0;
 }
 
@@ -581,9 +944,14 @@ fn safety_circuit_breaker_reset(b) {
 #  ============================================================
 #
 #  Layout (24 bytes):
-#    +0   policies       vec<SafetyPolicy ptr>
+#    +0   policies       vec<SafetyPolicy ptr>, kept in descending
+#                        priority by safety_engine_add_policy (stable:
+#                        equal priorities keep insertion order)
 #    +8   violations     vec<SafetyViolation ptr>
-#    +16  rate_buckets   hashmap<"agent::pattern", vec<i64 timestamps>>
+#    +16  rate_buckets   hashmap<rate key, vec<i64 ns timestamps>>; key
+#                        format at _safety_rate_key_write. DEFERRED:
+#                        idle buckets are not evicted, so the map grows
+#                        with the number of distinct (agent, rule) pairs.
 
 fn safety_engine_new() {
     var e = alloc(24);
@@ -596,154 +964,853 @@ fn safety_engine_new() {
 fn safety_engine_policies(e)   { return load64(e); }
 fn safety_engine_violations(e) { return load64(e + 8); }
 
+#  Insert in descending priority order (after existing equal-priority
+#  policies), so checks never sort. A null policy is ignored (-1).
 fn safety_engine_add_policy(e, policy) {
-    vec_push(load64(e), policy);
+    if (policy == 0) { return 0 - 1; }
+    var ps = load64(e);
+    vec_push(ps, policy);
+    var prio = safety_policy_priority(policy);
+    var j = vec_len(ps) - 1;
+    while (j > 0 && safety_policy_priority(vec_get(ps, j - 1)) < prio) {
+        vec_set(ps, j, vec_get(ps, j - 1));
+        j = j - 1;
+    }
+    vec_set(ps, j, policy);
     return 0;
 }
 
+#  Remove every policy with this id (in place, order kept).
 fn safety_engine_remove_policy(e, policy_id) {
+    if (policy_id == 0) { return 0; }
     var ps = load64(e);
     var n = vec_len(ps);
-    var kept = vec_new();
-    var i = 0;
+    var w = 0;
     var removed = 0;
+    var i = 0;
     while (i < n) {
         var p = vec_get(ps, i);
-        if (streq(safety_policy_id(p), policy_id) == 1) { removed = 1; }
-        else { vec_push(kept, p); }
+        if (streq(_safety_s(safety_policy_id(p)), policy_id) == 1) { removed = 1; }
+        else { vec_set(ps, w, p); w = w + 1; }
         i = i + 1;
     }
-    store64(e, kept);
+    vec_truncate(ps, w);
     return removed;
 }
 
 fn safety_engine_get_policy(e, policy_id) {
+    if (policy_id == 0) { return 0; }
     var ps = load64(e);
     var n = vec_len(ps);
     var i = 0;
     while (i < n) {
         var p = vec_get(ps, i);
-        if (streq(safety_policy_id(p), policy_id) == 1) { return p; }
+        if (streq(_safety_s(safety_policy_id(p)), policy_id) == 1) { return p; }
         i = i + 1;
     }
     return 0;
 }
 
-#  Check if an action's target contains `pat` (case-insensitive).
-fn _safety_target_matches(action, pat) {
-    return _safety_ci_has(safety_action_target(action), pat);
+#  ============================================================
+#  Rate buckets
+#  ============================================================
+
+#  Upper bound of the key length (+ NUL) for (agent, rule).
+fn _safety_rate_key_bound(agent_id, rule) {
+    return strlen(agent_id) + strlen(_safety_s(safety_rule_id(rule)))
+         + strlen(safety_rule_str(rule)) + 72;
 }
 
-#  Build bucket key "agent::pattern" as a cstring.
-fn _safety_rate_key(agent_id, pattern) {
+#  Key: "<len(agent)>:<agent><len(rule_id)>:<rule_id><filter>:<pattern>".
+#  The length prefixes make it injective -- the Rust port's
+#  "agent::pattern" let agent "a::b" + pattern "c" share a bucket with
+#  agent "a" + pattern "b::c". Writes into buf (sized by
+#  _safety_rate_key_bound) and returns the length.
+fn _safety_rate_key_write(buf, agent_id, rule) {
+    var rid = _safety_s(safety_rule_id(rule));
+    var pat = safety_rule_str(rule);
     var alen = strlen(agent_id);
-    var plen = strlen(pattern);
-    var buf = alloc(alen + 2 + plen + 1);
-    memcpy(buf, agent_id, alen);
-    store8(buf + alen, 0x3a); store8(buf + alen + 1, 0x3a);
-    memcpy(buf + alen + 2, pattern, plen);
-    store8(buf + alen + 2 + plen, 0);
+    var rlen = strlen(rid);
+    var plen = strlen(pat);
+    var off = fmt_int_buf(alen, buf);
+    store8(buf + off, 58); off = off + 1;
+    memcpy(buf + off, agent_id, alen); off = off + alen;
+    off = off + fmt_int_buf(rlen, buf + off);
+    store8(buf + off, 58); off = off + 1;
+    memcpy(buf + off, rid, rlen); off = off + rlen;
+    off = off + fmt_int_buf(safety_rule_action_filter(rule), buf + off);
+    store8(buf + off, 58); off = off + 1;
+    memcpy(buf + off, pat, plen); off = off + plen;
+    store8(buf + off, 0);
+    return off;
+}
+
+#  Owned copy of the bucket key for (agent, rule).
+fn _safety_rate_key(agent_id, rule) {
+    var buf = alloc(_safety_rate_key_bound(agent_id, rule));
+    _safety_rate_key_write(buf, agent_id, rule);
     return buf;
 }
 
-#  Count hits within the last 60 seconds for (agent, pattern); returns count.
-fn _safety_rate_record(e, agent_id, pattern) {
+#  Sliding 60 s window per (agent, rule). Returns 1 and records the
+#  call when fewer than max_per_minute calls were admitted in the
+#  window, else 0 without recording. Only admitted calls are stored,
+#  so a bucket holds at most max_per_minute timestamps (within the
+#  max_per_minute + 1 cap) and a flood of limited calls costs nothing.
+#  The lookup key is built on the stack; one is allocated only when a
+#  new bucket is inserted.
+fn _safety_rate_admit(e, agent_id, rule) {
+    var kb[256];
     var m = load64(e + 16);
-    var key = _safety_rate_key(agent_id, pattern);
-    var bucket = 0;
-    if (map_has(m, key) == 1) { bucket = map_get(m, key); }
-    else { bucket = vec_new(); map_set(m, key, bucket); }
-
+    var key = &kb;
+    var bound = _safety_rate_key_bound(agent_id, rule);
+    if (bound > 256) { key = alloc(bound); }
+    var klen = _safety_rate_key_write(key, agent_id, rule);
+    var bucket = map_get(m, key);
+    if (bucket == 0) {
+        bucket = vec_new();
+        map_set(m, _safety_dup_n(key, klen), bucket);
+    }
     var now = clock_now_ns();
-    var cutoff = now - 60000000000;
-    var kept = vec_new();
-    var n = vec_len(bucket);
+    var n = _safety_prune_ts(bucket, now - 60000000000);
+    if (n >= safety_rule_int(rule)) { return 0; }
+    vec_push(bucket, now);
+    return 1;
+}
+
+#  ============================================================
+#  Path normalisation + scope restriction
+#  ============================================================
+#
+#  Lexical only: `//` collapses, `.` drops, `..` pops a component. A
+#  relative path, or a `..` that climbs above `/`, has no normal form
+#  (returns 0) and scope rules block it. Prefixes match on a `/`
+#  boundary.
+#
+#  KNOWN LIMITATION: aliases that need the filesystem -- symlinks,
+#  bind mounts, /proc/self/root/..., /proc/<pid>/cwd/..., /dev/fd/N --
+#  cannot be resolved here; "/proc/self/root/etc/shadow" is not
+#  recognised as /etc/shadow. Enforce those at the syscall layer.
+
+fn _safety_path_norm(p) {
+    if (p == 0) { return 0; }
+    var n = strlen(p);
+    if (n == 0 || load8(p) != 47) { return 0; }
+    var out = alloc(n + 2);
+    store8(out, 47);
+    var olen = 1;
     var i = 0;
     while (i < n) {
-        var t = vec_get(bucket, i);
-        if (t >= cutoff) { vec_push(kept, t); }
+        while (i < n && load8(p + i) == 47) { i = i + 1; }
+        var s = i;
+        while (i < n && load8(p + i) != 47) { i = i + 1; }
+        var len = i - s;
+        if (len == 0) { }
+        elif (len == 1 && load8(p + s) == 46) { }
+        elif (len == 2 && load8(p + s) == 46 && load8(p + s + 1) == 46) {
+            if (olen == 1) { return 0; }
+            var k = olen - 1;
+            while (k > 0 && load8(out + k) != 47) { k = k - 1; }
+            if (k == 0) { olen = 1; } else { olen = k; }
+        }
+        else {
+            if (olen > 1) { store8(out + olen, 47); olen = olen + 1; }
+            memcpy(out + olen, p + s, len);
+            olen = olen + len;
+        }
+    }
+    store8(out + olen, 0);
+    return out;
+}
+
+#  1 if normalised path p is `base` or lies below it on a `/` boundary
+#  ("/etc/shadow" covers "/etc/shadow/x", not "/etc/shadowsocks").
+fn _safety_path_under(p, base) {
+    var bn = strlen(base);
+    if (bn == 1) { return 1; }                  #  "/" covers everything
+    if (strlen(p) < bn) { return 0; }
+    if (memeq(p, base, bn) == 0) { return 0; }
+    var c = load8(p + bn);
+    if (c == 0 || c == 47) { return 1; }
+    return 0;
+}
+
+#  Index of the first shell glob / brace byte (* ? [ {) in s, or -1.
+fn _safety_glob_at(s) {
+    var i = 0;
+    while (load8(s + i) != 0) {
+        var c = load8(s + i);
+        if (c == 42 || c == 63 || c == 91 || c == 123) { return i; }
         i = i + 1;
     }
-    vec_push(kept, now);
-    map_set(m, key, kept);
-    return vec_len(kept);
+    return 0 - 1;
+}
+
+#  AT_FILE_ACCESS: the normalised target against denied, then allowed.
+fn _safety_scope_file(action, rule) {
+    var rid = safety_rule_id(rule);
+    var np = _safety_path_norm(safety_action_target(action));
+    if (np == 0) { return safety_verdict_blocked("Path is relative or escapes the root", rid); }
+    var denied = safety_rule_vec2(rule);
+    if (denied != 0) {
+        var dn = vec_len(denied);
+        var i = 0;
+        while (i < dn) {
+            var dp = vec_get(denied, i);
+            var nd = _safety_path_norm(dp);
+            if (nd == 0) { return _safety_blocked_hard("Scope rule path is not absolute", rid); }
+            if (_safety_path_under(np, nd) == 1) {
+                return safety_verdict_blocked(_safety_concat("Path denied by scope restriction: ", dp), rid);
+            }
+            i = i + 1;
+        }
+    }
+    var allowed = safety_rule_vec(rule);
+    if (allowed != 0 && vec_len(allowed) > 0) {
+        var an = vec_len(allowed);
+        var j = 0;
+        while (j < an) {
+            var na = _safety_path_norm(vec_get(allowed, j));
+            if (na == 0) { return _safety_blocked_hard("Scope rule path is not absolute", rid); }
+            if (_safety_path_under(np, na) == 1) { return 0; }
+            j = j + 1;
+        }
+        return safety_verdict_blocked("Path not in allowed scope", rid);
+    }
+    return 0;
+}
+
+#  One path-looking command argument against the denied list. A glob
+#  is judged by its literal prefix: "/etc/sha*" or "/etc/*" may expand
+#  to a denied path, so it blocks.
+fn _safety_scope_cmd_path(p, denied, rule) {
+    var rid = safety_rule_id(rule);
+    var g = _safety_glob_at(p);
+    var np = 0;
+    if (g >= 0) { np = _safety_path_norm(_safety_dup_n(p, g)); }
+    else { np = _safety_path_norm(p); }
+    if (np == 0) { return safety_verdict_blocked("Command path escapes the root", rid); }
+    var dn = vec_len(denied);
+    var i = 0;
+    while (i < dn) {
+        var dp = vec_get(denied, i);
+        var nd = _safety_path_norm(dp);
+        if (nd == 0) { return _safety_blocked_hard("Scope rule path is not absolute", rid); }
+        var hit = _safety_path_under(np, nd);
+        if (g >= 0 && _starts_with_cstr(nd, np) == 1) { hit = 1; }
+        if (hit == 1) {
+            return safety_verdict_blocked(_safety_concat("Path denied by scope restriction: ", dp), rid);
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+#  Path-looking tokens of one command string: a token starting with
+#  `/`, or the value of a `name=/path` token (`if=/etc/shadow`,
+#  `--file=/etc/shadow`).
+fn _safety_scope_cmd_str(s, denied, rule) {
+    var toks = _safety_cmd_tokens(s, 0);
+    var n = vec_len(toks);
+    var i = 0;
+    while (i < n) {
+        var t = vec_get(toks, i);
+        if (t != 0) {
+            var p = 0;
+            if (load8(t) == 47) { p = t; }
+            else {
+                var eq = _safety_find_byte(t, 61);
+                if (eq >= 0 && load8(t + eq + 1) == 47) { p = t + eq + 1; }
+            }
+            if (p != 0) {
+                var v = _safety_scope_cmd_path(p, denied, rule);
+                if (v != 0) { return v; }
+            }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+#  AT_SYSTEM_COMMAND / AT_PROCESS_SPAWN: path arguments of the target
+#  and of every parameter value against the DENIED list. The allow list
+#  scopes file access, not the paths a command mentions.
+fn _safety_scope_cmd(action, rule) {
+    var denied = safety_rule_vec2(rule);
+    if (denied == 0 || vec_len(denied) == 0) { return 0; }
+    var v = _safety_scope_cmd_str(safety_action_target(action), denied, rule);
+    if (v != 0) { return v; }
+    var m = safety_action_params(action);
+    if (m == 0) { return 0; }
+    var vals = map_values(m);
+    var n = vec_len(vals);
+    var i = 0;
+    while (i < n) {
+        var pv = vec_get(vals, i);
+        if (pv != 0) {
+            v = _safety_scope_cmd_str(pv, denied, rule);
+            if (v != 0) { return v; }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+#  ============================================================
+#  Command-line detectors (SRT_DESTRUCTIVE_COMMAND)
+#  ============================================================
+#
+#  Tokeniser: whitespace (and `<` `>`) splits words; `;` `|` `&` `(`
+#  `)` backtick and newline split commands (a 0 entry in the token
+#  vec); `'` and `"` are dropped; `\x` keeps x literally and
+#  backslash-newline is a continuation; `$IFS` / `${IFS}` read as
+#  whitespace. The detectors also split words on `{` `,` `}` so brace
+#  expansion (`{rm,-rf,/}`) reads as its words; the scope check keeps
+#  braces, judging `/etc/{shadow,x}` by its literal prefix. Quoting is not tracked, so a separator inside quotes
+#  splits too -- that can only add matches (fail closed).
+#
+#  Detection, per command:
+#    * any position: a token whose basename is the command, followed
+#      later in the command by the detector's argument signature --
+#      unlisted exec wrappers (xargs, timeout, chroot, `run`, ...) can
+#      precede it, so `echo rm -rf /` blocks too (deny on doubt);
+#        rm-root   = rm + recursive flag (-r / -R in any short cluster,
+#                    --recursive or an unambiguous prefix) + an operand
+#                    normalising to `/` or `/*` (`--` and
+#                    --no-preserve-root change nothing)
+#        dd-device = dd + an of= operand under /dev/
+#        mkfs      = a mkfs-family name + an operand under /dev/
+#    * argv0 (leading VAR=x assignments and wrapper words -- sudo,
+#      doas, env, nice, nohup, command, exec, time, busybox, shell
+#      keywords -- skipped with their options; `sh -c CMD` continues
+#      into CMD): a mkfs-family name blocks with any operands.
+
+enum SafetyWrapper {
+    SWRAP_NONE  = 0;
+    SWRAP_PLAIN = 1;   #  nohup, command, busybox, shell keywords
+    SWRAP_SUDO  = 2;
+    SWRAP_DOAS  = 3;
+    SWRAP_ENV   = 4;
+    SWRAP_NICE  = 5;
+    SWRAP_TIME  = 6;
+    SWRAP_EXEC  = 7;
+}
+
+#  1 if `s` equals one of the space-separated words in `list`
+#  (case-insensitively when ci == 1).
+fn _safety_in_list(s, list, ci) {
+    var sn = strlen(s);
+    var i = 0;
+    while (load8(list + i) != 0) {
+        while (load8(list + i) == 32) { i = i + 1; }
+        var st = i;
+        while (load8(list + i) != 0 && load8(list + i) != 32) { i = i + 1; }
+        var wn = i - st;
+        if (wn > 0 && wn == sn) {
+            if (ci == 1) { if (_safety_ci_memeq(s, list + st, sn) == 1) { return 1; } }
+            elif (memeq(s, list + st, sn) == 1) { return 1; }
+        }
+    }
+    return 0;
+}
+
+#  Length of a `$IFS` / `${IFS}` expansion at s+i, or 0.
+fn _safety_ifs_len(s, i, n) {
+    if (load8(s + i) != 36) { return 0; }
+    if (i + 6 <= n && memeq(s + i, "${IFS}", 6) == 1) { return 6; }
+    if (i + 4 <= n && memeq(s + i, "$IFS", 4) == 1) { return 4; }
+    return 0;
+}
+
+#  Split a command line into a vec of token cstrings; a 0 entry marks
+#  a command boundary. braces == 1 also breaks words on `{` `,` `}`.
+#  Tokens live in one buffer sized from the input.
+fn _safety_cmd_tokens(s, braces) {
+    var n = strlen(s);
+    var buf = alloc(n + 2);
+    var toks = vec_new();
+    var j = 0;
+    var start = 0 - 1;
+    var i = 0;
+    while (i < n) {
+        var c = load8(s + i) & 0xFF;
+        var brk = 0;                #  1 = word break, 2 = command break
+        var lit = 0 - 1;            #  byte to append to the current word
+        var adv = 1;
+        var k = _safety_ifs_len(s, i, n);
+        if (k > 0) { brk = 1; adv = k; }
+        elif (c == 92) {
+            if (i + 1 < n) {
+                var nx = load8(s + i + 1) & 0xFF;
+                if (nx != 10) { lit = nx; }
+                adv = 2;
+            }
+        }
+        elif (c == 39 || c == 34) { }
+        elif (c == 59 || c == 124 || c == 38 || c == 40 || c == 41 || c == 96 || c == 10) { brk = 2; }
+        elif (c == 32 || c == 9 || c == 11 || c == 12 || c == 13 || c == 60 || c == 62) { brk = 1; }
+        elif (braces == 1 && (c == 123 || c == 44 || c == 125)) { brk = 1; }
+        else { lit = c; }
+        if (lit >= 0) {
+            if (start < 0) { start = j; }
+            store8(buf + j, lit);
+            j = j + 1;
+        }
+        if (brk > 0) {
+            if (start >= 0) {
+                store8(buf + j, 0); j = j + 1;
+                vec_push(toks, buf + start);
+                start = 0 - 1;
+            }
+            if (brk == 2) { vec_push(toks, 0); }
+        }
+        i = i + adv;
+    }
+    if (start >= 0) {
+        store8(buf + j, 0);
+        vec_push(toks, buf + start);
+    }
+    return toks;
+}
+
+#  Pointer to the basename of a token (after its last `/`).
+fn _safety_basename(t) {
+    var b = t;
+    var i = 0;
+    while (load8(t + i) != 0) {
+        if (load8(t + i) == 47) { b = t + i + 1; }
+        i = i + 1;
+    }
+    return b;
+}
+
+#  1 for a shell `NAME=value` assignment word.
+fn _safety_is_assignment(t) {
+    var c = load8(t);
+    if (c >= 48 && c <= 57) { return 0; }
+    var i = 0;
+    while (load8(t + i) != 0) {
+        c = load8(t + i);
+        if (c == 61) {
+            if (i > 0) { return 1; }
+            return 0;
+        }
+        if (c >= 0x80 || _safety_is_wordc(c) == 0) { return 0; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+fn _safety_wrapper_kind(b) {
+    if (_safety_ci_eq(b, "sudo") == 1) { return SWRAP_SUDO; }
+    if (_safety_ci_eq(b, "doas") == 1) { return SWRAP_DOAS; }
+    if (_safety_ci_eq(b, "env") == 1)  { return SWRAP_ENV; }
+    if (_safety_ci_eq(b, "nice") == 1) { return SWRAP_NICE; }
+    if (_safety_ci_eq(b, "time") == 1) { return SWRAP_TIME; }
+    if (_safety_ci_eq(b, "exec") == 1) { return SWRAP_EXEC; }
+    if (_safety_in_list(b, "nohup command busybox", 1) == 1) { return SWRAP_PLAIN; }
+    if (_safety_in_list(b, "if then else elif do while until ! { }", 0) == 1) { return SWRAP_PLAIN; }
+    return SWRAP_NONE;
+}
+
+#  1 when wrapper option `o` consumes the next word as its argument.
+fn _safety_wrapper_opt_takes_arg(w, o) {
+    if (w == SWRAP_SUDO) {
+        return _safety_in_list(o, "-u -g -C -D -h -p -r -t -U -T -R --user --group --chdir --host --prompt --role --type --other-user --close-from --command-timeout --chroot", 0);
+    }
+    if (w == SWRAP_DOAS) { return _safety_in_list(o, "-u -C", 0); }
+    if (w == SWRAP_ENV)  { return _safety_in_list(o, "-u -C --unset --chdir", 0); }
+    if (w == SWRAP_NICE) { return _safety_in_list(o, "-n --adjustment", 0); }
+    if (w == SWRAP_TIME) { return _safety_in_list(o, "-f -o --format --output", 0); }
+    if (w == SWRAP_EXEC) { return _safety_in_list(o, "-a", 0); }
+    return 0;
+}
+
+#  Skip a wrapper's options from index i; returns the next word index.
+fn _safety_skip_wrapper_opts(toks, i, e, w) {
+    while (i < e) {
+        var o = vec_get(toks, i);
+        if (streq(o, "--") == 1) { return i + 1; }
+        if (load8(o) == 45 && load8(o + 1) != 0) {
+            i = i + 1;
+            if (_safety_wrapper_opt_takes_arg(w, o) == 1) { i = i + 1; }
+        }
+        elif (w == SWRAP_ENV && _safety_is_assignment(o) == 1) { i = i + 1; }
+        else { return i; }
+    }
+    return i;
+}
+
+#  Index of the command string after a shell's -c (in any short
+#  cluster: -c, -lc, -ec), or e when the shell runs a script / stdin.
+fn _safety_shell_cmd_index(toks, i, e) {
+    while (i < e) {
+        var t = vec_get(toks, i);
+        var c0 = load8(t);
+        if (c0 != 45 && c0 != 43) { return e; }
+        if (c0 == 45 && load8(t + 1) != 45 && _safety_find_byte(t + 1, 99) >= 0) { return i + 1; }
+        if (_safety_in_list(t, "-o +o -O +O", 0) == 1) { i = i + 1; }
+        i = i + 1;
+    }
+    return e;
+}
+
+#  Index of argv0 in toks[s..e), or e when there is no command word.
+fn _safety_argv0(toks, s, e, depth) {
+    var i = s;
+    while (i < e) {
+        var t = vec_get(toks, i);
+        if (_safety_is_assignment(t) == 1) { i = i + 1; }
+        else {
+            var b = _safety_basename(t);
+            var w = _safety_wrapper_kind(b);
+            if (w == SWRAP_NONE) {
+                if (depth < 4 && _safety_in_list(b, "sh bash dash zsh ksh ash mksh", 1) == 1) {
+                    var c = _safety_shell_cmd_index(toks, i + 1, e);
+                    if (c < e) { return _safety_argv0(toks, c, e, depth + 1); }
+                }
+                return i;
+            }
+            i = _safety_skip_wrapper_opts(toks, i + 1, e, w);
+        }
+    }
+    return e;
+}
+
+fn _safety_is_mkfs_name(b) {
+    if (strlen(b) >= 4 && _safety_ci_memeq(b, "mkfs", 4) == 1) { return 1; }
+    return _safety_in_list(b, "mke2fs mkswap mkdosfs wipefs", 1);
+}
+
+#  rm recursive flag: a short cluster holding r / R, or --recursive /
+#  an unambiguous prefix of it (getopt_long accepts --r, --rec, ...).
+fn _safety_is_rm_recursive_flag(t) {
+    if (load8(t) != 45) { return 0; }
+    var c1 = load8(t + 1);
+    if (c1 == 0) { return 0; }
+    if (c1 == 45) {
+        var n = strlen(t);
+        if (n < 3 || n > 11) { return 0; }
+        return _safety_ci_memeq(t, "--recursive", n);
+    }
+    if (_safety_find_byte(t + 1, 114) >= 0) { return 1; }
+    if (_safety_find_byte(t + 1, 82) >= 0)  { return 1; }
+    return 0;
+}
+
+#  1 for an rm operand that names the root: normalises to `/`, to `/`
+#  followed only by `*`, or climbs above `/` (still the root).
+fn _safety_rm_operand_is_root(t) {
+    if (load8(t) != 47) { return 0; }
+    var np = _safety_path_norm(t);
+    if (np == 0) { return 1; }
+    var i = 1;
+    while (load8(np + i) == 42) { i = i + 1; }
+    if (load8(np + i) == 0) { return 1; }
+    return 0;
+}
+
+#  1 for an absolute path that normalises to something inside /dev/.
+fn _safety_is_dev_path(t) {
+    if (load8(t) != 47) { return 0; }
+    var np = _safety_path_norm(t);
+    if (np == 0) { return 0; }
+    if (strlen(np) <= 4) { return 0; }
+    return _safety_path_under(np, "/dev");
+}
+
+#  1 for a dd `of=` operand naming a path inside /dev/.
+fn _safety_is_dd_of_dev(t) {
+    if (strlen(t) < 3) { return 0; }
+    if (_safety_ci_memeq(t, "of=", 3) == 0) { return 0; }
+    return _safety_is_dev_path(t + 3);
+}
+
+#  1 if the command toks[s..e) trips detector `kind`.
+fn _safety_det_segment(toks, s, e, kind) {
+    var rec = 0;
+    var root = 0;
+    var dev = 0;
+    var k = e - 1;
+    while (k >= s) {
+        var t = vec_get(toks, k);
+        var b = _safety_basename(t);
+        if (kind == SDET_RM_ROOT) {
+            if (rec == 1 && root == 1 && _safety_ci_eq(b, "rm") == 1) { return 1; }
+            if (_safety_is_rm_recursive_flag(t) == 1) { rec = 1; }
+            elif (_safety_rm_operand_is_root(t) == 1) { root = 1; }
+        }
+        elif (kind == SDET_DD_DEVICE) {
+            if (dev == 1 && _safety_ci_eq(b, "dd") == 1) { return 1; }
+            if (_safety_is_dd_of_dev(t) == 1) { dev = 1; }
+        }
+        elif (kind == SDET_MKFS) {
+            if (dev == 1 && _safety_is_mkfs_name(b) == 1) { return 1; }
+            if (_safety_is_dev_path(t) == 1) { dev = 1; }
+        }
+        k = k - 1;
+    }
+    if (kind == SDET_MKFS) {
+        var a = _safety_argv0(toks, s, e, 0);
+        if (a < e && _safety_is_mkfs_name(_safety_basename(vec_get(toks, a))) == 1) { return 1; }
+    }
+    return 0;
+}
+
+#  1 if any command in the line `s` trips detector `kind`.
+fn _safety_detect_cmd(s, kind) {
+    var toks = _safety_cmd_tokens(s, 1);
+    var n = vec_len(toks);
+    var i = 0;
+    while (i < n) {
+        var e = i;
+        while (e < n && vec_get(toks, e) != 0) { e = e + 1; }
+        if (e > i) {
+            if (_safety_det_segment(toks, i, e, kind) == 1) { return 1; }
+        }
+        i = e + 1;
+    }
+    return 0;
+}
+
+#  target + " " + every non-null parameter value (`total` = their
+#  summed lengths plus separators).
+fn _safety_join_values(target, vals, total) {
+    var buf = alloc(total + 1);
+    var tl = strlen(target);
+    memcpy(buf, target, tl);
+    var off = tl;
+    var n = vec_len(vals);
+    var i = 0;
+    while (i < n) {
+        var v = vec_get(vals, i);
+        if (v != 0) {
+            var vl = strlen(v);
+            store8(buf + off, 32); off = off + 1;
+            memcpy(buf + off, v, vl); off = off + vl;
+        }
+        i = i + 1;
+    }
+    store8(buf + off, 0);
+    return buf;
+}
+
+#  Run a detector over the target, each parameter value on its own,
+#  and the target joined with all values (split argv: `/bin/rm` +
+#  `-rf` + `/`).
+fn _safety_destructive_action(action, kind) {
+    var target = safety_action_target(action);
+    if (_safety_detect_cmd(target, kind) == 1) { return 1; }
+    var m = safety_action_params(action);
+    if (m == 0) { return 0; }
+    var vals = map_values(m);
+    var n = vec_len(vals);
+    var total = strlen(target);
+    var i = 0;
+    while (i < n) {
+        var v = vec_get(vals, i);
+        if (v != 0) {
+            if (_safety_detect_cmd(v, kind) == 1) { return 1; }
+            total = total + 1 + strlen(v);
+        }
+        i = i + 1;
+    }
+    return _safety_detect_cmd(_safety_join_values(target, vals, total), kind);
+}
+
+#  ============================================================
+#  Rule evaluation
+#  ============================================================
+
+#  Haystack normaliser for forbidden / approval patterns: runs of
+#  SP/TAB/LF/VT/FF/CR collapse to one space and `'` / `"` are dropped,
+#  so `rm  -rf  '/'` reads as `rm -rf /`. Applied to the pattern too.
+fn _safety_squash(s) {
+    var n = strlen(s);
+    var out = alloc(n + 1);
+    var j = 0;
+    var sp = 0;
+    var i = 0;
+    while (i < n) {
+        var c = load8(s + i) & 0xFF;
+        if (c == 39 || c == 34) { }
+        elif (c == 32 || (c >= 9 && c <= 13)) {
+            if (sp == 0) { store8(out + j, 32); j = j + 1; sp = 1; }
+        }
+        else { store8(out + j, c); j = j + 1; sp = 0; }
+        i = i + 1;
+    }
+    store8(out + j, 0);
+    return out;
+}
+
+#  1 if the squashed pattern occurs (case-insensitively) in the
+#  squashed target or in any squashed parameter value.
+fn _safety_action_has_pattern(action, pat) {
+    var np = _safety_squash(pat);
+    if (_safety_ci_has(_safety_squash(safety_action_target(action)), np) == 1) { return 1; }
+    var m = safety_action_params(action);
+    if (m == 0) { return 0; }
+    var vals = map_values(m);
+    var n = vec_len(vals);
+    var i = 0;
+    while (i < n) {
+        var v = vec_get(vals, i);
+        if (v != 0) {
+            if (_safety_ci_has(_safety_squash(v), np) == 1) { return 1; }
+        }
+        i = i + 1;
+    }
+    return 0;
+}
+
+#  1 if vec v holds a null entry.
+fn _safety_vec_has_null(v) {
+    if (v == 0) { return 0; }
+    var n = vec_len(v);
+    var i = 0;
+    while (i < n) {
+        if (vec_get(v, i) == 0) { return 1; }
+        i = i + 1;
+    }
+    return 0;
+}
+
+#  Reason string when the rule cannot be evaluated, else 0. The final
+#  return is the default case: an unknown rule type is an error.
+fn _safety_rule_config_error(rule) {
+    var rt = safety_rule_type(rule);
+    if (rt == SRT_FORBIDDEN_ACTION || rt == SRT_REQUIRE_APPROVAL || rt == SRT_RATE_LIMIT) {
+        if (safety_rule_str(rule) == 0) { return "Safety rule has no pattern"; }
+        return 0;
+    }
+    if (rt == SRT_RESOURCE_LIMIT) {
+        if (safety_rule_str(rule) == 0) { return "Resource-limit rule names no resource"; }
+        return 0;
+    }
+    if (rt == SRT_DESTRUCTIVE_COMMAND) {
+        if (_safety_detector_kind(safety_rule_str(rule)) == SDET_UNKNOWN) {
+            return "Destructive-command rule names no known detector";
+        }
+        return 0;
+    }
+    if (rt == SRT_ESCALATION_REQUIRED) {
+        if (safety_rule_str2(rule) == 0) { return "Escalation rule has no to_level"; }
+        return 0;
+    }
+    if (rt == SRT_CONTENT_FILTER) {
+        if (_safety_vec_has_null(safety_rule_vec(rule)) == 1) { return "Content-filter rule has a null pattern"; }
+        return 0;
+    }
+    if (rt == SRT_SCOPE_RESTRICTION) {
+        if (_safety_vec_has_null(safety_rule_vec(rule)) == 1)  { return "Scope rule has a null path"; }
+        if (_safety_vec_has_null(safety_rule_vec2(rule)) == 1) { return "Scope rule has a null path"; }
+        return 0;
+    }
+    if (rt == SRT_OUTPUT_VALIDATION) { return 0; }
+    return "Unknown safety rule type";
+}
+
+#  Strict non-negative decimal: [0-9]+ only -- no sign, whitespace,
+#  exponent or radix prefix -- and no i64 overflow. Returns -1 otherwise.
+fn _safety_parse_decimal(s) {
+    var n = strlen(s);
+    if (n == 0) { return 0 - 1; }
+    var v = 0;
+    var i = 0;
+    while (i < n) {
+        var c = load8(s + i) & 0xFF;
+        if (c < 48 || c > 57) { return 0 - 1; }
+        var d = c - 48;
+        if (v > (0x7FFFFFFFFFFFFFFF - d) / 10) { return 0 - 1; }
+        v = v * 10 + d;
+        i = i + 1;
+    }
+    return v;
+}
+
+#  Equality ignoring ASCII case and surrounding whitespace.
+fn _safety_ci_eq_trim(a, b) {
+    var a0 = 0;
+    var a1 = strlen(a);
+    while (a0 < a1 && _safety_inj_space_len(a, a0, a1) == 1) { a0 = a0 + 1; }
+    while (a1 > a0 && _safety_inj_space_len(a, a1 - 1, a1) == 1) { a1 = a1 - 1; }
+    var b0 = 0;
+    var b1 = strlen(b);
+    while (b0 < b1 && _safety_inj_space_len(b, b0, b1) == 1) { b0 = b0 + 1; }
+    while (b1 > b0 && _safety_inj_space_len(b, b1 - 1, b1) == 1) { b1 = b1 - 1; }
+    if (a1 - a0 != b1 - b0) { return 0; }
+    return _safety_ci_memeq(a + a0, b + b0, a1 - a0);
 }
 
 #  Evaluate a single rule against an action; returns verdict ptr or 0 if
 #  the rule did not trigger.
 fn safety_evaluate_rule(e, agent_id, action, rule) {
+    if (rule == 0) { return _safety_blocked_hard("Null safety rule", "safety-engine"); }
+    var rid = safety_rule_id(rule);
+    if (action == 0) { return _safety_blocked_hard("Null safety action", rid); }
+    var target = safety_action_target(action);
+    if (target == 0) { return _safety_blocked_hard("Safety action has no target", rid); }
+    var bad = _safety_rule_config_error(rule);
+    if (bad != 0) { return _safety_blocked_hard(bad, rid); }
+    var at = safety_action_type(action);
+    var filt = safety_rule_action_filter(rule);
+    if (filt != SAFETY_ACTION_ANY && filt != at) { return 0; }
     var rt = safety_rule_type(rule);
 
     if (rt == SRT_FORBIDDEN_ACTION) {
-        if (_safety_target_matches(action, safety_rule_str(rule)) == 1) {
+        if (_safety_action_has_pattern(action, safety_rule_str(rule)) == 1) {
             var reason = _safety_concat("Forbidden action pattern matched: ", safety_rule_str(rule));
-            return safety_verdict_blocked(reason, safety_rule_id(rule));
+            return safety_verdict_blocked(reason, rid);
+        }
+        return 0;
+    }
+
+    if (rt == SRT_DESTRUCTIVE_COMMAND) {
+        if (at == AT_SYSTEM_COMMAND || at == AT_PROCESS_SPAWN) {
+            var kind = _safety_detector_kind(safety_rule_str(rule));
+            if (_safety_destructive_action(action, kind) == 1) {
+                var reason = _safety_concat("Destructive command detected: ", safety_rule_str(rule));
+                return safety_verdict_blocked(reason, rid);
+            }
         }
         return 0;
     }
 
     if (rt == SRT_REQUIRE_APPROVAL) {
-        if (_safety_target_matches(action, safety_rule_str(rule)) == 1) {
+        if (_safety_action_has_pattern(action, safety_rule_str(rule)) == 1) {
             var reason = _safety_concat("Action requires human approval: ", safety_rule_str(rule));
-            return safety_verdict_requires_approval(reason, safety_rule_id(rule));
+            return safety_verdict_requires_approval(reason, rid);
         }
         return 0;
     }
 
     if (rt == SRT_RATE_LIMIT) {
-        if (_safety_target_matches(action, safety_rule_str(rule)) == 1) {
-            var count = _safety_rate_record(e, agent_id, safety_rule_str(rule));
-            if (count > safety_rule_int(rule)) {
-                return safety_verdict_rate_limited(60);
+        if (agent_id == 0) { return _safety_blocked_hard("Null agent id", rid); }
+        if (_safety_ci_has(target, safety_rule_str(rule)) == 1) {
+            if (_safety_rate_admit(e, agent_id, rule) == 0) {
+                return _safety_rate_limited_by(60, rid);
             }
         }
         return 0;
     }
 
     if (rt == SRT_SCOPE_RESTRICTION) {
-        if (safety_action_type(action) == AT_FILE_ACCESS) {
-            var denied = safety_rule_vec2(rule);
-            if (denied != 0) {
-                var dn = vec_len(denied);
-                var i = 0;
-                while (i < dn) {
-                    var dp = vec_get(denied, i);
-                    if (_starts_with_cstr(safety_action_target(action), dp) == 1) {
-                        var reason = _safety_concat("Path denied by scope restriction: ", dp);
-                        return safety_verdict_blocked(reason, safety_rule_id(rule));
-                    }
-                    i = i + 1;
-                }
-            }
-            var allowed = safety_rule_vec(rule);
-            if (allowed != 0 && vec_len(allowed) > 0) {
-                var an = vec_len(allowed);
-                var j = 0;
-                var ok = 0;
-                while (j < an) {
-                    if (_starts_with_cstr(safety_action_target(action), vec_get(allowed, j)) == 1) {
-                        ok = 1; j = an;
-                    } else {
-                        j = j + 1;
-                    }
-                }
-                if (ok == 0) {
-                    return safety_verdict_blocked("Path not in allowed scope", safety_rule_id(rule));
-                }
-            }
-        }
+        if (at == AT_FILE_ACCESS) { return _safety_scope_file(action, rule); }
+        if (at == AT_SYSTEM_COMMAND || at == AT_PROCESS_SPAWN) { return _safety_scope_cmd(action, rule); }
         return 0;
     }
 
     if (rt == SRT_ESCALATION_REQUIRED) {
-        if (safety_action_type(action) == AT_PRIVILEGE_ESCALATION) {
+        if (at == AT_PRIVILEGE_ESCALATION) {
             var from_p = safety_action_get_param(action, "from_level");
             var to_p   = safety_action_get_param(action, "to_level");
-            if (from_p != 0 && to_p != 0
-             && streq(from_p, safety_rule_str(rule))  == 1
-             && streq(to_p,   safety_rule_str2(rule)) == 1) {
-                var reason = _safety_format_escalation(safety_rule_str(rule), safety_rule_str2(rule));
-                return safety_verdict_requires_approval(reason, safety_rule_id(rule));
+            if (from_p == 0 || to_p == 0) {
+                return safety_verdict_requires_approval(
+                    "Privilege escalation without from_level / to_level requires approval", rid);
+            }
+            if (_safety_ci_eq_trim(to_p, safety_rule_str2(rule)) == 1) {
+                return safety_verdict_requires_approval(_safety_format_escalation(from_p, to_p), rid);
             }
         }
         return 0;
@@ -753,10 +1820,14 @@ fn safety_evaluate_rule(e, agent_id, action, rule) {
         var resource = safety_rule_str(rule);
         var val_s = safety_action_get_param(action, resource);
         if (val_s != 0) {
-            var val = atoi(val_s);
+            var val = _safety_parse_decimal(val_s);
+            if (val < 0) {
+                var reason = _safety_concat("Resource value is not a non-negative decimal integer: ", resource);
+                return safety_verdict_blocked(reason, rid);
+            }
             if (val > safety_rule_int(rule)) {
                 var reason = _safety_format_resource(resource, val, safety_rule_int(rule));
-                return safety_verdict_blocked(reason, safety_rule_id(rule));
+                return safety_verdict_blocked(reason, rid);
             }
         }
         return 0;
@@ -769,9 +1840,9 @@ fn safety_evaluate_rule(e, agent_id, action, rule) {
             var k = 0;
             while (k < cn) {
                 var pat = vec_get(pats, k);
-                if (_safety_target_matches(action, pat) == 1) {
+                if (_safety_ci_has(target, pat) == 1) {
                     var reason = _safety_concat("Content filter matched: ", pat);
-                    return safety_verdict_blocked(reason, safety_rule_id(rule));
+                    return safety_verdict_blocked(reason, rid);
                 }
                 k = k + 1;
             }
@@ -780,113 +1851,144 @@ fn safety_evaluate_rule(e, agent_id, action, rule) {
     }
 
     #  OUTPUT_VALIDATION is handled by safety_engine_check_output.
-    return 0;
+    if (rt == SRT_OUTPUT_VALIDATION) { return 0; }
+    return _safety_blocked_hard("Unknown safety rule type", rid);
 }
 
-#  Evaluate an action against all active policies, highest priority first.
+#  Apply the policy's enforcement to a triggered rule's verdict:
+#  SE_WARN turns it into a Warning (0 when a Warning or stronger already
+#  stands), SE_AUDIT_ONLY drops it after logging, anything else --
+#  SE_BLOCK or an unknown value -- keeps it. A configuration-integrity
+#  block is never downgraded.
+fn _safety_enforce(policy, rule, v, best_rank) {
+    if (_safety_verdict_is_hard(v) == 1) { return v; }
+    var enf = safety_policy_enforcement(policy);
+    if (enf == SE_WARN) {
+        if (best_rank >= 1) { return 0; }
+        return safety_verdict_warning(_safety_format_warn(safety_rule_id(rule), safety_rule_description(rule)));
+    }
+    if (enf == SE_AUDIT_ONLY) {
+        _safety_log_kv(SK_INFO, "safety: audit-only rule triggered", "rule_id", safety_rule_id(rule));
+        return 0;
+    }
+    return v;
+}
+
+#  Evaluate an action against every enabled policy (highest priority
+#  first) and return the strongest verdict: Blocked > RequiresApproval
+#  > RateLimited > Warning; the first at a given strength wins. Blocked
+#  returns at once. No enabled policy, or a null agent id / action /
+#  target, is Blocked.
 fn safety_engine_check_action(e, agent_id, action) {
+    if (agent_id == 0 || action == 0) {
+        return _safety_log_blocked(_safety_blocked_hard("Null agent id or action", "safety-engine"));
+    }
+    if (safety_action_target(action) == 0) {
+        return _safety_log_blocked(_safety_blocked_hard("Safety action has no target", "safety-engine"));
+    }
     var ps = load64(e);
     var n = vec_len(ps);
-    var order = alloc(n * 8);
-    var i = 0;
-    while (i < n) { store64(order + i * 8, i); i = i + 1; }
-    #  Simple insertion sort by descending priority.
-    i = 1;
-    while (i < n) {
-        var key = load64(order + i * 8);
-        var kprio = safety_policy_priority(vec_get(ps, key));
-        var j = i - 1;
-        var done = 0;
-        while (j >= 0 && done == 0) {
-            var idx = load64(order + j * 8);
-            if (safety_policy_priority(vec_get(ps, idx)) < kprio) {
-                store64(order + (j + 1) * 8, idx);
-                j = j - 1;
-            } else {
-                done = 1;
-            }
-        }
-        store64(order + (j + 1) * 8, key);
-        i = i + 1;
-    }
-
-    var warning = 0;
-    var o = 0;
-    while (o < n) {
-        var pi = load64(order + o * 8);
-        var policy = vec_get(ps, pi);
-        if (safety_policy_enabled(policy) == 1) {
-            var rules = safety_policy_rules(policy);
-            var rn = vec_len(rules);
-            var r = 0;
-            while (r < rn) {
-                var rule = vec_get(rules, r);
-                var verdict = safety_evaluate_rule(e, agent_id, action, rule);
-                if (verdict != 0) {
-                    var enf = safety_policy_enforcement(policy);
-                    if (enf == SE_BLOCK) { return verdict; }
-                    if (enf == SE_WARN && warning == 0) {
-                        var msg = _safety_format_warn(safety_rule_id(rule), safety_rule_description(rule));
-                        warning = safety_verdict_warning(msg);
-                    }
-                }
-                r = r + 1;
-            }
-        }
-        o = o + 1;
-    }
-    if (warning != 0) { return warning; }
-    return safety_verdict_allowed();
-}
-
-#  Check output (text) against content-filter + output-validation rules.
-fn safety_engine_check_output(e, agent_id, output) {
-    var ps = load64(e);
-    var n = vec_len(ps);
-    var warning = 0;
-    var olen = strlen(output);
+    var best = 0;
+    var best_rank = 0;
+    var enabled = 0;
     var o = 0;
     while (o < n) {
         var policy = vec_get(ps, o);
-        if (safety_policy_enabled(policy) == 1) {
+        if (safety_policy_enabled(policy) != 0) {
+            enabled = 1;
             var rules = safety_policy_rules(policy);
             var rn = vec_len(rules);
             var r = 0;
             while (r < rn) {
                 var rule = vec_get(rules, r);
-                var rt = safety_rule_type(rule);
-                var triggered = 0;
-                if (rt == SRT_CONTENT_FILTER) {
-                    var pats = safety_rule_vec(rule);
-                    if (pats != 0) {
-                        var cn = vec_len(pats);
-                        var k = 0;
-                        while (k < cn) {
-                            if (_safety_ci_has(output, vec_get(pats, k)) == 1) { triggered = 1; k = cn; }
-                            else { k = k + 1; }
-                        }
-                    }
-                }
-                elif (rt == SRT_OUTPUT_VALIDATION) {
-                    if (olen > safety_rule_int(rule)) { triggered = 1; }
-                }
-                if (triggered == 1) {
-                    var enf = safety_policy_enforcement(policy);
-                    var reason = _safety_concat("Output violates rule: ", safety_rule_description(rule));
-                    if (enf == SE_BLOCK) {
-                        return safety_verdict_blocked(reason, safety_rule_id(rule));
-                    }
-                    if (enf == SE_WARN && warning == 0) {
-                        var msg = _safety_format_warn(safety_rule_id(rule), safety_rule_description(rule));
-                        warning = safety_verdict_warning(msg);
-                    }
+                var v = safety_evaluate_rule(e, agent_id, action, rule);
+                if (v != 0) { v = _safety_enforce(policy, rule, v, best_rank); }
+                if (v != 0) {
+                    var rank = _safety_verdict_rank(v);
+                    if (rank >= 4) { return _safety_log_blocked(v); }
+                    if (rank > best_rank) { best = v; best_rank = rank; }
                 }
                 r = r + 1;
             }
         }
         o = o + 1;
     }
-    if (warning != 0) { return warning; }
+    if (enabled == 0) {
+        return _safety_log_blocked(safety_verdict_blocked("No enabled safety policy", "safety-engine"));
+    }
+    if (best != 0) { return best; }
+    return safety_verdict_allowed();
+}
+
+#  One rule against output text; returns verdict ptr or 0. Rules of
+#  the action-only types do not apply; an unknown type is Blocked.
+fn _safety_output_rule(rule, output, olen) {
+    if (rule == 0) { return _safety_blocked_hard("Null safety rule", "safety-engine"); }
+    var rid = safety_rule_id(rule);
+    var bad = _safety_rule_config_error(rule);
+    if (bad != 0) { return _safety_blocked_hard(bad, rid); }
+    var rt = safety_rule_type(rule);
+    var triggered = 0;
+    if (rt == SRT_CONTENT_FILTER) {
+        var pats = safety_rule_vec(rule);
+        if (pats != 0) {
+            var cn = vec_len(pats);
+            var k = 0;
+            while (k < cn) {
+                if (_safety_ci_has(output, vec_get(pats, k)) == 1) { triggered = 1; k = cn; }
+                else { k = k + 1; }
+            }
+        }
+    }
+    elif (rt == SRT_OUTPUT_VALIDATION) {
+        if (olen > safety_rule_int(rule)) { triggered = 1; }
+    }
+    if (triggered == 1) {
+        var reason = _safety_concat("Output violates rule: ", safety_rule_description(rule));
+        return safety_verdict_blocked(reason, rid);
+    }
+    return 0;
+}
+
+#  Check output (text) against content-filter + output-validation
+#  rules, with the same priority order, strongest-verdict selection and
+#  fail-closed cases as safety_engine_check_action.
+fn safety_engine_check_output(e, agent_id, output) {
+    if (output == 0) {
+        return _safety_log_blocked(_safety_blocked_hard("Null output", "safety-engine"));
+    }
+    var ps = load64(e);
+    var n = vec_len(ps);
+    var olen = strlen(output);
+    var best = 0;
+    var best_rank = 0;
+    var enabled = 0;
+    var o = 0;
+    while (o < n) {
+        var policy = vec_get(ps, o);
+        if (safety_policy_enabled(policy) != 0) {
+            enabled = 1;
+            var rules = safety_policy_rules(policy);
+            var rn = vec_len(rules);
+            var r = 0;
+            while (r < rn) {
+                var rule = vec_get(rules, r);
+                var v = _safety_output_rule(rule, output, olen);
+                if (v != 0) { v = _safety_enforce(policy, rule, v, best_rank); }
+                if (v != 0) {
+                    var rank = _safety_verdict_rank(v);
+                    if (rank >= 4) { return _safety_log_blocked(v); }
+                    if (rank > best_rank) { best = v; best_rank = rank; }
+                }
+                r = r + 1;
+            }
+        }
+        o = o + 1;
+    }
+    if (enabled == 0) {
+        return _safety_log_blocked(safety_verdict_blocked("No enabled safety policy", "safety-engine"));
+    }
+    if (best != 0) { return best; }
     return safety_verdict_allowed();
 }
 
@@ -897,27 +1999,36 @@ fn safety_engine_record_violation(e, v) {
 
 fn safety_engine_violations_for_agent(e, agent_id) {
     var out = vec_new();
+    if (agent_id == 0) { return out; }
     var vs = load64(e + 8);
     var n = vec_len(vs);
     var i = 0;
     while (i < n) {
         var v = vec_get(vs, i);
-        if (streq(safety_violation_agent_id(v), agent_id) == 1) { vec_push(out, v); }
+        var aid = safety_violation_agent_id(v);
+        if (aid != 0 && streq(aid, agent_id) == 1) { vec_push(out, v); }
         i = i + 1;
     }
     return out;
 }
 
 #  Agent safety score in basis points (1000 = clean, 0 = dangerous).
-#  Each violation subtracts (severity_weight_bp / 10).
+#  Each violation subtracts (severity_weight_bp / 10). Counts in place,
+#  no filtered vec.
 fn safety_engine_agent_score_bp(e, agent_id) {
-    var vs = safety_engine_violations_for_agent(e, agent_id);
-    var n = vec_len(vs);
     var penalty = 0;
-    var i = 0;
-    while (i < n) {
-        penalty = penalty + safety_sev_weight_bp(safety_violation_severity(vec_get(vs, i))) / 10;
-        i = i + 1;
+    if (agent_id != 0) {
+        var vs = load64(e + 8);
+        var n = vec_len(vs);
+        var i = 0;
+        while (i < n) {
+            var v = vec_get(vs, i);
+            var aid = safety_violation_agent_id(v);
+            if (aid != 0 && streq(aid, agent_id) == 1) {
+                penalty = penalty + safety_sev_weight_bp(safety_violation_severity(v)) / 10;
+            }
+            i = i + 1;
+        }
     }
     var score = 1000 - penalty;
     if (score < 0) { score = 0; }
@@ -929,61 +2040,93 @@ fn safety_engine_agent_score_bp(e, agent_id) {
 #  String helpers
 #  ============================================================
 
+#  `s`, or "" for a null pointer.
+fn _safety_s(s) {
+    if (s == 0) { return ""; }
+    return s;
+}
+
+#  Index of byte c in cstring s, or -1.
+fn _safety_find_byte(s, c) {
+    var i = 0;
+    while (load8(s + i) != 0) {
+        if (load8(s + i) == c) { return i; }
+        i = i + 1;
+    }
+    return 0 - 1;
+}
+
 fn _starts_with_cstr(s, prefix) {
     var pn = strlen(prefix);
     if (strlen(s) < pn) { return 0; }
     return memeq(s, prefix, pn);
 }
 
+#  Owned copy of the first n bytes of s.
+fn _safety_dup_n(s, n) {
+    var out = alloc(n + 1);
+    memcpy(out, s, n);
+    store8(out + n, 0);
+    return out;
+}
+
 fn _safety_concat(prefix, suffix) {
-    var pn = strlen(prefix);
-    var sn = strlen(suffix);
+    var p = _safety_s(prefix);
+    var s = _safety_s(suffix);
+    var pn = strlen(p);
+    var sn = strlen(s);
     var buf = alloc(pn + sn + 1);
-    memcpy(buf, prefix, pn);
-    memcpy(buf + pn, suffix, sn);
+    memcpy(buf, p, pn);
+    memcpy(buf + pn, s, sn);
     store8(buf + pn + sn, 0);
     return buf;
 }
 
 fn _safety_format_warn(rule_id, description) {
-    var idn = strlen(rule_id);
-    var dn  = strlen(description);
+    var id = _safety_s(rule_id);
+    var desc = _safety_s(description);
+    var idn = strlen(id);
+    var dn  = strlen(desc);
     var buf = alloc(idn + dn + 32);
     var off = 0;
     memcpy(buf + off, "Rule ", 5); off = off + 5;
-    memcpy(buf + off, rule_id, idn); off = off + idn;
+    memcpy(buf + off, id, idn); off = off + idn;
     memcpy(buf + off, " triggered (warn): ", 19); off = off + 19;
-    memcpy(buf + off, description, dn); off = off + dn;
+    memcpy(buf + off, desc, dn); off = off + dn;
     store8(buf + off, 0);
     return buf;
 }
 
 fn _safety_format_escalation(from_level, to_level) {
-    var fn_ = strlen(from_level);
-    var tn  = strlen(to_level);
+    var f = _safety_s(from_level);
+    var t = _safety_s(to_level);
+    var fn_ = strlen(f);
+    var tn  = strlen(t);
     var buf = alloc(fn_ + tn + 64);
     var off = 0;
     memcpy(buf + off, "Privilege escalation from ", 26); off = off + 26;
-    memcpy(buf + off, from_level, fn_); off = off + fn_;
+    memcpy(buf + off, f, fn_); off = off + fn_;
     memcpy(buf + off, " to ", 4); off = off + 4;
-    memcpy(buf + off, to_level, tn); off = off + tn;
+    memcpy(buf + off, t, tn); off = off + tn;
     memcpy(buf + off, " requires approval", 18); off = off + 18;
     store8(buf + off, 0);
     return buf;
 }
 
 fn _safety_format_resource(resource, val, max_val) {
+    var nb[24];
+    var mb[24];
     var rn = strlen(resource);
     var buf = alloc(rn + 96);
     var off = 0;
     memcpy(buf + off, "Resource ", 9); off = off + 9;
     memcpy(buf + off, resource, rn); off = off + rn;
     memcpy(buf + off, " exceeds limit: ", 16); off = off + 16;
-    var nb = alloc(24); var nl = fmt_int_buf(val, nb);
-    memcpy(buf + off, nb, nl); off = off + nl;
+    var nl = fmt_int_buf(val, &nb);
+    memcpy(buf + off, &nb, nl); off = off + nl;
     memcpy(buf + off, " > ", 3); off = off + 3;
-    var mb = alloc(24); var ml = fmt_int_buf(max_val, mb);
-    memcpy(buf + off, mb, ml); off = off + ml;
+    var ml = fmt_int_buf(max_val, &mb);
+    memcpy(buf + off, &mb, ml); off = off + ml;
     store8(buf + off, 0);
     return buf;
 }
@@ -995,6 +2138,13 @@ fn _safety_format_resource(resource, val, max_val) {
 fn _safety_mk_forbidden_rule(rule_id, description, pattern, severity) {
     var r = safety_rule_new(rule_id, description, severity, SRT_FORBIDDEN_ACTION);
     safety_rule_set_str(r, pattern);
+    return r;
+}
+
+#  detector: "rm-root" | "mkfs" | "dd-device" (see SafetyDetector).
+fn _safety_mk_destructive_rule(rule_id, description, detector, severity) {
+    var r = safety_rule_new(rule_id, description, severity, SRT_DESTRUCTIVE_COMMAND);
+    safety_rule_set_str(r, detector);
     return r;
 }
 
@@ -1031,22 +2181,24 @@ fn safety_default_policies() {
     var out = vec_new();
 
     var p1 = safety_policy_new("default-forbidden", "Default Forbidden Actions", SE_BLOCK, 10);
-    safety_policy_add_rule(p1, _safety_mk_forbidden_rule(
-        "forbid-rm-rf", "Block recursive root deletion", "rm -rf /", SS_CRITICAL));
-    safety_policy_add_rule(p1, _safety_mk_forbidden_rule(
-        "forbid-mkfs", "Block filesystem formatting", "mkfs", SS_CRITICAL));
-    safety_policy_add_rule(p1, _safety_mk_forbidden_rule(
-        "forbid-dd-zero", "Block disk zeroing", "dd if=/dev/zero", SS_CRITICAL));
+    safety_policy_add_rule(p1, _safety_mk_destructive_rule(
+        "forbid-rm-rf", "Block recursive deletion of the filesystem root", "rm-root", SS_CRITICAL));
+    safety_policy_add_rule(p1, _safety_mk_destructive_rule(
+        "forbid-mkfs", "Block filesystem formatting (mkfs*, mke2fs, mkswap, mkdosfs, wipefs)", "mkfs", SS_CRITICAL));
+    safety_policy_add_rule(p1, _safety_mk_destructive_rule(
+        "forbid-dd-zero", "Block dd writes to a device (of=/dev/...)", "dd-device", SS_CRITICAL));
     vec_push(out, p1);
 
     var p2 = safety_policy_new("default-escalation", "Default Privilege Escalation", SE_BLOCK, 9);
     safety_policy_add_rule(p2, _safety_mk_escalation_rule("escalation-user-root",
-        "Require approval for user-to-root escalation", "user", "root", SS_HIGH));
+        "Require approval for any escalation to root", "user", "root", SS_HIGH));
     vec_push(out, p2);
 
     var p3 = safety_policy_new("default-rate-limit", "Default Rate Limits", SE_BLOCK, 7);
-    safety_policy_add_rule(p3, _safety_mk_rate_rule("rate-system-cmd",
-        "Limit system commands to 60 per minute", "system", 60, SS_MEDIUM));
+    var rate = _safety_mk_rate_rule("rate-system-cmd",
+        "Limit system commands to 60 per minute", "", 60, SS_MEDIUM);
+    safety_rule_set_action_filter(rate, AT_SYSTEM_COMMAND);
+    safety_policy_add_rule(p3, rate);
     vec_push(out, p3);
 
     var content_pats = vec_new();
@@ -1064,7 +2216,7 @@ fn safety_default_policies() {
     vec_push(denied, "/etc/passwd");
     var p5 = safety_policy_new("default-scope", "Default Scope Restrictions", SE_BLOCK, 10);
     safety_policy_add_rule(p5, _safety_mk_scope_rule("scope-sensitive-files",
-        "Deny write access to sensitive system files", vec_new(), denied, SS_CRITICAL));
+        "Deny any access to sensitive system files (file paths and command arguments)", vec_new(), denied, SS_CRITICAL));
     vec_push(out, p5);
 
     return out;

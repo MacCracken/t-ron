@@ -59,7 +59,9 @@ split) because:
   a 6-pattern classifier with Unicode zero-width / directional-
   override normalization.
 - **Circuit breaker**: `safety_circuit_breaker_new(threshold, window_secs,
-  cooldown_secs)` and Closed → Open → HalfOpen state machine.
+  cooldown_secs)` and Closed → Open → HalfOpen state machine. A half-open
+  breaker closes only on `safety_circuit_breaker_record_success(b)`; a
+  violation while half-open re-opens it (2.2.3).
 - **Policy engine**: `safety_engine_new()` + `safety_engine_add_policy`
   / `safety_engine_check_action` / `safety_engine_check_output` /
   `safety_engine_agent_score_bp` / `safety_engine_record_violation`.
@@ -93,3 +95,38 @@ If operational experience shows consumers always pair the two,
 adding a convenience layer (`tron_plus_safety_check(tron, safety,
 call)`) that funnels MCP calls through both is a straightforward
 follow-up. Not in scope for 2.0.0.
+
+## Amendment — 2.2.3
+
+The 2.2.3 audit found the engine failing open in several ways, and the
+repair changed what some rules mean:
+
+- **Fail closed everywhere.** An enforcement other than warn / audit-only
+  blocks; `enabled` is tested `!= 0`; an unknown rule type or a malformed
+  rule blocks; an unknown severity weighs 1000; an engine with no enabled
+  policy blocks. Before, each of these ended in "allowed".
+- **The strongest verdict wins** across all enabled policies (Blocked >
+  RequiresApproval > RateLimited > Warning), in priority order, for
+  actions and outputs alike.
+- **Destructive commands are detected, not substring-matched.** A new
+  tail rule type, `SRT_DESTRUCTIVE_COMMAND`, names a built-in detector
+  ("rm-root", "mkfs", "dd-device") that tokenises the command (quotes,
+  escapes, `$IFS`, brace expansion, `sh -c`, wrapper words) and checks
+  flags and operands. The default forbidden policy uses them, so
+  `rm -fr /` and `rm -r -f /` block and `rm -rf /tmp/build` does not.
+  `rm` / `dd` are matched anywhere in a command, so `echo rm -rf /`
+  blocks too: a deliberate false positive. Custom substring rules now
+  see the command whitespace- and quote-normalised, parameters included.
+- **Scope rules normalise paths** (`//`, `.`, `..`) and match on `/`
+  boundaries; they also check path arguments of commands against the
+  denied list. A relative file path is blocked by any scope rule.
+  `/proc/self/root/…` aliases cannot be resolved without the filesystem.
+- **Rules can filter by action type** (`safety_rule_set_action_filter`),
+  and the default rate rule counts system commands by type, not by the
+  substring "system".
+- **Memory is bounded.** Rate buckets and the breaker's failure window
+  are pruned in place and capped; rate-limited calls are not recorded.
+
+Still open: Unicode confusable mapping in the injection detector, idle
+rate-bucket eviction, and the `require_utf8` output check the Rust
+original had.

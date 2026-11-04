@@ -14,7 +14,7 @@ project conventions.
 ## Prerequisites
 
 - **Cyrius toolchain** — version pinned in `cyrius.cyml`
-  (`cyrius = "6.7.18"` as of 2.2.2). Install per the
+  (`cyrius = "6.7.18"` as of 2.2.3). Install per the
   [cyrius README](https://github.com/MacCracken/cyrius).
   `cyrius.cyml [package].cyrius` is the **single source of truth** —
   CI and the release workflow both read the pin from it, so there is
@@ -31,9 +31,10 @@ project conventions.
 | `cyrius deps` | Populate `./lib/` from the version-pinned stdlib + tagged libro/bote modules. Run before any build/test/check. `./lib/` is gitignored — the contract is the `cyrius.lock` pin, not the bytes on disk. |
 | `cyrius deps --locked` | Check that the tags resolve to exactly the committed `cyrius.lock` (every hash, line and commit pin), writing nothing. What CI and the release run, with `CYRIUS_LOCKED=1` set job-wide. |
 | `cyrius build src/main.cyr build/t-ron` | Build the production binary. |
-| `cyrius test tests/t-ron.tcyr` | Run the main test compile unit (348 assertions). |
-| `cyrius test tests/t-ron-crypto.tcyr` | Run the crypto / signing / audit-export suite (30 assertions). |
-| `cyrius test tests/t-ron-safety.tcyr` | Run the AGNOS safety engine suite (48 assertions). |
+| `cyrius test tests/t-ron.tcyr` | Run the main test compile unit (386 assertions). |
+| `cyrius test tests/t-ron-crypto.tcyr` | Run the crypto / signing / audit-export suite (64 assertions). |
+| `cyrius test tests/t-ron-safety.tcyr` | Run the AGNOS safety engine suite (205 assertions). |
+| `cyrius test tests/t-ron-detect.tcyr` | Run the detection suite: scanner, pattern, correlation, LLM scan (192 assertions). |
 | `cyrius bench tests/t-ron.bcyr` | Run the 5-bench pipeline harness. |
 | `./scripts/bench-history.sh` | Run benches + append a row to `bench-history.csv` tagged with the current commit. |
 | `cyrius distlib` | Regenerate `dist/t-ron.cyr` for downstream consumers (daimon / phylax / bote middleware). |
@@ -48,6 +49,7 @@ cyrius deps --locked
 cyrius test tests/t-ron.tcyr
 cyrius test tests/t-ron-crypto.tcyr
 cyrius test tests/t-ron-safety.tcyr
+cyrius test tests/t-ron-detect.tcyr
 cyrius distlib
 git diff --exit-code dist/t-ron.cyr   # bundle must match src/
 ```

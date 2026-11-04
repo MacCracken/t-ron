@@ -5,31 +5,38 @@
 #  queries) and in the libro cryptographic hash chain (for tamper-proof
 #  auditing).
 
+#  The ring buffer keeps the newest AUDIT_MAX_EVENTS events. The vec runs
+#  up to AUDIT_TRIM_SLACK past that, then drops its oldest entries in one
+#  pass, so a full buffer costs one shift per AUDIT_TRIM_SLACK calls rather
+#  than per call. Readers start at _audit_view_start and so see exactly the
+#  newest AUDIT_MAX_EVENTS; audit_events() returns the vec itself.
 var AUDIT_MAX_EVENTS = 10000;
+var AUDIT_TRIM_SLACK = 1250;
 
-#  Build a small JSON details blob for the libro entry. Keeping this
-#  inline keeps the logger infallible — the chain always gets a record.
+#  The JSON details for the libro entry, every value escaped and the buffer
+#  sized from them. The reason echoes caller-chosen agent and tool names.
 fn _audit_details(tool_name, reason, deny_code) {
-    var tl = strlen(tool_name);
-    var buf = alloc(tl + 256);
-    var off = 0;
-    memcpy(buf + off, "{\"tool_name\":\"", 14); off = off + 14;
-    memcpy(buf + off, tool_name, tl);           off = off + tl;
-    memcpy(buf + off, "\"", 1);                 off = off + 1;
+    var code_str = 0;
+    if (deny_code >= 0) { code_str = deny_code_as_str(deny_code); }
+    var need = _tron_json_esc_len(tool_name) + 48;
+    if (reason != 0)   { need = need + _tron_json_esc_len(reason); }
+    if (code_str != 0) { need = need + _tron_json_esc_len(code_str); }
+    var buf = alloc(need);
+    if (buf == 0) { return str_from("{}"); }
+    var off = _tron_put(buf, 0, "{\"tool_name\":\"");
+    off = _tron_json_esc_into(buf, off, tool_name);
+    off = _tron_put(buf, off, "\"");
     if (reason != 0) {
-        var rl = strlen(reason);
-        memcpy(buf + off, ",\"reason\":\"", 11); off = off + 11;
-        memcpy(buf + off, reason, rl);          off = off + rl;
-        memcpy(buf + off, "\"", 1);             off = off + 1;
+        off = _tron_put(buf, off, ",\"reason\":\"");
+        off = _tron_json_esc_into(buf, off, reason);
+        off = _tron_put(buf, off, "\"");
     }
-    if (deny_code >= 0) {
-        var code_str = deny_code_as_str(deny_code);
-        var cl = strlen(code_str);
-        memcpy(buf + off, ",\"deny_code\":\"", 14); off = off + 14;
-        memcpy(buf + off, code_str, cl);           off = off + cl;
-        memcpy(buf + off, "\"", 1);                off = off + 1;
+    if (code_str != 0) {
+        off = _tron_put(buf, off, ",\"deny_code\":\"");
+        off = _tron_json_esc_into(buf, off, code_str);
+        off = _tron_put(buf, off, "\"");
     }
-    memcpy(buf + off, "}", 1); off = off + 1;
+    off = _tron_put(buf, off, "}");
     store8(buf + off, 0);
     return str_from(buf);
 }
@@ -103,6 +110,28 @@ fn audit_logger_new() {
 }
 
 fn audit_events(a) { return load64(a); }
+
+#  Index of the oldest event readers see.
+fn _audit_view_start(events) {
+    var n = vec_len(events);
+    if (n > AUDIT_MAX_EVENTS) { return n - AUDIT_MAX_EVENTS; }
+    return 0;
+}
+
+#  Drop everything older than the newest AUDIT_MAX_EVENTS, once the vec is
+#  AUDIT_TRIM_SLACK past the cap.
+fn _audit_trim(events) {
+    var n = vec_len(events);
+    if (n <= AUDIT_MAX_EVENTS + AUDIT_TRIM_SLACK) { return 0; }
+    var drop = n - AUDIT_MAX_EVENTS;
+    var i = 0;
+    while (i < AUDIT_MAX_EVENTS) {
+        vec_set(events, i, vec_get(events, i + drop));
+        i = i + 1;
+    }
+    vec_truncate(events, AUDIT_MAX_EVENTS);
+    return 0;
+}
 fn audit_chain(a)  { return load64(a + 16); }
 
 fn _audit_next_id(a) {
@@ -130,7 +159,7 @@ fn audit_log(a, call, verdict) {
         reason);
     var events = load64(a);
     vec_push(events, e);
-    while (vec_len(events) > AUDIT_MAX_EVENTS) { vec_remove(events, 0); }
+    _audit_trim(events);
 
     var details = _audit_details(tool_name, reason, deny_code);
     var chain = load64(a + 16);
@@ -170,60 +199,61 @@ fn audit_chain_review(a) {
 #  operational view, useful for sending recent events to an analytics
 #  sink without exposing the full chain.
 
-fn _audit_export_field(buf, off, key, kn, value, vn) {
-    memcpy(buf + off, key, kn); off = off + kn;
-    memcpy(buf + off, value, vn); off = off + vn;
-    return off;
+#  Bytes one event takes in the export: fixed syntax and two integers in
+#  160, plus each string's escaped length.
+fn _audit_event_json_len(e) {
+    var n = 160 + _tron_json_esc_len(security_event_agent_id(e))
+                + _tron_json_esc_len(security_event_tool_name(e));
+    var reason = security_event_reason(e);
+    if (reason != 0) { n = n + _tron_json_esc_len(reason); }
+    return n;
 }
 
 fn _audit_export_event(buf, off, e) {
-    var id_buf = alloc(24);
-    var id_n   = fmt_int_buf(security_event_id(e), id_buf);
-    var ts_buf = alloc(24);
-    var ts_n   = fmt_int_buf(security_event_timestamp(e), ts_buf);
-    var agent  = security_event_agent_id(e);
-    var tool   = security_event_tool_name(e);
-    var kind_s = verdict_kind_as_str(security_event_kind(e));
+    off = _tron_put(buf, off, "{\"id\":");
+    off = _tron_put_int(buf, off, security_event_id(e));
+    off = _tron_put(buf, off, ",\"timestamp\":");
+    off = _tron_put_int(buf, off, security_event_timestamp(e));
+    off = _tron_put(buf, off, ",\"agent_id\":\"");
+    off = _tron_json_esc_into(buf, off, security_event_agent_id(e));
+    off = _tron_put(buf, off, "\",\"tool_name\":\"");
+    off = _tron_json_esc_into(buf, off, security_event_tool_name(e));
+    off = _tron_put(buf, off, "\",\"verdict\":\"");
+    off = _tron_put(buf, off, verdict_kind_as_str(security_event_kind(e)));
+    off = _tron_put(buf, off, "\"");
     var reason = security_event_reason(e);
-
-    memcpy(buf + off, "{\"id\":",   6);  off = off + 6;
-    memcpy(buf + off, id_buf, id_n);     off = off + id_n;
-    memcpy(buf + off, ",\"timestamp\":", 13); off = off + 13;
-    memcpy(buf + off, ts_buf, ts_n);     off = off + ts_n;
-    memcpy(buf + off, ",\"agent_id\":\"", 13); off = off + 13;
-    memcpy(buf + off, agent, strlen(agent)); off = off + strlen(agent);
-    memcpy(buf + off, "\",\"tool_name\":\"", 15); off = off + 15;
-    memcpy(buf + off, tool, strlen(tool)); off = off + strlen(tool);
-    memcpy(buf + off, "\",\"verdict\":\"", 13); off = off + 13;
-    memcpy(buf + off, kind_s, strlen(kind_s)); off = off + strlen(kind_s);
-    memcpy(buf + off, "\"", 1);           off = off + 1;
     if (reason != 0) {
-        memcpy(buf + off, ",\"reason\":\"", 11); off = off + 11;
-        memcpy(buf + off, reason, strlen(reason)); off = off + strlen(reason);
-        memcpy(buf + off, "\"", 1);      off = off + 1;
+        off = _tron_put(buf, off, ",\"reason\":\"");
+        off = _tron_json_esc_into(buf, off, reason);
+        off = _tron_put(buf, off, "\"");
     }
-    memcpy(buf + off, "}", 1); off = off + 1;
+    off = _tron_put(buf, off, "}");
     return off;
 }
 
 #  Serialize the ring buffer as a JSON array into a freshly-allocated
-#  null-terminated cstring. The returned buffer is owned by the caller
-#  in the sense that the bump allocator won't reuse it until reset.
+#  null-terminated cstring, sized in a first pass over the events. Returns
+#  0 when the alloc fails.
 fn audit_export_json(a) {
     var events = load64(a);
     var n = vec_len(events);
-    #  Upper-bound: ~400 bytes per event; grows with reason/agent/tool lengths.
-    var cap = n * 512 + 32;
-    var buf = alloc(cap);
-    var off = 0;
-    memcpy(buf + off, "[", 1); off = off + 1;
-    var i = 0;
+    var start = _audit_view_start(events);
+    var cap = 8;
+    var i = start;
     while (i < n) {
-        if (i > 0) { memcpy(buf + off, ",", 1); off = off + 1; }
+        cap = cap + _audit_event_json_len(vec_get(events, i));
+        i = i + 1;
+    }
+    var buf = alloc(cap);
+    if (buf == 0) { return 0; }
+    var off = _tron_put(buf, 0, "[");
+    i = start;
+    while (i < n) {
+        if (i > start) { off = _tron_put(buf, off, ","); }
         off = _audit_export_event(buf, off, vec_get(events, i));
         i = i + 1;
     }
-    memcpy(buf + off, "]", 1); off = off + 1;
+    off = _tron_put(buf, off, "]");
     store8(buf + off, 0);
     return buf;
 }
@@ -243,30 +273,39 @@ fn audit_export_json(a) {
 #
 #  Inputs:
 #    a                ptr to AuditLogger
-#    nonce (12 bytes) caller-supplied, must be unique per (key, export)
+#    nonce (12 bytes) unique per (key, export), or 0 to have t-ron draw
+#                     one from random_bytes (recommended: a reused nonce
+#                     XORs two exports' plaintexts together)
 #    key   (32 bytes) ChaCha20 symmetric key
 #    sk    (64 bytes) Ed25519 signing key (from ed25519_generate_keypair)
 #    out_len_ptr      written with total bytes of the returned buffer
 #  Returns: heap-allocated ciphertext envelope, or 0 on failure.
 
 fn audit_export_encrypted(a, nonce, key, sk, out_len_ptr) {
+    store64(out_len_ptr, 0);
     var json = audit_export_json(a);
+    if (json == 0) { return 0; }
     var jlen = strlen(json);
     var envelope = alloc(12 + 64 + jlen);
+    var sig_input = alloc(12 + jlen);
+    if (envelope == 0 || sig_input == 0) { memset(json, 0, jlen); return 0; }
 
-    memcpy(envelope, nonce, 12);
+    if (nonce == 0) {
+        if (random_bytes(envelope, 12) != 12) { memset(json, 0, jlen); return 0; }
+    } else {
+        memcpy(envelope, nonce, 12);
+    }
 
-    #  Encrypt json into envelope+76 via CTR counter = 1.
-    cc20_xor(key, nonce, 1, json, jlen, envelope + 76);
+    #  Encrypt json into envelope+76, block counter starting at 1, then
+    #  wipe the plaintext.
+    var rc = cc20_xor(key, envelope, 1, json, jlen, envelope + 76);
+    memset(json, 0, jlen);
+    if (rc != 0) { return 0; }
 
     #  Sign (nonce || ciphertext) into envelope+12.
-    ed25519_sign(sk, envelope, 12 + jlen, envelope + 12);
-    #  ed25519_sign wrote over the wrong slice above; rebuild the
-    #  correct signature input (nonce || ciphertext) in a temp and sign.
-    var sig_input = alloc(12 + jlen);
     memcpy(sig_input,      envelope, 12);
     memcpy(sig_input + 12, envelope + 76, jlen);
-    ed25519_sign(sk, sig_input, 12 + jlen, envelope + 12);
+    if (ed25519_sign(sk, sig_input, 12 + jlen, envelope + 12) != 0) { return 0; }
 
     store64(out_len_ptr, 12 + 64 + jlen);
     return envelope;
@@ -275,24 +314,26 @@ fn audit_export_encrypted(a, nonce, key, sk, out_len_ptr) {
 #  Decrypt + verify an encrypted export. Returns the plaintext JSON
 #  cstring on success, 0 on any failure (bad signature, truncation).
 fn audit_decrypt_export(data, data_len, key, pk) {
-    if (data_len < 12 + 64) { return 0; }
+    if (data == 0 || data_len < 12 + 64) { return 0; }
     var clen = data_len - 12 - 64;
 
     #  Rebuild the signed payload (nonce || ciphertext) and verify.
     var sig_input = alloc(12 + clen);
+    var plaintext = alloc(clen + 1);
+    if (sig_input == 0 || plaintext == 0) { return 0; }
     memcpy(sig_input,      data, 12);
     memcpy(sig_input + 12, data + 76, clen);
     if (ed25519_verify(pk, sig_input, 12 + clen, data + 12) != 1) { return 0; }
 
-    var plaintext = alloc(clen + 1);
-    cc20_xor(key, data, 1, data + 76, clen, plaintext);
+    if (cc20_xor(key, data, 1, data + 76, clen, plaintext) != 0) { return 0; }
     store8(plaintext + clen, 0);
     return plaintext;
 }
 
 #  Total event count.
 fn audit_total_count(a) {
-    return vec_len(load64(a));
+    var events = load64(a);
+    return vec_len(events) - _audit_view_start(events);
 }
 
 #  Total denied events.
@@ -300,7 +341,7 @@ fn audit_deny_count(a) {
     var events = load64(a);
     var n = vec_len(events);
     var denies = 0;
-    var i = 0;
+    var i = _audit_view_start(events);
     while (i < n) {
         if (security_event_kind(vec_get(events, i)) == VK_DENY) {
             denies = denies + 1;
@@ -315,9 +356,10 @@ fn audit_recent(a, limit) {
     var events = load64(a);
     var n = vec_len(events);
     var out = vec_new();
+    var start = _audit_view_start(events);
     var i = n - 1;
     var taken = 0;
-    while (i >= 0 && taken < limit) {
+    while (i >= start && taken < limit) {
         vec_push(out, vec_get(events, i));
         taken = taken + 1;
         i = i - 1;
@@ -330,9 +372,10 @@ fn audit_agent_events(a, agent_id, limit) {
     var events = load64(a);
     var n = vec_len(events);
     var out = vec_new();
+    var start = _audit_view_start(events);
     var i = n - 1;
     var taken = 0;
-    while (i >= 0 && taken < limit) {
+    while (i >= start && taken < limit) {
         var e = vec_get(events, i);
         if (streq(security_event_agent_id(e), agent_id) == 1) {
             vec_push(out, e);

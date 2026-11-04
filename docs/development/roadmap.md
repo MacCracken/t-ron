@@ -1,22 +1,24 @@
 # t-ron Roadmap
 
-> **Current**: `2.2.2` (cyrius 6.7.18; libro 2.11.3, bote-core
+> **Current**: `2.2.3` (cyrius 6.7.18; libro 2.11.3, bote-core
 > 3.8.1 via the transport-free `dist/bote-core.cyr` profile, sigil
 > 3.13.15 pinned first-party via `[deps.sigil]` — full
 > `dist/sigil.cyr`; majra 2.13.0 / patra 1.16.6 transitively). Full
-> pipeline (`tron_check_allow`) **~17.0 µs**, `audit_log` **~10.3
-> µs**, `policy_check` **~211 ns**; **426 assertions** across three
-> test suites; a **677 KB** static binary; `dist/t-ron.cyr`
-> single-file consumer bundle (4 706 lines, 18 modules); CI resolves
-> `cyrius deps --locked`.
+> pipeline (`tron_check_allow`) **~17.3 µs**, `audit_log` **~10.5
+> µs**, `policy_check` **~222 ns**, scanner **~0.4 µs**; **847
+> assertions** across four test suites; a **684 KB** static binary;
+> `dist/t-ron.cyr` single-file consumer bundle (6 849 lines, 19
+> modules); CI resolves `cyrius deps --locked` and runs two failing
+> security gates.
 >
-> **Next: 2.2.3, the P(-1) sweep** — audit, refactor, hardening,
-> optimization and repair, per CLAUDE.md's P(-1) process. Feature
-> work resumes after it, one line per minor from **2.3.x**.
+> **2.2.3 was the P(-1) sweep**: four independent reviews of every
+> module, 74 items, every critical and high one fixed
+> ([audit report](../audit/2026-11-03.md)). **Next: 2.2.4**, the audit's
+> patch-sized follow-ups (below), then feature work from **2.3.x**.
 >
-> **Capacity is comfortable on every dimension**: `fn_table` **5 818
-> / 131 072 (4 %)**, `identifiers` **165 011 / 8 388 608 (2 %)**,
-> `code_size` **154 920 / 67 108 864 (0.2 %)**.
+> **Capacity is comfortable on every dimension**: `fn_table` **5 902
+> / 131 072 (4 %)**, `identifiers` **167 196 / 8 388 608 (2 %)**,
+> `code_size` **158 960 / 67 108 864 (0.2 %)**.
 >
 > **Full release history**: [CHANGELOG.md](../../CHANGELOG.md).
 > Rust archive preserved at git tag `0.90.0` under `rust-old/`.
@@ -24,7 +26,7 @@
 ## How versions are used
 
 - **A patch** (2.2.x) moves the toolchain or a dependency, fixes a
-  defect, hardens, or changes CI and release flow. 2.2.3 is a
+  defect, hardens, or changes CI and release flow. 2.2.3 was a
   scheduled one: the P(-1) sweep.
 - **A minor** (2.3, 2.4, …) carries one feature line. Anything that
   changes what an MCP client sees from t-ron's own tools lands in a
@@ -69,6 +71,7 @@
 | **2.2.0** | **cyrius 6.7.9 + libro 2.11.0 / bote-core 3.4.10 / sigil 3.13.11 — the 2.2.x line opens.** bote 3.4.8 refused t-ron's four MCP tool definitions (`Str` values where bote stores C strings — on older bote they were listed as garbage); fixed, with 9 mutation-checked assertions. CI and the release resolve `cyrius deps --locked` (the cyrius 6.7.6 roadmap note). Clients of a SecurityGate-wrapped dispatcher see bote 3.4.x's spec-conformance changes. Consumers need cyrius ≥ 6.7.2. 410 assertions |
 | **2.2.1** | **cyrius 6.7.18 + libro 2.11.3 / bote-core 3.8.0 / sigil 3.13.15 — Security: the tool handlers overran their buffers.** `tron_risk` copied an unbounded `agent_id` into `alloc(256)` and `tron_audit` sized its reply at `events × 160 + 32`; both now size each reply exactly and escape every value at both levels (the `text` is a JSON document inside a JSON string). Output for ordinary input byte-identical. Binary 2.28 MB → 676 KB (6.7.18 removes dead code 6.7.9 only NOPed). 426 assertions |
 | **2.2.2** | **bote-core 3.8.1 + the quick-item bundle.** `policy_check` does one hash lookup, not two (**−27 %**, 290 → 211 ns, isolated by an A/B). The crypto test's raw `syscall(39/62)` replaced with `sys_getpid` / `sys_kill` — the last warning in any build. CI's dist gate also diffs `dist/t-ron.deps` and no longer swallows a `distlib` failure (mutation-checked). `src/main.cyr` comments rewritten as present-tense rules. The assert-quirk watch row closed. The roadmap reorganized into 2.2.3 + feature lines. 426 assertions |
+| **2.2.3** | **The P(-1) sweep.** Four independent reviews of all 19 modules; 74 items, 3 critical and 16 high, all fixed: the gate checked tool names undecoded while bote ran them decoded (an escaped name passed a deny entry); SIGHUP reload skipped the signature check (now signed mode); the scanner never decoded JSON escapes; `DA_FLAG` skipped every later check; the TOML loader read comments as content and wiped the policy on a bad file (now strict and atomic); two more audit-log heap overruns; LLM scan read every real reply as clean and leaked its socket; the safety submodule failed open, leaked and was bypassable. New `src/json_text.cyr`, `tests/t-ron-detect.tcyr`, and two failing CI security gates. Scanner 9× faster. 847 assertions ([report](../audit/2026-11-03.md)) |
 
 See [CHANGELOG.md](../../CHANGELOG.md) for the full detail per release.
 
@@ -79,24 +82,26 @@ feature item, real-time alerts via daimon, moved to 2.4.x below.
 
 ---
 
-## 2.2.3 — P(-1) sweep (scheduled, next)
+## 2.2.4 — audit follow-ups (proposed, next)
 
-CLAUDE.md's P(-1) process in full: test + benchmark sweep, cleanliness
-check, baseline benchmarks, audit (performance, memory, security, edge
-cases), tests from the findings, post-audit benchmarks, then the
-documentation audit. These are the inputs already found and recorded;
-the audit will add its own.
+The patch-sized items the 2.2.3 audit deferred. IDs refer to the
+[report](../audit/2026-11-03.md).
 
-| Area | Item |
+| Item | IDs |
 |---|---|
-| **Optimization** | Ten more `map_has` → `map_get` double lookups: `src/rate.cyr` (2), `src/pattern.cyr` (5) and `src/correlation.cyr` (1), all on `tron_check`'s path, and `src/safety.cyr` (2). 2.2.2 measured one lookup at ~80 ns (`policy_check` 290 → 211 ns). Each site needs a check that its stored value is never 0 before it takes the single `map_get` |
-| **Memory** | Review the remaining fixed-size `alloc(N)` buffers in `src/` for the overrun 2.2.1 fixed in the tool handlers. A first look found them bounded (e.g. `_tron_format_too_large`: at most 71 bytes in 96), but no audit has covered them |
-| **Security** | `audit_export_encrypted` (`src/audit.cyr:263–269`) signs twice: the first `ed25519_sign` signs the wrong bytes into the envelope, and the comment says a second call over the right input overwrites it. Make it one correct signature, with a test that a tampered nonce fails |
-| **Security / CI** | The `security` CI job is one `grep` for `"/etc/` paths, and its result is only printed. Replace it with checks that fail: raw `syscall(` in `src/`, unescaped JSON construction, fixed-size buffers fed by `strlen` |
-| **Portability** | `cyrius distlib`'s verify reports 12 names undefined on x86_64-windows only. t-ron's signalfd SIGHUP path (`src/signal.cyr`) owns `SIGHUP`, `SIG_BLOCK`, `sigset_*`, `sys_sigprocmask` and `sys_signalfd`; deps own the rest. Gate the module by target, or record t-ron as Linux / agnos only |
-| **Hygiene** | `[deps] stdlib` lists `fs`, which nothing in `src/` or the deps calls at 6.7.18. Prune it, or record why each entry stays |
-| **Docs (P(-1) step 9)** | `architecture/overview.md` and `development/threat-model.md` read-through, outstanding since 2026-04-14. The threat model should absorb the libro 2.8.11 canonical-JSON note and 2.2.1's handler overrun. Rewrite `guides/integration.md` §3–§7 against bote-core 3.8.x, built and run. Converge `benchmarks-rust-v-cyrius.md` with README. Re-check `sources.md` and the ADRs |
-| **Report** | `docs/audit/<date>.md` — the first audit report since 2.0.0's (`docs/audit/2026-04-14.md`) |
+| Bound per-agent state: the pattern analyzer, the correlation detector and their intern tables; evict idle safety rate buckets | D14, S16 |
+| Unicode confusable mapping in the safety injection detector (a Cyrillic `о` still evades it) | S11 |
+| `require_utf8` output validation, which the Rust original had | S15 |
+| Scan identifiers only up to the 256-byte cap; check the remaining unchecked allocations in `src/` | P12, C14 |
+| The per-call allocation t-ron never frees (~1 KB per `tron_check`, most of it the libro entry): an arena or freelist, or a documented restart budget | P10 |
+
+**Needing a minor** (each changes behaviour or a format; placement is
+the maintainer's call):
+
+| Item | IDs |
+|---|---|
+| **Pattern-detector redesign.** 2.0.0's F10, reconfirmed: the detectors see only the last 5 / 10 / 20 calls, so spacing sensitive calls with benign ones evades them, and calls denied earlier in the pipeline are never recorded. A time-decayed per-agent score, a recon→mutation time-to-live, and recording denied calls | D11 |
+| **Export envelope v2.** Bind the symmetric key, domain-separate the signature, bind against replay ([ADR-005](../architecture/adr-005-chacha20-ed25519-aead.md)) | C8, C9 |
 
 ---
 

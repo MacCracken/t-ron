@@ -39,8 +39,6 @@ include "lib/ct.cyr"
 include "lib/keccak.cyr"
 include "lib/random.cyr"
 # process before sigil: sigil's agnosys helpers call exec_capture.
-# fs is in cyrius.cyml's stdlib list; nothing in src/ or the deps calls it.
-include "lib/fs.cyr"
 include "lib/process.cyr"
 # sigil, the full dist/sigil.cyr bundle (cyrius.cyml deps.sigil): only it
 # carries the verify_data() src/signing.cyr calls.
@@ -52,6 +50,7 @@ include "lib/libro.cyr"
 include "lib/bote-core.cyr"
 
 include "src/error.cyr"
+include "src/json_text.cyr"
 include "src/gate.cyr"
 include "src/policy.cyr"
 include "src/rate.cyr"
@@ -76,5 +75,5 @@ fn main() {
     return 0;
 }
 
-fn _entry(): i64 { var r = main(); syscall(SYS_EXIT, r); return 0; }
+fn _entry(): i64 { var r = main(); sys_exit(r); return 0; }
 _entry();

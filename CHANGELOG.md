@@ -16,6 +16,203 @@ top. Mirrors bote 2.7.0's flow.
 
 _(empty)_
 
+## [2.2.3] — 2026-11-03 · the P(-1) sweep: an audit of every module, and 74 items repaired or recorded
+
+The scheduled P(-1) audit, refactor, hardening and optimization sweep: the
+first full audit since 2.0.0. The report is
+[docs/audit/2026-11-03.md](docs/audit/2026-11-03.md), with one row per
+finding, its status and the test that guards it.
+
+Four independent reviews read all 19 modules. Their 74 items include **3
+critical and 16 high**, all fixed. Toolchain and dependency pins are
+unchanged (cyrius 6.7.18, libro 2.11.3, bote-core 3.8.1, sigil 3.13.15).
+
+**847 assertions** (t-ron 386 · crypto 64 · safety 205 · detect 192; was
+426), across 225 groups, with a new suite, `tests/t-ron-detect.tcyr`. Each
+new test group was run against the 2.2.2 sources and fails there, or the
+old code crashes; the exceptions are "stays clean" checks and are named in
+the report. The scanner is **9× faster**. Every build and suite prints
+**zero warnings**.
+
+### Security — critical
+
+- **Policy bypass through an escaped tool name.** The gate checked the
+  tool name undecoded (`jsonx_get_str`), while bote dispatches it decoded.
+  So `file_delete` matched `allow = ["file_*"]`, missed
+  `deny = ["file_delete"]`, and then ran `file_delete`. The gate now
+  decodes the name exactly as bote does, and identifiers holding `"` or
+  `\` are denied.
+- **SIGHUP reload skipped the signature check.** After
+  `tron_verify_and_load_policy`, a reload re-read the stored path through
+  the unsigned loader, so overwriting the file installed any policy. A
+  verified load now puts the TRon in **signed mode**: reloads re-verify,
+  and `tron_load_policy`, `tron_load_policy_file` and with them the
+  `tron_policy` MCP tool return `TRON_ERR_SIGNATURE`.
+- **The scanner never decoded JSON escapes**, so `; rm -rf /`, an
+  escaped `' UNION SELECT` or `../etc/passwd` scanned clean while the
+  handler acted on the decoded text. Each string leaf is now decoded
+  before scanning, and a decoded NUL is itself a threat.
+
+### Security — high
+
+- **`DA_FLAG` skipped the rest of the pipeline.** An unknown agent or tool
+  under `DA_FLAG` returned at once, before rate limiting and scanning (500
+  of 500 injection payloads passed). A flag is now a pending verdict: every
+  later check runs, and a later deny wins. ADR-002 is amended.
+- **Policy TOML parsed comments as content.** A quoted word inside a
+  comment was read as an entry (`# was "*"` granted `*`), and a `]` in a
+  comment ended an array early (a dropped deny entry). The loader is now
+  strict: a stray byte, an unknown key or section, a missing `=` or comma,
+  an unclosed array or header, or an integer overflow is
+  `TRON_ERR_POLICY_CONFIG`. Policy text parses into a fresh engine that is
+  **swapped in only on success**, and a file with no agent section is
+  refused, so a truncated or empty file no longer wipes the policy.
+- **Heap overruns in the audit log**, the 2.2.1 bug class again:
+  `_audit_details` (the deny reason echoes agent and tool into `tl + 256`
+  bytes) and `audit_export_json` (`events × 512 + 32`). Both now size from
+  the escaped lengths, and every value is escaped (RFC 8259 §7). A crafted
+  tool name can no longer forge `"verdict":"allow"` in the export. The
+  escaper moved to a new early module, `src/json_text.cyr`.
+- **A negative timestamp wrote before the pattern histogram.** It is
+  denied in `tron_check`, and the hour is computed with allocation-free
+  floor arithmetic and range-checked.
+- **Scanner DoS and evasions.** `;` handling was quadratic (a 64 KB
+  payload ≈ 150 s, stalling the synchronous gate) and compared only the
+  first keyword. Also fixed: shell, SQL, template and encoded-traversal
+  evasions, and nesting past 64 levels, which used to read as clean.
+- **LLM scan failed open.** hoosh's envelope was never unescaped, so every
+  real reply read as clean. The socket was never closed, so it failed open
+  for good after ~1,024 scans. Timeouts, full sends and EINTR retry are
+  added, and errors no longer read as clean.
+- **The safety submodule failed open, leaked and was bypassable.**
+  - Fail open: an unknown enforcement, rule type or severity, `enabled = 2`,
+    or an empty engine all ended in *allowed*.
+  - Leaks: rate buckets and breaker windows grew without bound (900 MB per
+    5,000 calls).
+  - Bypasses: `rm -fr /`, `rm -r -f /`, `/etc//shadow` and `..` escapes,
+    and any escalation that was not exactly `user`→`root`.
+
+  Details are in ADR-006's amendment and the report.
+
+### Changed — behaviour callers will see
+
+- **Signed mode**, above. A TRon that has loaded a signed policy refuses
+  unsigned loads for its lifetime.
+- **The strict policy loader** may refuse files the old one tolerated.
+- **`"` and `\` in an agent ID or tool name are denied.**
+- **Unknown values fail closed**: a `DefaultAction` other than
+  `DA_ALLOW` / `DA_DENY` / `DA_FLAG` denies, the config booleans are tested
+  `!= 0`, and the middleware passes only `VK_ALLOW` and `VK_FLAG`.
+- **Rate limiter**:
+  - at most 65,536 (agent, tool) buckets, and new pairs past the cap are
+    denied;
+  - rates clamped to 1–1,000,000 cpm;
+  - a reload clears every override before applying the new ones.
+- **Encrypted export**: pass `0` as the nonce to have t-ron draw one (a
+  reused nonce XORs two exports together). A signing failure now fails the
+  export instead of emitting a zero signature. The plaintext and the
+  ChaCha20 state are wiped. `cc20_xor` refuses a length that would wrap the
+  32-bit block counter.
+- **Safety**:
+  - destructive commands are detected by a new rule type,
+    `SRT_DESTRUCTIVE_COMMAND`, with the detectors "rm-root", "mkfs" and
+    "dd-device";
+  - `rm` and `dd` are matched anywhere in a command, so `echo rm -rf /`
+    blocks too;
+  - a relative file path is blocked by any scope rule;
+  - `dd if=/dev/zero of=disk.img` is no longer blocked;
+  - a half-open circuit breaker waits for
+    `safety_circuit_breaker_record_success`;
+  - new: `safety_rule_set_action_filter`.
+- **Scanner false positives**, the known cost of the new rules:
+  - a multi-line argument with a line starting with a shell command name;
+  - `{{ a ~ b }}` and `{{a}}. {{b}}` template spans.
+- **`llm_scanner_scan`** returns a `(status, value)` pair (the
+  `LlmScanStatus` enum: CLEAN, FLAGGED, SKIPPED, ERROR); it had no callers.
+- **The audit ring buffer** trims in batches (one shift per 1,250 calls,
+  not a 10k shift per call at the cap); readers still see exactly the
+  newest 10,000.
+- **SIGHUP**: `sighup_init` restores the signal mask when it fails, and a
+  read error is `TRON_ERR_IO` rather than "no signal".
+
+### Changed — hygiene
+
+- **CI `security` job**: the informational `grep` is replaced by two
+  failing gates, no raw `syscall(` and no literal-size buffer fed by
+  `strlen`. The second caught C2, C3 and an LLM request overrun on its
+  first run.
+- **`tests/t-ron-detect.tcyr`** joins the CI test loop.
+- Every remaining `map_has` → `map_get` double lookup (ten) is one lookup.
+- The unused `fs` stdlib entry is removed: `cyrius.lock` drops `fs.cyr`
+  and `fs_win.cyr` (66 entries).
+- The nine raw `syscall(…)` exits in `src/main.cyr`, the tests and the
+  examples are `sys_exit`.
+- Allow verdicts share one allocation, and the rate limiter looks keys up
+  from a stack buffer.
+
+### Changed — documentation
+
+- `docs/architecture/overview.md` and `docs/development/threat-model.md`
+  are rewritten from `src/`; both still described the Rust port (`tokio`,
+  `DashMap`, `Send + Sync`). The overview now states that t-ron is
+  single-threaded.
+- `docs/guides/integration.md` §3–§7 are rewritten as one program, built
+  against `dist/t-ron.cyr` in a clean-room project and run. Its quoted
+  outputs are that run's, and it documents signed mode and the strict
+  loader. §5 and §6 no longer tell consumers to include `src/` files.
+- ADR-002, ADR-005 and ADR-006 carry 2.2.3 amendments.
+- `docs/sources.md` cites RFC 8439 and RFC 8259 §7. The examples'
+  comments state current rules.
+
+### Performance
+
+Same session, three interleaved rounds, mean; 2.2.2 built sibling-free.
+
+| bench | 2.2.2 | 2.2.3 | Δ |
+|---|---|---|---|
+| `policy_check` | 213.0 ns | 222.0 ns | +4.2 % |
+| `scanner_clean_text` | 3.538 µs | 382 ns | **−89 %** |
+| `scanner_sql_detect` | 1.116 µs | 360 ns | **−68 %** |
+| `audit_log` | 10.334 µs | 10.462 µs | +1.2 % |
+| `tron_check_allow` | 16.999 µs | 17.291 µs | +1.7 % |
+
+- **The scanner** gains come from the single-pass rewrite.
+- **`policy_check`'s** code is unchanged, so the +9 ns is placement in a
+  binary whose layout moved; the effect was measured at 2.1.12 and 2.2.0.
+- **`audit_log`** pays for escaping and sizing its details.
+- **`tron_check_allow`** (scanning off in this bench) adds that cost plus
+  the new checks.
+
+Memory improved more than time: safety under spam went from ~900 MB to
+3.8 MB per 5,000 calls, and correlation's steady state allocates 0 bytes.
+Recorded in `bench-history.csv`.
+
+### Verified
+
+- **Every `ci.yml` step**, build-and-test, security and docs, run verbatim
+  from the YAML on a CI-shaped copy (fresh git, no `lib/`,
+  `CYRIUS_LOCKED=1`): all pass.
+- **The integration guide's program** builds as a clean-room consumer with
+  0 undefined functions, and every JSON line the guide quotes matches its
+  output byte for byte.
+- **All four examples** build and pass.
+- **Capacity**: `fn_table` 5,902 / 131,072 (4 %), `identifiers` 167,196 /
+  8,388,608 (2 %), `code_size` 158,960 / 67,108,864 (0.2 %). Binary
+  677,336 → **683,888 B**. `src/` is 4,786 → 6,862 lines; safety (1,071 →
+  2,223) and the scanner (525 → 951) account for most of it.
+
+### Deferred — recorded in the report and the roadmap
+
+- **Proposed 2.2.4**: bounds on per-agent pattern / correlation state and
+  idle safety rate buckets, Unicode confusables, `require_utf8`, a bounded
+  identifier scan, the remaining unchecked allocations, and the per-call
+  allocation t-ron never frees.
+- **Needing a minor**:
+  - the pattern-detector redesign (2.0.0's F10, reconfirmed: spacing calls
+    evades the 5/10/20-call windows, and denied calls are never recorded);
+  - export envelope v2 (key binding, domain-separated signature, replay
+    binding).
+
 ## [2.2.2] — 2026-11-03 · bote-core 3.8.1 + the quick-item bundle — `policy_check` 27 % faster, no warnings left, and the roadmap reorganized
 
 bote-core **3.8.0 → 3.8.1**, plus every open item small enough to land

@@ -1,0 +1,83 @@
+#  json_text.cyr  --  JSON string escaping into pre-sized buffers
+#
+#  Every place t-ron writes JSON (the MCP tool results, the libro entry
+#  details, the audit export) escapes interpolated values here. A caller
+#  sizes its buffer with _tron_json_esc_len before writing, so no value,
+#  however long, overruns it. No allocation: the caller owns the buffer.
+
+#  The escape letter for a control byte with a short form, or 0.
+fn _tron_json_short(c) {
+    if (c == 8)  { return 98; }
+    if (c == 9)  { return 116; }
+    if (c == 10) { return 110; }
+    if (c == 12) { return 102; }
+    if (c == 13) { return 114; }
+    return 0;
+}
+
+#  Bytes `s` takes as an escaped JSON string body (no quotes).
+fn _tron_json_esc_len(s) {
+    var n = 0;
+    var i = 0;
+    while (load8(s + i) != 0) {
+        var c = load8(s + i);
+        n = n + 1;
+        if (c == 34 || c == 92) { n = n + 1; }
+        if (c < 32) {
+            if (_tron_json_short(c) != 0) { n = n + 1; }
+            else                          { n = n + 5; }
+        }
+        i = i + 1;
+    }
+    return n;
+}
+
+fn _tron_hex_digit(v) {
+    if (v < 10) { return 48 + v; }
+    return 87 + v;
+}
+
+#  Write `s` as an escaped JSON string body at buf + off; returns the new
+#  offset. RFC 8259 §7: quote, backslash and every byte below 0x20.
+fn _tron_json_esc_into(buf, off, s) {
+    var i = 0;
+    while (load8(s + i) != 0) {
+        var c = load8(s + i);
+        if (c == 34 || c == 92) {
+            store8(buf + off, 92); store8(buf + off + 1, c); off = off + 2;
+        }
+        if (c < 32) {
+            var sh = _tron_json_short(c);
+            store8(buf + off, 92);
+            if (sh != 0) {
+                store8(buf + off + 1, sh); off = off + 2;
+            }
+            if (sh == 0) {
+                memcpy(buf + off + 1, "u00", 3);
+                store8(buf + off + 4, _tron_hex_digit(c >> 4));
+                store8(buf + off + 5, _tron_hex_digit(c & 15));
+                off = off + 6;
+            }
+        }
+        if (c >= 32 && c != 34 && c != 92) {
+            store8(buf + off, c); off = off + 1;
+        }
+        i = i + 1;
+    }
+    return off;
+}
+
+#  Copy the C string `lit` to buf + off; returns the new offset.
+fn _tron_put(buf, off, lit) {
+    var n = strlen(lit);
+    memcpy(buf + off, lit, n);
+    return off + n;
+}
+
+#  Copy the decimal form of `v` to buf + off; returns the new offset.
+fn _tron_put_int(buf, off, v) {
+    var nb[24];
+    var nl = fmt_int_buf(v, &nb);
+    memcpy(buf + off, &nb, nl);
+    return off + nl;
+}

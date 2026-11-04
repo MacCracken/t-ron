@@ -14,6 +14,23 @@
 var RATE_DEFAULT_CPM  = 60;
 var RATE_MILLI_PER_TOKEN = 1000;
 var RATE_NS_PER_SEC   = 1000000000;
+#  Rates are clamped to [1, RATE_MAX_CPM] so that a refill's
+#  elapsed_ns * refill_milli_per_s product (elapsed capped at 60 s) stays
+#  far inside an i64.
+var RATE_MAX_CPM      = 1000000;
+#  At most this many (agent, tool) buckets. A new pair past the cap is
+#  denied rather than allocated: every bucket is permanent, and an agent
+#  allowed `*` could otherwise grow the map until the process dies.
+var RATE_MAX_BUCKETS  = 65536;
+#  The longest key looked up from the stack buffer in rate_limiter_check;
+#  tron_check has already capped both identifiers at 256 bytes.
+var RATE_KEY_STACK    = 520;
+
+fn _rate_clamp_cpm(cpm) {
+    if (cpm < 1) { return 1; }
+    if (cpm > RATE_MAX_CPM) { return RATE_MAX_CPM; }
+    return cpm;
+}
 
 #  ============================================================
 #  TokenBucket  --  one bucket per (agent_id, tool_name) pair
@@ -27,7 +44,8 @@ var RATE_NS_PER_SEC   = 1000000000;
 
 fn bucket_new(cpm) {
     var b = alloc(32);
-    var max_milli = cpm * RATE_MILLI_PER_TOKEN;
+    if (b == 0) { return 0; }
+    var max_milli = _rate_clamp_cpm(cpm) * RATE_MILLI_PER_TOKEN;
     store64(b,      max_milli);
     store64(b + 8,  max_milli);
     store64(b + 16, max_milli / 60);
@@ -44,7 +62,7 @@ fn bucket_last_refill(b)    { return load64(b + 24); }
 #  Matches the Rust behaviour: clamp current tokens so a lowered limit
 #  takes effect immediately.
 fn bucket_set_rate(b, cpm) {
-    var max_milli = cpm * RATE_MILLI_PER_TOKEN;
+    var max_milli = _rate_clamp_cpm(cpm) * RATE_MILLI_PER_TOKEN;
     store64(b + 8,  max_milli);
     store64(b + 16, max_milli / 60);
     if (load64(b) > max_milli) { store64(b, max_milli); }
@@ -52,20 +70,36 @@ fn bucket_set_rate(b, cpm) {
 }
 
 #  Refill this bucket based on elapsed wall time since last refill.
+#  60 s refills any bucket completely, so a longer gap is a full refill;
+#  that caps elapsed_ns and keeps the product below from overflowing.
+#  last_refill advances only by the time actually credited, so calls
+#  closer together than one millitoken still accrue.
 fn bucket_refill(b) {
     var now = clock_now_ns();
-    var elapsed_ns = now - load64(b + 24);
+    var last = load64(b + 24);
+    var elapsed_ns = now - last;
     if (elapsed_ns <= 0) {
         store64(b + 24, now);
         return 0;
     }
-    #  added_milli = elapsed_ns * refill_milli_per_s / 1_000_000_000
-    var added = (elapsed_ns * load64(b + 16)) / RATE_NS_PER_SEC;
-    var new_tokens = load64(b) + added;
+    var rate = load64(b + 16);
     var cap = load64(b + 8);
-    if (new_tokens > cap) { new_tokens = cap; }
+    if (rate <= 0 || elapsed_ns >= 60 * RATE_NS_PER_SEC) {
+        store64(b, cap);
+        store64(b + 24, now);
+        return 0;
+    }
+    #  added_milli = elapsed_ns * refill_milli_per_s / 1_000_000_000
+    var added = (elapsed_ns * rate) / RATE_NS_PER_SEC;
+    if (added == 0) { return 0; }
+    var new_tokens = load64(b) + added;
+    if (new_tokens >= cap) {
+        store64(b, cap);
+        store64(b + 24, now);
+        return 0;
+    }
     store64(b, new_tokens);
-    store64(b + 24, now);
+    store64(b + 24, last + (added * RATE_NS_PER_SEC) / rate);
     return 0;
 }
 
@@ -118,11 +152,10 @@ fn _rate_bucket_key(agent_id, tool_name) {
 }
 
 #  Resolve the effective rate for an agent (per-agent override or default).
+#  One lookup: an override is stored only when it is > 0.
 fn _rate_effective_cpm(r, agent_id) {
-    var rates = load64(r + 16);
-    if (map_has(rates, agent_id) == 1) {
-        return map_get(rates, agent_id);
-    }
+    var cpm = map_get(load64(r + 16), agent_id);
+    if (cpm > 0) { return cpm; }
     return load64(r + 8);
 }
 
@@ -135,18 +168,48 @@ fn _rate_key_is_agent(key, prefix, prefix_len) {
 
 #  Check rate limit; consumes a token on success.
 #  Returns 1 if the call is within limits, 0 if it should be denied.
+#  The lookup key is built on the stack; a key is allocated only when a
+#  new bucket is inserted. A new pair past RATE_MAX_BUCKETS is denied.
 fn rate_limiter_check(r, agent_id, tool_name) {
+    var kb[520];
     var buckets = load64(r);
-    var key = _rate_bucket_key(agent_id, tool_name);
+    var alen = strlen(agent_id);
+    var tlen = strlen(tool_name);
     var b = 0;
-    if (map_has(buckets, key) == 1) {
-        b = map_get(buckets, key);
+    if (alen + tlen + 2 <= RATE_KEY_STACK) {
+        memcpy(&kb, agent_id, alen);
+        store8(&kb + alen, 0x1f);
+        memcpy(&kb + alen + 1, tool_name, tlen);
+        store8(&kb + alen + 1 + tlen, 0);
+        b = map_get(buckets, &kb);
     }
     else {
+        b = map_get(buckets, _rate_bucket_key(agent_id, tool_name));
+    }
+    if (b == 0) {
+        if (map_count(buckets) >= RATE_MAX_BUCKETS) { return 0; }
         b = bucket_new(_rate_effective_cpm(r, agent_id));
-        map_set(buckets, key, b);
+        if (b == 0) { return 0; }
+        map_set(buckets, _rate_bucket_key(agent_id, tool_name), b);
     }
     return bucket_try_consume(b);
+}
+
+#  Drop every per-agent override and return existing buckets to the
+#  default rate. A policy reload calls this before applying the new
+#  overrides, so an agent whose rate_limit section was removed does not
+#  keep its old limit.
+fn rate_limiter_clear_rates(r) {
+    store64(r + 16, map_new());
+    var buckets = load64(r);
+    var keys = map_keys(buckets);
+    var n = vec_len(keys);
+    var i = 0;
+    while (i < n) {
+        bucket_set_rate(map_get(buckets, vec_get(keys, i)), load64(r + 8));
+        i = i + 1;
+    }
+    return 0;
 }
 
 #  Set the rate limit for a specific agent (cpm).

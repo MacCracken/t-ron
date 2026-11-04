@@ -20,25 +20,25 @@ include "lib/regex.cyr"
 include "lib/chrono.cyr"
 include "lib/freelist.cyr"
 include "lib/sakshi.cyr"
-# bayan — json / base64 / bigint folded into one bundle at the 2.1.6 carve.
+# bayan: json / base64 / bigint; libro's canonical JSON uses it.
 include "lib/bayan.cyr"
 include "lib/net.cyr"
-# atomic / thread / thread_local and ct / keccak / random MUST precede
-# sigil — its hash path self-installs a per-thread TLS scratch bank, and
-# its ML-DSA surface references ct / keccak / random. Cyrius is
-# single-pass; get this wrong and libro's chain_append SIGILLs at RUNTIME.
+# atomic / thread / thread_local and ct / keccak / random before sigil: its
+# hash path takes a per-thread scratch bank, and its ML-DSA surface calls
+# ct / keccak / random. Cyrius is single-pass; without them libro's
+# chain_append traps with SIGILL at run time.
 include "lib/atomic.cyr"
 include "lib/thread.cyr"
 include "lib/thread_local.cyr"
 include "lib/ct.cyr"
 include "lib/keccak.cyr"
 include "lib/random.cyr"
-# fs / process precede libro — declared by its dist sidecar since 6.3.x.
-include "lib/fs.cyr"
+# process before sigil: its agnosys helpers call exec_capture.
 include "lib/process.cyr"
 include "lib/sigil.cyr"
 
 include "src/error.cyr"
+include "src/json_text.cyr"
 include "src/gate.cyr"
 include "src/policy.cyr"
 include "src/rate.cyr"
@@ -80,4 +80,4 @@ fn main() {
 }
 
 var r = main();
-syscall(60, r);
+sys_exit(r);

@@ -1,6 +1,6 @@
 # Testing Guide
 
-**Current for t-ron 2.2.2** (cyrius 6.7.18).
+**Current for t-ron 2.2.3** (cyrius 6.7.18).
 
 > ⚠️ **Rewritten at 2.1.9.** Every prior revision of this file was the
 > **Rust-era** guide — `cargo test`, `make clippy`, `serde` round-trips,
@@ -12,15 +12,16 @@
 
 ## Running tests
 
-Three suites, run separately:
+Four suites, run separately:
 
 ```sh
-cyrius test tests/t-ron.tcyr          # 348 assertions — core pipeline
-cyrius test tests/t-ron-crypto.tcyr   #  30 assertions — signal, crypto, export
-cyrius test tests/t-ron-safety.tcyr   #  48 assertions — AGNOS safety engine
+cyrius test tests/t-ron.tcyr          # 386 assertions — core pipeline
+cyrius test tests/t-ron-crypto.tcyr   #  64 assertions — signing, signal, crypto, export
+cyrius test tests/t-ron-safety.tcyr   # 205 assertions — AGNOS safety engine
+cyrius test tests/t-ron-detect.tcyr   # 192 assertions — scanner, pattern, correlation, LLM scan
 ```
 
-**426 assertions total** (348 + 30 + 48) across 147 groups. That total
+**847 assertions total** (386 + 64 + 205 + 192) across 225 groups. That total
 is the **floor**, per `CLAUDE.md`: a change may raise it, never lower
 it. Coverage target is 80 %.
 
@@ -35,9 +36,14 @@ cyrius bench tests/t-ron.bcyr         # 5 pipeline benchmarks
 
 | Suite | Groups | Assertions | Covers |
 |---|---:|---:|---|
-| `tests/t-ron.tcyr` | 116 | 348 | error codes, gate verdicts, policy engine, rate limiter, scanner, pattern analyzer, audit ring buffer + libro chain, risk scoring, query API, correlation, middleware, MCP tool definitions and results |
-| `tests/t-ron-crypto.tcyr` | 10 | 30 | SIGHUP signalfd reload, ChaCha20, Ed25519 policy signing, encrypted audit export round-trip + tamper rejection |
-| `tests/t-ron-safety.tcyr` | 21 | 48 | safety policies, severity, enforcement, 7 rule types, circuit breaker |
+| `tests/t-ron.tcyr` | 127 | 386 | error codes, gate verdicts, policy engine and strict loader, rate limiter, scanner, pattern analyzer, audit ring buffer + libro chain, risk scoring, query API, correlation, middleware, MCP tool definitions and results |
+| `tests/t-ron-crypto.tcyr` | 20 | 64 | SIGHUP signalfd reload, ChaCha20, Ed25519 policy signing and signed mode, encrypted audit export round-trip, tamper rejection, escaping and sizing |
+| `tests/t-ron-safety.tcyr` | 40 | 205 | safety policies, severity, enforcement, rule types and destructive-command detectors, scope normalisation, circuit breaker, injection detector |
+| `tests/t-ron-detect.tcyr` | 38 | 192 | scanner decoding and evasions, scanner DoS bounds, pattern hours, correlation, LLM-scan parsing and transport |
+
+Since 2.2.3 every regression test for a security fix is checked against
+the code before the fix: it must fail there, or the old code must crash.
+A test that passes on both is a "stays clean" guard and is named as one.
 
 ## Writing tests
 

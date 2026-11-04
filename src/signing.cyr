@@ -81,17 +81,21 @@ fn _signing_sig_path(path) {
 var _signing_policy_buf   = 0;
 var _signing_sig_buf      = 0;
 
+#  The signature buffer holds one byte more than a signature: the read asks
+#  for SIGNING_SIGNATURE_SIZE + 1 so an over-long .sig is detected.
+#  Returns 0, or -1 if either buffer could not be allocated.
 fn _signing_ensure_buffers() {
     if (_signing_policy_buf == 0) {
         _signing_policy_buf = alloc(SIGNING_MAX_POLICY_BYTES + 1);
-        _signing_sig_buf    = alloc(SIGNING_SIGNATURE_SIZE);
+        _signing_sig_buf    = alloc(SIGNING_SIGNATURE_SIZE + 1);
     }
+    if (_signing_policy_buf == 0 || _signing_sig_buf == 0) { return 0 - 1; }
     return 0;
 }
 
 fn policy_verifier_verify_and_read(v, path) {
     if (policy_verifier_key_count(v) == 0) { return 0; }
-    _signing_ensure_buffers();
+    if (_signing_ensure_buffers() != 0) { return 0; }
 
     var plen = _signing_read_all(path, _signing_policy_buf, SIGNING_MAX_POLICY_BYTES);
     if (plen < 0) { return 0; }
@@ -124,11 +128,23 @@ fn policy_verifier_verify_and_read(v, path) {
 #  Returns TRON_ERR_NONE on success, TRON_ERR_SIGNATURE on verification
 #  failure (including missing keys / missing files / bad signature).
 
+#  The reload a verified load installs on the TRon: re-read and re-verify
+#  the stored path with the stored verifier. On failure the loaded policy
+#  stays.
+fn _signing_reload(t) {
+    var toml = policy_verifier_verify_and_read(tron_policy_verifier(t), tron_policy_path(t));
+    if (toml == 0) { return TRON_ERR_SIGNATURE; }
+    return _tron_load_policy_text(t, toml);
+}
+
+#  On success the TRon enters signed mode (see tron_policy_signed): SIGHUP
+#  reloads re-verify, and unsigned loads are refused.
 fn tron_verify_and_load_policy(tron, verifier, path) {
     var toml = policy_verifier_verify_and_read(verifier, path);
     if (toml == 0) { return TRON_ERR_SIGNATURE; }
-    var rc = tron_load_policy(tron, toml);
+    var rc = _tron_load_policy_text(tron, toml);
     if (rc != TRON_ERR_NONE) { return rc; }
     tron_set_policy_path(tron, path);
+    _tron_set_signed(tron, verifier, &_signing_reload);
     return TRON_ERR_NONE;
 }

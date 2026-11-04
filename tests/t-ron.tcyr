@@ -44,6 +44,7 @@ include "lib/libro.cyr"
 include "lib/bote-core.cyr"
 
 include "src/error.cyr"
+include "src/json_text.cyr"
 include "src/gate.cyr"
 include "src/policy.cyr"
 include "src/rate.cyr"
@@ -1596,6 +1597,175 @@ fn test_corr_independent_tools() {
     return 0;
 }
 
+fn _t_has_sub(hay, needle) {
+    var hn = strlen(hay);
+    var nn = strlen(needle);
+    for (var i = 0; i + nn <= hn; i = i + 1) {
+        if (memeq(hay + i, needle, nn) == 1) { return 1; }
+    }
+    return 0;
+}
+
+#  ---- 2.2.3 pipeline regressions --------------------------------------
+
+var _t_ran_delete = 0;
+fn _t_delete_handler(args, claims) { _t_ran_delete = 1; return args; }
+
+fn test_gate_decodes_tool_name() {
+    test_group("gate: an escaped tool name is checked as it will run");
+    var tron = tron_new(tron_config_default());
+    tron_load_policy(tron, "[agent.\"web-agent\"]\nallow = [\"file_*\"]\ndeny = [\"file_delete\"]\n");
+    var reg = tool_registry_new();
+    registry_register(reg, tool_def_new("file_delete", "Delete a file",
+        schema_new("object", vec_new(), vec_new())));
+    var d = dispatcher_new(reg);
+    dispatcher_handle(d, "file_delete", &_t_delete_handler);
+    var g = security_gate_new(tron, d);
+    _t_ran_delete = 0;
+    var resp = security_gate_dispatch(g, _tool_call_req("file_\\u0064elete", "{}"), "web-agent");
+    assert_eq((load64(resp + 24) != 0), 1, "escaped spelling denied");
+    assert_eq(_t_ran_delete, 0, "handler never ran");
+    return 0;
+}
+
+fn test_gate_missing_name_audited() {
+    test_group("gate: a tools/call with no name is audited");
+    var g = _make_gate(tron_config_default());
+    var audit = tron_audit(security_gate_tron(g));
+    var before = audit_total_count(audit);
+    var r = req_new("1", "tools/call");
+    security_gate_dispatch(g, req_with_params(r, "{\"arguments\":{}}"), "web-agent");
+    assert_eq(audit_total_count(audit), before + 1, "denial recorded");
+    return 0;
+}
+
+fn test_flag_does_not_skip_checks() {
+    test_group("pipeline: a DA_FLAG verdict still gets scanned and rate-limited");
+    var c = tron_config_default();
+    tron_config_set_default_unknown_agent(c, DA_FLAG);
+    var t = tron_new(c);
+    var v = tron_check(t, tool_call_new("stranger", "q",
+        "{\"q\":\"' UNION SELECT password FROM users\"}", 1700000000000000000));
+    assert_eq(verdict_kind(v), VK_DENY, "injection from an unknown agent denied");
+    var denied = 0;
+    for (var i = 0; i < 70; i = i + 1) {
+        var w = tron_check(t, tool_call_new("stranger2", "q", "{}", 1700000000000000000));
+        if (verdict_kind(w) == VK_DENY) { denied = denied + 1; }
+    }
+    assert_eq((denied > 0), 1, "unknown agent rate-limited");
+    var w2 = tron_check(t, tool_call_new("stranger3", "q", "{}", 1700000000000000000));
+    assert_eq(verdict_kind(w2), VK_FLAG, "clean call still flagged");
+    return 0;
+}
+
+fn test_unknown_config_values_fail_closed() {
+    test_group("pipeline: unknown config values fail closed");
+    var c = tron_config_default();
+    tron_config_set_default_unknown_agent(c, 7);
+    var v = tron_check(tron_new(c), tool_call_new("stranger", "q", "{}", 1700000000000000000));
+    assert_eq(verdict_kind(v), VK_DENY, "default action 7 denies");
+    var c2 = _permissive_config();
+    tron_config_set_scan_payloads(c2, 2);
+    var v2 = tron_check(tron_new(c2), tool_call_new("a", "q",
+        "{\"q\":\"x; rm -rf /\"}", 1700000000000000000));
+    assert_eq(verdict_kind(v2), VK_DENY, "scan_payloads = 2 still scans");
+    return 0;
+}
+
+fn test_bad_inputs_denied() {
+    test_group("pipeline: negative timestamp, null params, quote / backslash ids");
+    var t = tron_new(_permissive_config());
+    assert_eq(verdict_kind(tron_check(t, tool_call_new("a", "q", "{}", 0 - 3601000000000))), VK_DENY, "negative timestamp denied");
+    assert_eq(verdict_kind(tron_check(t, tool_call_new("a", "q", 0, 1700000000000000000))), VK_ALLOW, "null params read as {}");
+    assert_eq(verdict_kind(tron_check(t, tool_call_new("a\"b", "q", "{}", 1700000000000000000))), VK_DENY, "quote in agent id denied");
+    assert_eq(verdict_kind(tron_check(t, tool_call_new("a", "q\\x", "{}", 1700000000000000000))), VK_DENY, "backslash in tool name denied");
+    return 0;
+}
+
+fn _t_policy_rc(toml) {
+    var t = tron_new(tron_config_default());
+    return tron_load_policy(t, toml);
+}
+
+fn test_policy_parser_strict() {
+    test_group("policy: the loader is strict");
+    var t = tron_new(tron_config_default());
+    assert_eq(tron_load_policy(t, "[agent.\"a\"]\nallow = [\n \"file_read\", # was \"*\"\n]\n"), TRON_ERR_NONE, "comment in array ok");
+    var k, r = policy_check(tron_policy(t), "a", "shell_exec");
+    assert_eq(k, PR_UNKNOWN_TOOL, "a quoted word in a comment is not granted");
+    assert_eq(tron_load_policy(t, "[agent.\"a\"]\nallow = [\"*\"]\ndeny = [\n \"shell_exec\", # see [SEC-12]\n \"fs_delete\",\n]\n"), TRON_ERR_NONE, "] in a comment ok");
+    var k2, r2 = policy_check(tron_policy(t), "a", "fs_delete");
+    assert_eq(k2, PR_DENY, "the entry after a ] comment is kept");
+    assert_eq(_t_policy_rc("[agent.\"a\"]\nallow\n"), TRON_ERR_POLICY_CONFIG, "key without =");
+    assert_eq(_t_policy_rc("[agent.\"a\"]\nalow = [\"x\"]\n"), TRON_ERR_POLICY_CONFIG, "unknown key");
+    assert_eq(_t_policy_rc("[agent.\"a\"]\nallow = [\"x\"\n"), TRON_ERR_POLICY_CONFIG, "unclosed array");
+    assert_eq(_t_policy_rc("[agent.\"a\"\nallow = [\"x\"]\n"), TRON_ERR_POLICY_CONFIG, "unclosed header");
+    assert_eq(_t_policy_rc("[other]\nx = 1\n"), TRON_ERR_POLICY_CONFIG, "unknown section");
+    assert_eq(_t_policy_rc("[agent.\"a\"]\nallow = [\"x\" \"y\"]\n"), TRON_ERR_POLICY_CONFIG, "missing comma");
+    assert_eq(_t_policy_rc("[agent.\"a\".rate_limit]\ncalls_per_minute = 99999999999999999999\n"), TRON_ERR_POLICY_CONFIG, "integer overflow");
+    assert_eq(_t_policy_rc("# nothing\n"), TRON_ERR_POLICY_CONFIG, "no agent section");
+    assert_eq(_t_policy_rc(""), TRON_ERR_POLICY_CONFIG, "empty file");
+    return 0;
+}
+
+fn test_policy_reload_atomic() {
+    test_group("policy: a failed load keeps the loaded policy");
+    var t = tron_new(tron_config_default());
+    tron_load_policy(t, "[agent.\"keep\"]\nallow = [\"x\"]\n");
+    assert_eq(tron_load_policy(t, "[agent.\"half\"]\nallow = [\"*\"]\ndeny = [\"x\""), TRON_ERR_POLICY_CONFIG, "truncated file refused");
+    var k, r = policy_check(tron_policy(t), "keep", "x");
+    assert_eq(k, PR_ALLOW, "old policy intact");
+    var k2, r2 = policy_check(tron_policy(t), "half", "y");
+    assert_eq(k2, PR_UNKNOWN_AGENT, "half-parsed policy not installed");
+    return 0;
+}
+
+fn test_rate_override_cleared_on_reload() {
+    test_group("rate: a removed rate_limit section does not persist");
+    var t = tron_new(tron_config_default());
+    tron_load_policy(t, "[agent.\"a\"]\nallow = [\"*\"]\n\n[agent.\"a\".rate_limit]\ncalls_per_minute = 1000\n");
+    assert_eq(_rate_effective_cpm(tron_rate(t), "a"), 1000, "override applied");
+    tron_load_policy(t, "[agent.\"a\"]\nallow = [\"*\"]\n");
+    assert_eq(_rate_effective_cpm(tron_rate(t), "a"), RATE_DEFAULT_CPM, "override gone after reload");
+    return 0;
+}
+
+fn test_rate_refill_bounded() {
+    test_group("rate: a long idle refills to capacity, never past it");
+    var b = bucket_new(60000);
+    store64(b, 0);
+    store64(b + 24, 1);               #  idle since the epoch: elapsed * rate would overflow
+    bucket_refill(b);
+    assert_eq(bucket_tokens_milli(b), bucket_max_milli(b), "full, not negative");
+    assert_eq(bucket_max_milli(bucket_new(0 - 5)), 1000, "cpm clamped to >= 1");
+    return 0;
+}
+
+fn test_rate_bucket_cap() {
+    test_group("rate: new (agent, tool) pairs past the cap are denied");
+    var saved = RATE_MAX_BUCKETS;
+    RATE_MAX_BUCKETS = 2;
+    var r = rate_limiter_new();
+    assert_eq(rate_limiter_check(r, "a", "t1"), 1, "first pair");
+    assert_eq(rate_limiter_check(r, "a", "t2"), 1, "second pair");
+    assert_eq(rate_limiter_check(r, "a", "t3"), 0, "third pair denied");
+    assert_eq(rate_limiter_check(r, "a", "t1"), 1, "existing pair still served");
+    RATE_MAX_BUCKETS = saved;
+    return 0;
+}
+
+fn test_policy_tool_refuses_comment_only() {
+    test_group("tools: tron_policy refuses a policy with no agents");
+    var t = tron_new(tron_config_default());
+    tron_load_policy(t, "[agent.\"keep\"]\nallow = [\"x\"]\n");
+    tools_bind(t);
+    var res = tron_policy_handler("{\"toml\":\"#\"}", 0);
+    assert_eq(_t_has_sub(res, "isError"), 1, "reported as an error");
+    var k, r = policy_check(tron_policy(t), "keep", "x");
+    assert_eq(k, PR_ALLOW, "policy not wiped");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_errors();
@@ -1688,8 +1858,19 @@ fn main() {
     test_gate_initialize_passes_through();
     test_gate_missing_tool_name();
     test_gate_audit_logged();
+    test_gate_decodes_tool_name();
+    test_gate_missing_name_audited();
+    test_flag_does_not_skip_checks();
+    test_unknown_config_values_fail_closed();
+    test_bad_inputs_denied();
+    test_policy_parser_strict();
+    test_policy_reload_atomic();
+    test_rate_override_cleared_on_reload();
+    test_rate_refill_bounded();
+    test_rate_bucket_cap();
+    test_policy_tool_refuses_comment_only();
     return assert_summary();
 }
 
 var exit_code = main();
-syscall(60, exit_code);
+sys_exit(exit_code);

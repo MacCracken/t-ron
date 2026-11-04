@@ -6,10 +6,12 @@
 #  returns a JSON-RPC error response if the call is denied. All other
 #  methods (initialize, tools/list, etc.) pass through unmodified.
 #
-#  The Rust version takes `agent_id` as a call parameter. Bote's
-#  dispatcher reads `caller_id` from `params.caller_id` when present,
-#  so this gate does the same: it extracts caller_id from the JSON-RPC
-#  params (falling back to "anonymous" when absent).
+#  `agent_id` is the caller's identity, passed in by the embedding
+#  service. t-ron does not authenticate it; that is the transport's job.
+#
+#  The tool name is read DECODED, the way bote's dispatcher reads it:
+#  an escaped spelling such as `file\u005fdelete` must be checked as the
+#  `file_delete` it will run as.
 
 #  JSON-RPC error code for security denials (server-defined range).
 var SECURITY_DENIED_CODE = 0 - 32001;
@@ -74,26 +76,27 @@ fn _sec_check_tool_call(g, request, agent_id) {
     var id     = req_id(request);
     var params = req_params(request);
 
-    #  Extract tool name (required)
-    var tool_name = jsonx_get_str(params, "name");
-    if (tool_name == 0 || strlen(tool_name) == 0) {
-        return _sec_deny_response(id,
-            "missing or empty tool name in tools/call",
-            DENY_UNAUTHORIZED);
-    }
-
     #  Arguments default to "{}" if absent.
     var args = jsonx_get_raw(params, "arguments");
     if (args == 0) { args = "{}"; }
 
+    #  Extract tool name (required), decoded as bote will decode it.
+    var tool_name = jsonx_get_str_dec_a(default_alloc(), params, "name");
+    if (tool_name == 0 || strlen(tool_name) == 0) {
+        var v_none = verdict_deny("missing or empty tool name in tools/call", DENY_UNAUTHORIZED);
+        audit_log(tron_audit(load64(g)), tool_call_new(agent_id, "", args, clock_epoch_ns()), v_none);
+        return _sec_deny_response(id, verdict_reason(v_none), DENY_UNAUTHORIZED);
+    }
+
     var call = tool_call_new(agent_id, tool_name, args, clock_epoch_ns());
     var v = tron_check(load64(g), call);
     var k = verdict_kind(v);
-    if (k == VK_DENY) {
-        return _sec_deny_response(id, verdict_reason(v), verdict_code(v));
-    }
-    #  Allow and Flag both pass through to the inner dispatcher.
-    return 0;
+    #  Allow and Flag pass through to the inner dispatcher; anything else,
+    #  including a kind this build does not know, is a denial.
+    if (k == VK_ALLOW || k == VK_FLAG) { return 0; }
+    var reason = verdict_reason(v);
+    if (reason == 0) { reason = "denied"; }
+    return _sec_deny_response(id, reason, verdict_code(v));
 }
 
 #  Build "security: <reason> [<code>]" and wrap in a JSON-RPC error response.

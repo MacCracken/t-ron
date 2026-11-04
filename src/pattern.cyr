@@ -4,7 +4,8 @@
 #
 #  Per-agent state:
 #    * history     -- ring buffer of the last 100 tool names (cstring)
-#    * hour_hist   -- 24-element count array indexed by hour-of-day UTC
+#    * hour_hist   -- 24-element count array indexed by hour-of-day UTC,
+#                     plus the hour of the most recent record
 #
 #  Detectors (checked in order; first match wins):
 #    1. Tool enumeration       -- 15+ distinct tools in the last 20 calls
@@ -21,7 +22,9 @@
 #                                 2.1.4.
 #    4. Off-hours activity     -- current hour below 2% of total calls
 #                                 once >= 50 calls observed, and agent
-#                                 is not already active in all 24 hours
+#                                 is not already active in all 24 hours;
+#                                 the call being judged is left out of
+#                                 its own baseline
 #
 #  Continuous scoring:
 #    * pattern_off_hours_score_bp -- basis-point variant of the off-hours
@@ -39,62 +42,123 @@ var PAT_ACTIVE_HOUR_DENOMINATOR  = 100;
 var PAT_SEQUENCE_WINDOW          = 10;       #  scan last 10 calls for recon→mutation
 
 #  ============================================================
-#  PatternAnalyzer  --  two hashmaps of per-agent state
+#  PatternAnalyzer  --  per-agent state + an intern table
 #  ============================================================
 #
-#  Layout (16 bytes):
-#    +0   history     hashmap<cstring, vec<cstring>>
-#    +8   hour_hist   hashmap<cstring, i64 ptr to 24 counters>
+#  Layout (24 bytes):
+#    +0   history     hashmap<agent cstring, vec<tool cstring>>
+#    +8   hour_hist   hashmap<agent cstring, PAT_HOUR_BLOCK-byte block>
+#    +16  names       hashmap<cstring, owned cstring>   (intern table)
+#
+#  Every map key and every stored tool name is an owned copy from the
+#  intern table: a ToolCall's strings belong to the caller, who may free
+#  or reuse them once pattern_record returns. Interning keeps one copy
+#  per distinct string, not one per call, so recording allocates only
+#  for a name it has not seen.
+#
+#  Map values are never 0 (each is checked at creation), so one map_get
+#  answers both "present?" and "which?".
+#
+#  Hour block: slots 0..23 count calls per UTC hour; slot 24 holds 1 +
+#  the hour of the most recent record (0 = none yet), so the off-hours
+#  check can leave the call being judged out of its own baseline.
+
+var PAT_HOUR_LAST  = 192;               #  byte offset of slot 24
+var PAT_HOUR_BLOCK = 200;               #  25 i64 slots
 
 fn pattern_analyzer_new() {
-    var pa = alloc(16);
-    store64(pa,     map_new());
-    store64(pa + 8, map_new());
+    var pa = alloc(24);
+    if (pa == 0) { return 0; }
+    store64(pa,      map_new());
+    store64(pa + 8,  map_new());
+    store64(pa + 16, map_new());
+    if (load64(pa) == 0 || load64(pa + 8) == 0 || load64(pa + 16) == 0) { return 0; }
     return pa;
 }
 
 fn pattern_history(pa)  { return load64(pa); }
 fn pattern_hourhist(pa) { return load64(pa + 8); }
 
-#  Fetch-or-create the ring-buffer vec for this agent.
+#  The analyzer's owned copy of `s`, made on first sight; 0 if the copy
+#  cannot be allocated.
+fn _pat_intern(pa, s) {
+    var names = load64(pa + 16);
+    var own = map_get(names, s);
+    if (own != 0) { return own; }
+    var n = strlen(s);
+    own = alloc(n + 1);
+    if (own == 0) { return 0; }
+    memcpy(own, s, n);
+    store8(own + n, 0);
+    map_set(names, own, own);
+    return own;
+}
+
+#  Fetch-or-create the ring-buffer vec for this agent; 0 on allocation failure.
 fn _pat_get_history(pa, agent_id) {
     var h = load64(pa);
-    if (map_has(h, agent_id) == 1) { return map_get(h, agent_id); }
-    var v = vec_new();
-    map_set(h, agent_id, v);
+    var v = map_get(h, agent_id);
+    if (v != 0) { return v; }
+    var key = _pat_intern(pa, agent_id);
+    if (key == 0) { return 0; }
+    v = vec_new();
+    if (v == 0) { return 0; }
+    map_set(h, key, v);
     return v;
 }
 
-#  Fetch-or-create the 24-slot histogram for this agent.
+#  Fetch-or-create the hour block for this agent; 0 on allocation failure.
 fn _pat_get_histogram(pa, agent_id) {
     var h = load64(pa + 8);
-    if (map_has(h, agent_id) == 1) { return map_get(h, agent_id); }
-    var hist = alloc(192);
-    memset(hist, 0, 192);
-    map_set(h, agent_id, hist);
+    var hist = map_get(h, agent_id);
+    if (hist != 0) { return hist; }
+    var key = _pat_intern(pa, agent_id);
+    if (key == 0) { return 0; }
+    hist = alloc(PAT_HOUR_BLOCK);
+    if (hist == 0) { return 0; }
+    memset(hist, 0, PAT_HOUR_BLOCK);
+    map_set(h, key, hist);
     return hist;
 }
 
-#  Extract UTC hour (0..23) from nanosecond wall timestamp.
+#  UTC hour (0..23) of a nanosecond wall timestamp. Pure arithmetic: no
+#  allocation, no date conversion, and valid for every i64 -- for a
+#  pre-epoch (negative) value the division is floored, so the hour is
+#  never negative and never indexes outside the hour block.
 fn _pat_hour_from_ns(ns) {
     var secs = ns / 1000000000;
-    var d = epoch_to_date(secs);
-    return load64(d + 24);
+    if (ns < 0 && secs * 1000000000 != ns) { secs = secs - 1; }
+    var r = secs % 86400;
+    if (r < 0) { r = r + 86400; }
+    return r / 3600;
+}
+
+fn _pat_valid_hour(h) {
+    if (h >= 0 && h < 24) { return 1; }
+    return 0;
 }
 
 #  Record a tool call. `call` is a ToolCall pointer (see gate.cyr).
+#  Returns 0, or -1 if the per-agent state could not be allocated.
 fn pattern_record(pa, call) {
     var agent = tool_call_agent_id(call);
-    var tool  = tool_call_tool_name(call);
+    var tool  = _pat_intern(pa, tool_call_tool_name(call));
+    if (tool == 0) { return 0 - 1; }
 
     var hist = _pat_get_history(pa, agent);
+    if (hist == 0) { return 0 - 1; }
     vec_push(hist, tool);
+    #  At most one trim per call: a fixed 99-slot shift, kept over a ring
+    #  so the detectors (and pattern_history readers) index oldest-first.
     while (vec_len(hist) > PAT_MAX_HISTORY) { vec_remove(hist, 0); }
 
     var hh = _pat_get_histogram(pa, agent);
+    if (hh == 0) { return 0 - 1; }
     var hour = _pat_hour_from_ns(tool_call_timestamp(call));
+    if (_pat_valid_hour(hour) == 0) { return 0 - 1; }
     var slot = hh + hour * 8;
     store64(slot, load64(slot) + 1);
+    store64(hh + PAT_HOUR_LAST, hour + 1);
     return 0;
 }
 
@@ -243,12 +307,33 @@ fn _pat_check_sequence(hist) {
 #
 #  threshold = max(1, total * 2 / 100). If the current hour's count is
 #  below threshold, AND the agent has fewer than 24 active hours, flag.
+#
+#  The baseline is the history BEFORE the call being judged. tron
+#  records a call and then checks it, so counted as-is the judged call
+#  would sit in its own hour: that hour's count is always >= 1, and for
+#  totals of 50..99 (threshold 1) the detector could never fire. The
+#  most recent record (hour block slot 24) is that call, and when it
+#  falls in the hour being judged it is left out of both the hour's
+#  count and the total. A caller that checks without recording first
+#  loses one prior call from the baseline -- a bias toward flagging.
 
-fn _pat_check_time(hist_24, current_hour) {
+#  Calls in hour `h` of `hist`, the judged call left out (see above).
+fn _pat_hour_count(hist, h, judged_hour) {
+    var c = load64(hist + h * 8);
+    if (h == judged_hour && c > 0) {
+        if (load64(hist + PAT_HOUR_LAST) == judged_hour + 1) { c = c - 1; }
+    }
+    return c;
+}
+
+#  The active-hour threshold for judging `hour`, or 0 when the detector
+#  does not apply: fewer than PAT_MIN_HISTORY_FOR_TIME prior calls, or
+#  the agent is active in all 24 hours. `hour` must be 0..23.
+fn _pat_time_threshold(hist_24, hour) {
     var total = 0;
     var i = 0;
     while (i < 24) {
-        total = total + load64(hist_24 + i * 8);
+        total = total + _pat_hour_count(hist_24, i, hour);
         i = i + 1;
     }
     if (total < PAT_MIN_HISTORY_FOR_TIME) { return 0; }
@@ -259,12 +344,18 @@ fn _pat_check_time(hist_24, current_hour) {
     var active = 0;
     i = 0;
     while (i < 24) {
-        if (load64(hist_24 + i * 8) >= threshold) { active = active + 1; }
+        if (_pat_hour_count(hist_24, i, hour) >= threshold) { active = active + 1; }
         i = i + 1;
     }
     if (active >= 24) { return 0; }                #  active everywhere -- no off-hours
+    return threshold;
+}
 
-    if (load64(hist_24 + current_hour * 8) < threshold) { return 1; }
+#  `current_hour` must be 0..23 (callers check).
+fn _pat_check_time(hist_24, current_hour) {
+    var threshold = _pat_time_threshold(hist_24, current_hour);
+    if (threshold == 0) { return 0; }
+    if (_pat_hour_count(hist_24, current_hour, current_hour) < threshold) { return 1; }
     return 0;
 }
 
@@ -272,10 +363,11 @@ fn _pat_check_time(hist_24, current_hour) {
 #  Continuous off-hours scoring (basis points)
 #  ============================================================
 #
-#  Same threshold semantics as _pat_check_time but emits a 0..1000
-#  score instead of a binary flag. Composes with score.cyr's
-#  basis-point risk model so consumers can blend off-hours signal
-#  with deny / flag history rather than a yes/no decision.
+#  Same threshold semantics as _pat_check_time (judged call left out of
+#  the baseline) but emits a 0..1000 score instead of a binary flag.
+#  Composes with score.cyr's basis-point risk model so consumers can
+#  blend off-hours signal with deny / flag history rather than a yes/no
+#  decision.
 #
 #  Returns 0 if the agent has no histogram, has < PAT_MIN_HISTORY_FOR_TIME
 #  total calls, is active in all 24 hours, or the current hour is at or
@@ -284,32 +376,17 @@ fn _pat_check_time(hist_24, current_hour) {
 #  monotonic in anomaly degree:
 #    * current_count = 0          -> 1000  (dead hour, max anomaly)
 #    * current_count = threshold-1 -> 1000 / threshold (just below pattern)
+#  A `current_hour` outside 0..23 is rejected with 1000 (fail closed:
+#  an hour the analyzer cannot place is not evidence of normal use).
 
 fn pattern_off_hours_score_bp(pa, agent_id, current_hour) {
-    var hh = load64(pa + 8);
-    if (map_has(hh, agent_id) == 0) { return 0; }
-    var hist_24 = map_get(hh, agent_id);
+    if (_pat_valid_hour(current_hour) == 0) { return 1000; }
+    var hist_24 = map_get(load64(pa + 8), agent_id);
+    if (hist_24 == 0) { return 0; }
 
-    var total = 0;
-    var i = 0;
-    while (i < 24) {
-        total = total + load64(hist_24 + i * 8);
-        i = i + 1;
-    }
-    if (total < PAT_MIN_HISTORY_FOR_TIME) { return 0; }
-
-    var threshold = (total * PAT_ACTIVE_HOUR_NUMERATOR) / PAT_ACTIVE_HOUR_DENOMINATOR;
-    if (threshold < 1) { threshold = 1; }
-
-    var active = 0;
-    i = 0;
-    while (i < 24) {
-        if (load64(hist_24 + i * 8) >= threshold) { active = active + 1; }
-        i = i + 1;
-    }
-    if (active >= 24) { return 0; }
-
-    var current = load64(hist_24 + current_hour * 8);
+    var threshold = _pat_time_threshold(hist_24, current_hour);
+    if (threshold == 0) { return 0; }
+    var current = _pat_hour_count(hist_24, current_hour, current_hour);
     if (current >= threshold) { return 0; }
     return (1000 * (threshold - current)) / threshold;
 }
@@ -319,11 +396,14 @@ fn pattern_off_hours_score_bp(pa, agent_id, current_hour) {
 #  ============================================================
 
 #  Check for anomalies. Returns a description cstring, or 0 if clean.
-#  `current_hour` is a 0..23 UTC hour for the time-of-day check.
+#  `current_hour` is a 0..23 UTC hour for the time-of-day check; any
+#  other value is flagged rather than used as an index.
 fn pattern_check_anomaly(pa, agent_id, current_hour) {
-    var h = load64(pa);
-    if (map_has(h, agent_id) == 0) { return 0; }
-    var hist = map_get(h, agent_id);
+    if (_pat_valid_hour(current_hour) == 0) {
+        return "off-hours activity: hour outside 0..23 rejected";
+    }
+    var hist = map_get(load64(pa), agent_id);
+    if (hist == 0) { return 0; }
 
     if (_pat_check_enumeration(hist) == 1) {
         return "tool enumeration: 15+ distinct tools in last 20 calls";
@@ -335,9 +415,9 @@ fn pattern_check_anomaly(pa, agent_id, current_hour) {
         return "directed sequence: recon followed by mutation";
     }
 
-    var hh = load64(pa + 8);
-    if (map_has(hh, agent_id) == 1) {
-        if (_pat_check_time(map_get(hh, agent_id), current_hour) == 1) {
+    var hh = map_get(load64(pa + 8), agent_id);
+    if (hh != 0) {
+        if (_pat_check_time(hh, current_hour) == 1) {
             return "off-hours activity: current hour outside established pattern";
         }
     }

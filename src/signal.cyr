@@ -24,22 +24,29 @@ var SFD_NONBLOCK          = 2048;      #  O_NONBLOCK
 #  Init  --  block SIGHUP process-wide and return a signalfd.
 #  ============================================================
 #
-#  Must be called BEFORE any thread might deliver SIGHUP. Blocking
-#  the signal prevents the default hang-up action (process exit) and
-#  routes the signal into the returned file descriptor instead.
+#  sigprocmask blocks SIGHUP for the calling thread only; threads created
+#  afterwards inherit the mask. Call this before starting any thread, or a
+#  thread started earlier still takes the default hang-up action (process
+#  exit). Blocking the signal routes it into the returned descriptor.
 #
-#  Returns the fd (>=0) on success, a negative errno value on failure.
+#  Returns the fd (>=0) on success, a negative errno value on failure. On
+#  failure the previous signal mask is restored, so SIGHUP is not left
+#  blocked with nothing reading it.
 
 fn sighup_init() {
     var mask = sigset_new();
+    var old  = sigset_new();
+    if (mask == 0 || old == 0) { return 0 - 12; }      #  ENOMEM
     sigset_add(mask, SIGHUP);
-    var rc = sys_sigprocmask(SIG_BLOCK, mask, 0);
+    var rc = sys_sigprocmask(SIG_BLOCK, mask, old);
     if (rc < 0) { return rc; }
     #  fd=-1 → create a new signalfd; SFD_NONBLOCK so the drain loop can
     #  detect "no more queued signals" via a short read instead of
     #  blocking forever. Consumers that want blocking semantics should
     #  integrate via epoll/poll rather than calling the drain helper.
-    return sys_signalfd(0 - 1, mask, SFD_NONBLOCK);
+    var fd = sys_signalfd(0 - 1, mask, SFD_NONBLOCK);
+    if (fd < 0) { sys_sigprocmask(SIG_SETMASK, old, 0); }
+    return fd;
 }
 
 #  ============================================================
@@ -54,18 +61,26 @@ fn sighup_init() {
 #  because reloading the same file twice in a row is wasteful.
 #
 #  Returns 0 on success (reload OK, or no signals pending), a TRON_ERR_*
-#  code on reload failure.
+#  code on reload failure, or TRON_ERR_IO when the descriptor cannot be
+#  read (anything but "nothing queued": EAGAIN, or a retried EINTR).
 
 var _sighup_buf = 0;
+var _SIGHUP_EAGAIN = 11;
+var _SIGHUP_EINTR  = 4;
 
 fn sighup_drain_and_reload(fd, tron) {
+    if (fd < 0) { return TRON_ERR_IO; }
     if (_sighup_buf == 0) { _sighup_buf = alloc(SIGNALFD_SIGINFO_SIZE); }
+    if (_sighup_buf == 0) { return TRON_ERR_IO; }
 
     var saw_signal = 0;
     while (1 == 1) {
         var n = sys_read(fd, _sighup_buf, SIGNALFD_SIGINFO_SIZE);
-        if (n != SIGNALFD_SIGINFO_SIZE) { break; }
-        saw_signal = 1;
+        if (n == SIGNALFD_SIGINFO_SIZE) { saw_signal = 1; }
+        elif (n == 0 - _SIGHUP_EINTR) { saw_signal = saw_signal; }
+        elif (n == 0 - _SIGHUP_EAGAIN) { break; }
+        elif (n < 0) { return TRON_ERR_IO; }
+        else { break; }
     }
     if (saw_signal == 0) { return TRON_ERR_NONE; }
 

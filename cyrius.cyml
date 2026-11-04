@@ -20,6 +20,7 @@ output = "build/t-ron"
 [lib]
 modules = [
     "src/error.cyr",
+    "src/json_text.cyr",
     "src/gate.cyr",
     "src/policy.cyr",
     "src/rate.cyr",
@@ -63,7 +64,6 @@ stdlib = [
     "chrono",
     "freelist",
     "sakshi",
-    "fs",
     "process",
     "bayan",
     "net",
