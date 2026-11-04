@@ -1734,7 +1734,10 @@ fn test_rate_refill_bounded() {
     test_group("rate: a long idle refills to capacity, never past it");
     var b = bucket_new(60000);
     store64(b, 0);
-    store64(b + 24, 1);               #  idle since the epoch: elapsed * rate would overflow
+    #  Idle 10,000 s: elapsed * rate = 1e13 * 1e6 overflows i64. Relative
+    #  to now, not an absolute time: clock_now_ns counts from boot, and a
+    #  fresh CI VM has been up for less than the 60 s full-refill gap.
+    store64(b + 24, clock_now_ns() - 10000 * RATE_NS_PER_SEC);
     bucket_refill(b);
     assert_eq(bucket_tokens_milli(b), bucket_max_milli(b), "full, not negative");
     assert_eq(bucket_max_milli(bucket_new(0 - 5)), 1000, "cpm clamped to >= 1");

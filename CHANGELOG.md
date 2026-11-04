@@ -142,6 +142,17 @@ the report. The scanner is **9× faster**. Every build and suite prints
   `strlen`. The second caught C2, C3 and an LLM request overrun on its
   first run.
 - **`tests/t-ron-detect.tcyr`** joins the CI test loop.
+- **The CI test loop reports a failing suite.** A harness exits with its
+  failure count, and under `bash -e` the `out=$(cyrius test …)`
+  assignment aborted the step at the first failing suite with a bare
+  "exit code 1". The loop now keeps the exit code, prints the suite's
+  `FAIL:` and `error:` lines, and runs every suite.
+- **`test_rate_refill_bounded` no longer depends on uptime.** It set the
+  bucket's last refill to 1 ns on `clock_now_ns`, which counts from boot,
+  so on a CI VM up for under 60 s the refill was partial and the
+  assertion failed. It now idles the bucket 10,000 s before now, which
+  still overflows 2.2.2's refill (tokens go negative) and still passes at
+  any uptime.
 - Every remaining `map_has` → `map_get` double lookup (ten) is one lookup.
 - The unused `fs` stdlib entry is removed: `cyrius.lock` drops `fs.cyr`
   and `fs_win.cyr` (66 entries).
@@ -191,7 +202,9 @@ Recorded in `bench-history.csv`.
 
 - **Every `ci.yml` step**, build-and-test, security and docs, run verbatim
   from the YAML on a CI-shaped copy (fresh git, no `lib/`,
-  `CYRIUS_LOCKED=1`): all pass.
+  `CYRIUS_LOCKED=1`): all pass. The four suites also pass with the
+  monotonic clock set to 1–90 s of uptime (a Linux time namespace), the
+  state of a freshly booted CI VM.
 - **The integration guide's program** builds as a clean-room consumer with
   0 undefined functions, and every JSON line the guide quotes matches its
   output byte for byte.

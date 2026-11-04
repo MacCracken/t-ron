@@ -166,14 +166,20 @@ jobs:
           echo "OK: t-ron smoke test"
 
       - name: Run tests
+        # Each harness exits with its failure count, so `cyrius test` exits
+        # non-zero on a failed assertion. The `|| rc=$?` keeps `bash -e`
+        # from aborting at the assignment: every suite runs, and a failing
+        # one prints its FAIL lines instead of a bare "exit code 1".
         run: |
           fail=0
           for tcyr in tests/t-ron.tcyr tests/t-ron-crypto.tcyr tests/t-ron-safety.tcyr tests/t-ron-detect.tcyr; do
             echo "--- $tcyr ---"
-            out=$(cyrius test "$tcyr" 2>&1)
+            rc=0
+            out=$(cyrius test "$tcyr" 2>&1) || rc=$?
             tail=$(echo "$out" | tail -3)
             echo "$tail"
-            if echo "$out" | grep -qE '^[0-9]+ passed, [^0]'; then
+            if [ $rc -ne 0 ] || echo "$out" | grep -qE '^[0-9]+ passed, [^0]'; then
+              echo "$out" | grep -E '^ *FAIL: |^error:' | head -40 || true
               echo "FAIL: $tcyr"
               fail=1
             fi
