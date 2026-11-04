@@ -105,6 +105,7 @@ fn _sec_deny_response(id, reason, code) {
     var code_str = deny_code_as_str(code);
     var cl = strlen(code_str);
     var buf = alloc(rl + cl + 32);
+    if (buf == 0) { return resp_error(id, SECURITY_DENIED_CODE, "security: denied"); }
     var off = 0;
     memcpy(buf + off, "security: ", 10); off = off + 10;
     memcpy(buf + off, reason, rl);       off = off + rl;

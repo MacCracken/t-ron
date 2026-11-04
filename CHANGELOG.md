@@ -16,6 +16,158 @@ top. Mirrors bote 2.7.0's flow.
 
 _(empty)_
 
+## [2.2.4] — 2026-11-04 · bote-core 3.8.9, and four of the audit's follow-ups
+
+bote-core moves 3.8.1 → 3.8.9, and four of the five patch-sized items the
+2.2.3 audit deferred are done: P12, C14, S11 and S15
+([report](docs/audit/2026-11-03.md)). The other pins are unchanged
+(cyrius 6.7.18, libro 2.11.3, sigil 3.13.15; majra 2.13.0 and patra 1.16.6
+transitive).
+
+**902 assertions** (t-ron 407 · crypto 64 · safety 239 · detect 192; was
+847) in 231 groups. Each new test group fails on the 2.2.3 sources; the
+exceptions are "stays clean" checks and coverage of behaviour that did not
+change, named under Tests. Every build and suite prints **zero warnings**.
+
+### Changed — dependencies
+
+- **bote-core 3.8.1 → 3.8.9.** bote 3.8.9 pins the same cyrius, libro and
+  majra, so `cyrius.lock` changes only bote-core's hash and commit pin (66
+  entries, 5 commit pins, each matching its remote tag). All 847 of the
+  2.2.3 assertions passed on 3.8.9 before any t-ron change.
+- **What callers of the gate see from it:** since bote 3.8.6,
+  `dispatcher_dispatch` refuses a request that names a key twice, in
+  `params` or any object below it, as an invalid request (`-32600`). The
+  gate runs first and audits its verdict for the first `name`, the one
+  both it and bote read; bote then refuses the request and no handler
+  runs. On 3.8.1 the first name's handler ran. A new test pins this.
+- bote 3.8.2–3.8.9 otherwise add JSON Schema keywords, multi round-trip
+  requests and output schemas on bote's own tools, none of which t-ron
+  calls.
+- The binary is 683,888 → 688,880 B from bote-core alone, and 689,168 B
+  with this release's code.
+
+### Security
+
+- **The identifier check reads no further than its cap (P12).**
+  `tron_is_safe_identifier` ran `strlen` before testing the 256-byte
+  limit, so an agent ID or tool name with no NUL nearby was read to the
+  end of its memory. It is now one pass that reads at most 257 bytes. The
+  test places an identifier against an unreadable page; 2.2.3 faults
+  there (SIGSEGV).
+- **Lookalike letters no longer evade the safety injection detector
+  (S11).** `injection_normalize` folds 59 letters to the Latin letter each
+  imitates before the phrase checks: Cyrillic, Greek, Latin-extension and
+  IPA letters from UTS #39's confusables data, plus the 52 fullwidth Latin
+  letters, which NFKC maps to ASCII. `ignоre previous instructions` with
+  a Cyrillic `о`, a Greek `ο`, or fullwidth letters was clean in 2.2.3 and
+  is now flagged; Russian prose stays clean.
+- **A buffer that cannot be allocated fails closed (C14).** Each
+  input-sized allocation in `src/` that wrote through an unchecked result
+  is now checked. A failed one used to write through a null pointer and
+  crash the host process.
+  - **The gate path:** a deny reason falls back to a fixed string ("tool
+    denied by policy"); a rate key, a signature path or a policy-parser
+    string fails its check (deny, failed verification, refused load); an
+    audit field reads `<unrecorded>`.
+  - **The safety module:** a helper that cannot build its buffer counts the
+    failure, and `safety_evaluate_rule`, `safety_engine_check_action`,
+    `safety_engine_check_output` and `injection_detector_check` then
+    return Blocked, "safety: allocation failed" (or an unsafe result with
+    pattern `allocation_failed`), whatever the rules decided. That verdict
+    is built with the engine, before memory runs short.
+  - **Tested** by lowering `ALLOC_MAX` below the buffer size: each of the
+    15 sites crashes 2.2.3 (SIGSEGV) and holds now.
+
+### Added
+
+- **`require_utf8` output validation (S15).** On an
+  `SRT_OUTPUT_VALIDATION` rule, `safety_rule_set_require_utf8(rule, 1)`
+  blocks output that is not well-formed UTF-8 (the Unicode Standard's
+  Table 3-7: no overlong form, surrogate, code point past U+10FFFF or
+  truncated sequence). Off by default. The Rust original carried the flag
+  but never acted on it, since a Rust `&str` is always UTF-8; t-ron's
+  output is bytes, so the check is real. `SafetyRule` grows 80 → 88 bytes
+  (`require_utf8` at +80).
+- `TRON_MAX_IDENTIFIER` (256), the identifier cap, as a named value.
+- The `safety_injection_check` bench.
+
+### Changed — behaviour callers will see
+
+- **`tron_set_policy_path`** returns `TRON_ERR_IO` (it always returned 0)
+  when it cannot copy the path; `tron_load_policy_file` and
+  `tron_verify_and_load_policy` pass that on. A verified load now enters
+  signed mode before storing the path, so a failed copy still leaves
+  unsigned loads refused.
+- **`rate_limiter_set_rate`** returns -1 (it always returned 0) when the
+  override's key cannot be allocated. A policy load whose override cannot
+  be stored returns `TRON_ERR_IO`: the policy is installed, and that agent
+  runs at the default rate.
+- **`injection_normalize`** returns ASCII for the folded letters, so its
+  output differs for text that holds them.
+
+### Tests
+
+- **New groups:** t-ron, the identifier at a guard page (5), a
+  `tools/call` naming a key twice (3) and allocation failure on the gate
+  path (13); safety, lookalike letters (7), output validation (20) and
+  allocation failure (7).
+- **Run against the 2.2.3 sources:** the guard-page and both
+  allocation-failure groups crash there; the lookalike group fails 6 of
+  7; output validation fails all 12 ill-formed sequences. The groups stop
+  at their first crash, so each of the 15 fallbacks was also run on its
+  own: every one crashes 2.2.3 and passes now.
+- **Expected to pass on 2.2.3:** "Russian prose stays clean" guards a false
+  positive, and the `max_length` and well-formed-UTF-8 checks cover
+  behaviour that did not change. Output validation had no test before.
+- **The duplicate-key test** fails on a copy pinned to bote 3.8.1. A copy
+  is needed because `cyrius test` re-vendors `lib/` from the lock, which
+  overwrites a hand-swapped bundle.
+
+### Performance
+
+Three interleaved rounds, mean, the 2.2.3 sources against these, both on
+bote-core 3.8.9 and the same bench file. The machine was loaded (load
+average 4–5) throughout; both sides shared it.
+
+| bench | 2.2.3 | 2.2.4 | Δ |
+|---|---|---|---|
+| `policy_check` | 202 ns | 210 ns | +4.1 % |
+| `scanner_clean_text` | 383 ns | 387 ns | +1.2 % |
+| `scanner_sql_detect` | 367 ns | 360 ns | −1.9 % |
+| `audit_log` | 10.399 µs | 10.454 µs | +0.5 % |
+| `tron_check_allow` | 17.123 µs | 17.213 µs | +0.5 % |
+| `safety_injection_check` | 25.964 µs | 26.148 µs | +0.7 % |
+
+- **`policy_check`** runs no changed code (the bench takes the allow
+  path), so its +8 ns is code placement.
+- **The lookalike fold** costs the injection detector 0.7 %.
+- **The injection detector itself is slow:** about 26 µs for a clean
+  117-byte prompt in both versions, 70× the payload scanner. The new
+  bench is the first to measure it; the roadmap records it.
+
+### Verified
+
+- **Every `ci.yml` step** run verbatim on a CI-shaped copy (fresh git, no
+  `lib/`, `CYRIUS_LOCKED=1`), and the four suites again with the clock set
+  to 1–90 s of uptime: all pass.
+- **The integration guide's program** builds as a clean-room consumer
+  declaring only `[deps.t-ron]` (6 deps resolved, 0 undefined, 0
+  warnings), and every output the guide quotes matches its own byte for
+  byte.
+- **Capacity:** `fn_table` 6,058 / 131,072 (5 %), `identifiers` 170,445 /
+  8,388,608 (2 %), `code_size` 157,560 / 67,108,864 (0.2 %).
+  `dist/t-ron.cyr` 6,849 → 7,116 lines; the sidecar is still `regex net
+  syscalls`.
+
+### Still open
+
+- **Bounding per-agent state (D14, S16).** The allocator never frees, so
+  evicting idle entries reclaims nothing; only a cap bounds the memory,
+  and what a full table does (refuse new agents, or stop tracking them)
+  is a policy decision.
+- **The per-call allocation (P10)** needs an arena design.
+
 ## [2.2.3] — 2026-11-03 · the P(-1) sweep: an audit of every module, and 74 items repaired or recorded
 
 The scheduled P(-1) audit, refactor, hardening and optimization sweep: the

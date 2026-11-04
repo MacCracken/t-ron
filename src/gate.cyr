@@ -63,21 +63,27 @@ fn tool_call_timestamp(c) { return load64(c + 24); }
 #   * canonicalization mismatches between bote parsers and libro hashers
 #
 #  Returns 1 if safe, 0 if suspicious. Caller SHOULD deny on 0.
+#
+#  One pass that reads at most TRON_MAX_IDENTIFIER + 1 bytes: an
+#  identifier with no NUL by then is too long, however far its NUL is.
+var TRON_MAX_IDENTIFIER = 256;
+
 fn tron_is_safe_identifier(s) {
     if (s == 0) { return 0; }
-    var n = strlen(s);
-    if (n == 0) { return 0; }
-    if (n > 256) { return 0; }             #  protect against pathological sizes
     var i = 0;
-    while (i < n) {
+    while (i <= TRON_MAX_IDENTIFIER) {
         var c = load8(s + i) & 0xFF;
-        if (c < 32)  { return 0; }          #  control chars (including 0x1f, 0x00, \n, \r, \t)
+        if (c == 0) {
+            if (i == 0) { return 0; }       #  empty
+            return 1;
+        }
+        if (c < 32)  { return 0; }          #  control chars (including 0x1f, \n, \r, \t)
         if (c == 127) { return 0; }         #  DEL
         if (c > 126) { return 0; }          #  non-ASCII (prevents overlong-UTF-8 bypass)
         if (c == 34 || c == 92) { return 0; }   #  `"` and `\`: never in a tool name, and they break the JSON an identifier is logged into
         i = i + 1;
     }
-    return 1;
+    return 0;                               #  longer than TRON_MAX_IDENTIFIER
 }
 
 #  ============================================================

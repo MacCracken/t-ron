@@ -52,6 +52,7 @@ include "src/query.cyr"
 include "src/correlation.cyr"
 include "src/tron.cyr"
 include "src/crypto_chacha20.cyr"
+include "src/safety.cyr"
 
 # Shared fixtures — single allocation, reused across benchmarks.
 var _b_eng      = 0;
@@ -104,6 +105,11 @@ fn bench_tron_check_allow() {
     return tron_check(_b_tron, _b_call);
 }
 
+#  A clean 117-byte prompt: normalisation and the six heuristics, no match.
+fn bench_safety_injection() {
+    return injection_detector_check("Summarise the attached quarterly report and list the three largest cost changes, with the page each one appears on.");
+}
+
 fn main() {
     alloc_init();
     _b_setup();
@@ -126,6 +132,10 @@ fn main() {
     var b5 = bench_new("tron_check_allow");
     bench_run(b5, &bench_tron_check_allow, 1000);
     bench_report(b5);
+
+    var b6 = bench_new("safety_injection_check");
+    bench_run(b6, &bench_safety_injection, 10000);
+    bench_report(b6);
 
     return 0;
 }

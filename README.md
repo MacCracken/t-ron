@@ -4,10 +4,12 @@
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 [![Language: Cyrius](https://img.shields.io/badge/Language-Cyrius-brightgreen.svg)](https://github.com/MacCracken/cyrius)
-[![Version: 2.2.3](https://img.shields.io/badge/Version-2.2.3-informational.svg)](VERSION)
+[![Version: 2.2.4](https://img.shields.io/badge/Version-2.2.4-informational.svg)](VERSION)
 
 T-Ron is a [Cyrius](https://github.com/MacCracken/cyrius) security-middleware module set that sits between [bote](https://github.com/MacCracken/bote) (MCP protocol layer) and tool handlers, enforcing per-agent permissions, rate limiting, payload scanning, anomaly detection, and auditing every verdict to a tamper-proof [libro](https://github.com/MacCracken/libro) hash chain. Named after Tron, the security program that fights the Master Control Program.
 
+> **2.2.4 — bote-core 3.8.9, and four of the audit's follow-ups.** The safety injection detector folds Cyrillic, Greek and fullwidth lookalike letters to Latin, output validation gains `require_utf8`, the identifier check reads no further than its 256-byte cap, and a buffer that cannot be allocated now fails closed instead of crashing the host. See the [CHANGELOG](CHANGELOG.md).
+>
 > **2.2.3 — the P(-1) audit.** Four independent reviews of every module found 74 items, 3 critical and 16 high, all fixed: an escaped tool name could pass a deny entry, SIGHUP reload skipped the signature check, the scanner never decoded JSON escapes, `DA_FLAG` skipped every later check, the policy loader read comments as content, and more. See the [audit report](docs/audit/2026-11-03.md). **Upgrade if you run 2.2.2 or earlier.** Signed mode and the strict policy loader change behaviour; the [CHANGELOG](CHANGELOG.md) lists every change callers will see.
 >
 > **Note — audit-chain hashes changed upstream.** libro 2.8.11 alters the entry-hash preimage, so a chain written by libro ≤ 2.8.10 will not verify against 2.8.12; there is no migration path, because the old preimage was unsound. **No known deployment is affected** — t-ron has no production consumer with a live chain as of 2.1.9, which is why this landed as a routine patch. If you are carrying a chain from an older build, re-export and re-anchor before upgrading.
@@ -125,12 +127,12 @@ Build and run:
 
 ```sh
 cyrius deps                              # resolve deps from cyrius.cyml
-cyrius build src/main.cyr build/t-ron    # compile (684 KB static x86_64 ELF)
-cyrius test tests/t-ron.tcyr             # 386 assertions
+cyrius build src/main.cyr build/t-ron    # compile (689 KB static x86_64 ELF)
+cyrius test tests/t-ron.tcyr             # 407 assertions
 cyrius test tests/t-ron-crypto.tcyr      # 64 assertions (signing, signal, crypto, export)
-cyrius test tests/t-ron-safety.tcyr      # 205 assertions (safety engine)
+cyrius test tests/t-ron-safety.tcyr      # 239 assertions (safety engine)
 cyrius test tests/t-ron-detect.tcyr      # 192 assertions (scanner, pattern, correlation, LLM scan)
-cyrius bench tests/t-ron.bcyr            # 5 pipeline benchmarks
+cyrius bench tests/t-ron.bcyr            # 6 benchmarks (pipeline + safety injection check)
 ```
 
 More walkthroughs in [`docs/guides/`](docs/guides/) and runnable
@@ -186,26 +188,26 @@ bote.
 
 ## Benchmarks
 
-Cyrius 6.7.18, x86_64, 2026-11-03 (see
+Cyrius 6.7.18, x86_64, 2026-11-04, t-ron 2.2.4 (see
 [`bench-history.csv`](bench-history.csv) for full history and
 [`docs/benchmarks-rust-v-cyrius.md`](docs/benchmarks-rust-v-cyrius.md)
 for the side-by-side):
 
 | Operation | Avg | Min | Iters |
 |---|---|---|---|
-| `policy_check` | **220 ns** | 219 ns | 100 000 |
-| `scanner_clean_text` | **378 ns** | 373 ns | 100 000 |
-| `scanner_sql_detect` | **357 ns** | 353 ns | 100 000 |
-| `audit_log` (ring buffer + libro chain + SHA-256) | 10.4 µs | 10.3 µs | 1 000 |
-| `tron_check_allow` (full pipeline) | **17.1 µs** | 15.8 µs | 1 000 |
+| `policy_check` | **213 ns** | 211 ns | 100 000 |
+| `scanner_clean_text` | **394 ns** | 388 ns | 100 000 |
+| `scanner_sql_detect` | **368 ns** | 362 ns | 100 000 |
+| `audit_log` (ring buffer + libro chain + SHA-256) | 10.6 µs | 10.4 µs | 1 000 |
+| `tron_check_allow` (full pipeline) | **17.5 µs** | 15.9 µs | 1 000 |
+| `safety_injection_check` (117-byte clean prompt) | 26.7 µs | 26.2 µs | 10 000 |
 
-Measured against a **same-session** 2.2.2 baseline (the previous
-stack built sibling-free and re-benchmarked on this box, three
-interleaved rounds each): the scanner is **−89 %** on clean text and
-**−68 %** on a SQL payload, from the single-pass rewrite. `audit_log`
-(+1.2 %) and `tron_check_allow` (+1.7 %) pay for escaping and the new
-checks. `policy_check` (+4 %) is unchanged code — see the 2.2.3
-CHANGELOG entry.
+Measured with the box under load (load average about 4). Against a
+**same-session** 2.2.3 baseline (three interleaved rounds each, both on
+bote-core 3.8.9) every bench is within ±2 % except `policy_check`
+(+4 %), whose code did not change — see the 2.2.4 CHANGELOG entry. The
+2.2.3 release made the scanner **−89 %** faster on clean text and
+**−68 %** on a SQL payload.
 
 ⚠️ Do not compare these absolutes against rows recorded on other
 dates — this box's speed drifts between sessions, so only
@@ -226,8 +228,8 @@ the full roadmap. Highlights:
 - **2.2.x — current line.** 2.2.0 moved to cyrius 6.7.x and CI to
   `cyrius deps --locked`; 2.2.1 fixed the tool handlers' buffer
   overrun; 2.2.2 was a quick-item bundle; **2.2.3 was the P(-1)
-  audit** ([report](docs/audit/2026-11-03.md)). **Next: 2.2.4**, the
-  audit's patch-sized follow-ups.
+  audit** ([report](docs/audit/2026-11-03.md)); 2.2.4 moved bote-core
+  to 3.8.9 and closed four of the audit's five patch-sized follow-ups.
 - **2.3.x onward — one feature line per minor**: MCP tool titles and
   output schemas, and claims-based authorization (2.3.x); daimon
   alerts, agnoshi intents and the aethersafha dashboard (2.4.x);
@@ -238,7 +240,7 @@ the full roadmap. Highlights:
 
 | Source | Relevance | Location |
 |---|---|---|
-| [bote](https://github.com/MacCracken/bote) | MCP protocol layer — t-ron wraps its Dispatcher via SecurityGate | `../bote` (tag 3.8.1, `dist/bote-core.cyr`) |
+| [bote](https://github.com/MacCracken/bote) | MCP protocol layer — t-ron wraps its Dispatcher via SecurityGate | `../bote` (tag 3.8.9, `dist/bote-core.cyr`) |
 | [libro](https://github.com/MacCracken/libro) | Cryptographic audit chain — t-ron writes every verdict to libro | `../libro` (tag 2.11.3) |
 | [cyrius](https://github.com/MacCracken/cyrius) | Language toolchain | 6.7.18 |
 | [hoosh](https://github.com/MacCracken/hoosh) | LLM-assisted prompt injection detection | `../hoosh` (HTTP API, tag 2.0.0) |

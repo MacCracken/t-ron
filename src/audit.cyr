@@ -65,23 +65,33 @@ fn _audit_action_for(kind) {
 #    +32  verdict_kind i64      VK_ALLOW | VK_DENY | VK_FLAG
 #    +40  reason       cstring  owned copy (0 if none)
 
+#  Owned copy of s; 0 for a null s or when the copy cannot be allocated.
 fn _audit_dup_cstr(s) {
     if (s == 0) { return 0; }
     var n = strlen(s);
     var buf = alloc(n + 1);
+    if (buf == 0) { return 0; }
     memcpy(buf, s, n);
     store8(buf + n, 0);
     return buf;
+}
+
+#  An event field whose copy cannot be allocated reads "<unrecorded>":
+#  the event is still logged, and readers never see a null name.
+fn _audit_own(s) {
+    var c = _audit_dup_cstr(s);
+    if (c == 0 && s != 0) { return "<unrecorded>"; }
+    return c;
 }
 
 fn security_event_new(id, ts, agent_id, tool_name, kind, reason) {
     var e = alloc(48);
     store64(e,      id);
     store64(e + 8,  ts);
-    store64(e + 16, _audit_dup_cstr(agent_id));
-    store64(e + 24, _audit_dup_cstr(tool_name));
+    store64(e + 16, _audit_own(agent_id));
+    store64(e + 24, _audit_own(tool_name));
     store64(e + 32, kind);
-    store64(e + 40, _audit_dup_cstr(reason));
+    store64(e + 40, _audit_own(reason));
     return e;
 }
 

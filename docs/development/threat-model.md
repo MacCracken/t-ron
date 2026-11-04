@@ -1,7 +1,7 @@
 # Threat Model
 
 What t-ron defends, what it trusts, and where it stops. Current for
-t-ron 2.2.3. The audit behind it is
+t-ron 2.2.4. The audit behind it is
 [docs/audit/2026-11-03.md](../audit/2026-11-03.md).
 
 ## Trust boundaries
@@ -25,7 +25,8 @@ It **does not trust**:
   will dispatch them; arguments are size-capped and scanned.
 - Agent IDs and tool names as text. An identifier that is empty, over
   256 bytes, or holds a byte outside printable ASCII, `"` or `\` is
-  denied before any other check.
+  denied before any other check, and no more than 257 of its bytes are
+  read to decide that.
 - Call patterns: per-agent history and cross-agent correlation are
   monitored.
 - Unknown agents and tools: denied by default (ADR-002).
@@ -38,6 +39,8 @@ It **does not trust**:
 |---|---|---|
 | SecurityGate | An escaped tool name (`file_delete`) checked as one name and run as another | The name is decoded before the check, the way bote decodes it (2.2.3) |
 | SecurityGate | A malformed `tools/call` slipping past the audit | Missing names are denied and audited (2.2.3) |
+| SecurityGate | A request that names a key twice, so the check and the handler read different values | The gate checks the first `name`, as bote reads it, and scans every string leaf; bote ≥ 3.8.6 then refuses the request (`-32600`) and no handler runs (pinned by a test at 2.2.4) |
+| Pipeline | An identifier with no NUL in reach | Read at most 257 bytes, then denied as too long (2.2.4) |
 | Pipeline | Unknown agent under `DA_FLAG` skipping later checks | A flag is a pending verdict; rate limit, scan, pattern and correlation still run, and a later deny wins (2.2.3) |
 | Pipeline | Unrecognised config or enum values | An unknown default action denies; config booleans are tested `!= 0`; an unknown verdict kind is a denial |
 | Pipeline | Negative or hostile timestamps | A negative timestamp is denied; hours are computed with floor arithmetic and range-checked |
@@ -51,10 +54,13 @@ It **does not trust**:
 | Payload scanner | Algorithmic DoS on the synchronous gate | Linear `;` and `${` scans (2.2.3) |
 | Audit log | JSON forged through a crafted name | Every value is escaped (RFC 8259 §7) into the libro details, the export and the tool results (2.2.1, 2.2.3) |
 | Audit log | Buffer overruns from long names | Every JSON buffer is sized from the escaped lengths it will hold (2.2.1, 2.2.3); CI fails a literal-size buffer fed by `strlen` |
+| Every module | A buffer that cannot be allocated | Each input-sized buffer is checked: a deny keeps a fixed reason, a load or verification is refused, an audit field reads `<unrecorded>`, and the safety engine returns Blocked, "safety: allocation failed" (2.2.4) |
 | Audit log | Chain tampering | libro's SHA-256 hash chain; `audit_verify_chain` detects any modification |
 | Encrypted export | Tampering | Encrypt-then-sign; verify before decrypt; constant-time signature compare |
 | Encrypted export | Nonce reuse | Pass a 0 nonce and t-ron draws one; a caller-supplied nonce must be unique per key |
 | MCP tools | `tron_policy` loading arbitrary policy | Gated by the policy ACL like any tool; refused outright in signed mode |
+| Safety injection detector | Phrases split or disguised: invisible characters, odd spaces, lookalike letters | Normalised before matching: invisible characters dropped, space runs collapsed (2.2.3), and 59 Cyrillic, Greek and Latin-extension lookalikes plus the fullwidth letters folded to ASCII (2.2.4) |
+| Safety output validation | Output that is not well-formed UTF-8 | `require_utf8` blocks it (2.2.4; off by default) |
 | LLM scan | A hostile or hung hoosh | Replies are unescaped and parsed strictly; failures are not read as clean; sockets are closed and timed out (2.2.3) |
 
 ## Known limitations
@@ -85,6 +91,9 @@ It **does not trust**:
 Cyrius has no `unsafe` boundary: every module works with raw pointers.
 t-ron's discipline is the one CLAUDE.md sets: size every buffer from what
 it will hold, check every allocation that is written to, and fail closed.
+Since 2.2.4 every input-sized buffer in `src/` meets the second rule; the
+fixed-size constructors (a verdict, an event) fail only when the process
+is out of memory and are not checked.
 CI enforces two parts of it mechanically (no raw `syscall(`, no
 literal-size buffer fed by `strlen`).
 

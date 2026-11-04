@@ -1769,6 +1769,102 @@ fn test_policy_tool_refuses_comment_only() {
     return 0;
 }
 
+fn test_identifier_scan_bounded() {
+    test_group("gate: an identifier is read no further than its cap");
+    var page = 4096;
+    var m = mmap_anon(page * 2);
+    assert_eq((m != 0), 1, "two pages mapped");
+    if (m == 0) { return 0; }
+    assert_eq(cyr_mprotect(m + page, page, PROT_NONE), 0, "second page unreadable");
+    var edge = m + page;
+    memset(edge - 300, 97, 300);           #  300 x 'a' and no NUL before the guard page
+    assert_eq(tron_is_safe_identifier(edge - 300), 0, "overlong: refused before the guard page");
+    assert_eq(tron_is_safe_identifier(edge - 257), 0, "257 bytes, no NUL: too long");
+    store8(edge - 1, 0);
+    assert_eq(tron_is_safe_identifier(edge - 257), 1, "256 bytes and a NUL: allowed");
+    return 0;
+}
+
+var _t_ran_read = 0;
+fn _t_read_handler(args, claims) { _t_ran_read = 1; return args; }
+
+fn test_gate_duplicate_name_refused() {
+    test_group("gate: a tools/call naming a key twice runs nothing");
+    var tron = tron_new(tron_config_default());
+    tron_load_policy(tron, "[agent.\"web-agent\"]\nallow = [\"file_*\"]\ndeny = [\"file_delete\"]\n");
+    var reg = tool_registry_new();
+    registry_register(reg, tool_def_new("file_read", "Read a file",
+        schema_new("object", vec_new(), vec_new())));
+    registry_register(reg, tool_def_new("file_delete", "Delete a file",
+        schema_new("object", vec_new(), vec_new())));
+    var d = dispatcher_new(reg);
+    dispatcher_handle(d, "file_read", &_t_read_handler);
+    dispatcher_handle(d, "file_delete", &_t_delete_handler);
+    var g = security_gate_new(tron, d);
+    _t_ran_read = 0;
+    _t_ran_delete = 0;
+    var r = req_new("1", "tools/call");
+    var resp = security_gate_dispatch(g,
+        req_with_params(r, "{\"name\":\"file_read\",\"name\":\"file_delete\",\"arguments\":{}}"), "web-agent");
+    assert_eq((resp_error_obj(resp) != 0), 1, "refused");
+    if (resp_error_obj(resp) == 0) { return 0; }
+    assert_eq(rpc_err_code(resp_error_obj(resp)), 0 - 32600, "an invalid request (bote >= 3.8.6)");
+    assert_eq(_t_ran_read + _t_ran_delete, 0, "no handler ran");
+    return 0;
+}
+
+#  A NUL-terminated run of n copies of byte c.
+fn _t_run(c, n) {
+    var b = alloc(n + 1);
+    memset(b, c, n);
+    store8(b + n, 0);
+    return b;
+}
+
+fn test_alloc_failure_fails_closed() {
+    test_group("alloc: a buffer that cannot be allocated fails closed");
+    var long = _t_run(97, 4000);
+    var toml = alloc(4100);
+    var off = 0;
+    memcpy(toml, "[agent.\"", 8); off = 8;
+    memcpy(toml + off, long, 4000); off = off + 4000;
+    memcpy(toml + off, "\"]\nallow = [\"x\"]\n", 17); off = off + 17;
+    store8(toml + off, 0);
+    var t = tron_new(tron_config_default());
+    tron_load_policy(t, "[agent.\"keep\"]\nallow = [\"x\"]\n");
+    var rl = rate_limiter_new();
+    var saved = ALLOC_MAX;
+    ALLOC_MAX = 3000;                      #  4000-byte buffers fail; small ones still succeed
+    var f1 = _policy_format_deny(long, "t");
+    var f2 = _tron_format_unknown_tool("t", long);
+    var f3 = _tron_format_injection(long);
+    var f4 = _tron_format_anomaly(long);
+    var rk = _rate_bucket_key(long, "t");
+    var rc = rate_limiter_check(rl, long, "t");
+    var rs = rate_limiter_set_rate(rl, long, 5);
+    var lp = tron_load_policy(t, toml);
+    var pp = tron_set_policy_path(tron_new(tron_config_default()), long);
+    var ev = security_event_new(1, 0, long, "t", VK_DENY, 0);
+    var sp = _signing_sig_path(long);
+    var dr = _sec_deny_response("1", long, DENY_UNAUTHORIZED);
+    ALLOC_MAX = saved;
+    assert_eq(streq(f1, "tool denied by policy"), 1, "policy reason falls back");
+    assert_eq(streq(f2, "tool not in policy"), 1, "unknown-tool reason falls back");
+    assert_eq(streq(f3, "injection detected"), 1, "injection reason falls back");
+    assert_eq(streq(f4, "anomalous pattern"), 1, "anomaly reason falls back");
+    assert_eq(rk, 0, "bucket key: 0");
+    assert_eq(rc, 0, "rate check denies");
+    assert_eq(rs, 0 - 1, "rate override refused");
+    assert_eq(lp, TRON_ERR_POLICY_CONFIG, "policy load refused");
+    var k, r = policy_check(tron_policy(t), "keep", "x");
+    assert_eq(k, PR_ALLOW, "old policy kept");
+    assert_eq(pp, TRON_ERR_IO, "policy path refused");
+    assert_eq(streq(security_event_agent_id(ev), "<unrecorded>"), 1, "audit event still logged");
+    assert_eq(sp, 0, "signature path: 0");
+    assert_eq(streq(rpc_err_message(resp_error_obj(dr)), "security: denied"), 1, "deny response falls back");
+    return 0;
+}
+
 fn main() {
     alloc_init();
     test_errors();
@@ -1872,6 +1968,9 @@ fn main() {
     test_rate_refill_bounded();
     test_rate_bucket_cap();
     test_policy_tool_refuses_comment_only();
+    test_identifier_scan_bounded();
+    test_gate_duplicate_name_refused();
+    test_alloc_failure_fails_closed();
     return assert_summary();
 }
 

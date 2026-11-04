@@ -130,3 +130,27 @@ repair changed what some rules mean:
 Still open: Unicode confusable mapping in the injection detector, idle
 rate-bucket eviction, and the `require_utf8` output check the Rust
 original had.
+
+## Amendment — 2.2.4
+
+Two of those three are done, and the engine fails closed on memory too:
+
+- **Lookalike letters fold to Latin.** `injection_normalize` maps 59
+  Cyrillic, Greek, Latin-extension and IPA letters that UTS #39's
+  confusables data pairs with one Latin letter, and the fullwidth Latin
+  letters, to ASCII before the phrase checks.
+- **`require_utf8` is real.** An output-validation rule with
+  `safety_rule_set_require_utf8(rule, 1)` blocks output that is not
+  well-formed UTF-8. The Rust flag never acted, since a `&str` is always
+  UTF-8. `SafetyRule` grows to 88 bytes (`require_utf8` at +80), default 0.
+- **A failed allocation blocks.** A helper that cannot build an
+  input-sized buffer returns a harmless value and counts the failure;
+  `safety_evaluate_rule`, both `safety_engine_check_*` and
+  `injection_detector_check` then return a Blocked verdict, "safety:
+  allocation failed", built with the engine (or an unsafe result,
+  pattern `allocation_failed`). The verdict is shared: callers must not
+  modify it.
+
+Still open: bounding the rate buckets. With an allocator that never
+frees, evicting idle buckets reclaims nothing; a cap does, and what a
+full table does is a policy decision.

@@ -119,7 +119,7 @@ fn _safety_detector_kind(name) {
 }
 
 #  ============================================================
-#  SafetyRule layout (80 bytes)
+#  SafetyRule layout (88 bytes)
 #  ============================================================
 #
 #  +0   rule_id        cstring
@@ -138,13 +138,16 @@ fn _safety_detector_kind(name) {
 #  +64  str2_param     cstring | 0   to_level (escalation)
 #  +72  action_filter  i64           ActionType the rule applies to, or
 #                                    SAFETY_ACTION_ANY (default)
+#  +80  require_utf8   i64           output validation: 1 = output that is
+#                                    not well-formed UTF-8 is Blocked
+#                                    (default 0)
 #
 #  A rule whose type needs str_param / str2_param and has none, or whose
 #  pattern / path list holds a null entry, is a configuration error and
 #  evaluates to Blocked whatever the policy's enforcement.
 
 fn safety_rule_new(rule_id, description, severity, rule_type) {
-    var r = alloc(80);
+    var r = alloc(88);
     store64(r,      rule_id);
     store64(r + 8,  description);
     store64(r + 16, severity);
@@ -155,6 +158,7 @@ fn safety_rule_new(rule_id, description, severity, rule_type) {
     store64(r + 56, 0);
     store64(r + 64, 0);
     store64(r + 72, SAFETY_ACTION_ANY);
+    store64(r + 80, 0);
     return r;
 }
 
@@ -168,6 +172,7 @@ fn safety_rule_vec(r)           { return load64(r + 48); }
 fn safety_rule_vec2(r)          { return load64(r + 56); }
 fn safety_rule_str2(r)          { return load64(r + 64); }
 fn safety_rule_action_filter(r) { return load64(r + 72); }
+fn safety_rule_require_utf8(r)  { return load64(r + 80); }
 
 fn safety_rule_set_str(r, s)            { store64(r + 32, s); return r; }
 fn safety_rule_set_int(r, i)            { store64(r + 40, i); return r; }
@@ -175,6 +180,7 @@ fn safety_rule_set_vec(r, v)            { store64(r + 48, v); return r; }
 fn safety_rule_set_vec2(r, v)           { store64(r + 56, v); return r; }
 fn safety_rule_set_str2(r, s)           { store64(r + 64, s); return r; }
 fn safety_rule_set_action_filter(r, at) { store64(r + 72, at); return r; }
+fn safety_rule_set_require_utf8(r, on)  { store64(r + 80, on); return r; }
 
 #  ============================================================
 #  SafetyPolicy layout (48 bytes)
@@ -413,17 +419,42 @@ fn _safety_log_blocked(v) {
 }
 
 #  ============================================================
+#  Allocation failure  --  fail closed
+#  ============================================================
+#
+#  A helper whose input-sized buffer cannot be allocated returns a
+#  harmless value ("", 0 or an empty token list) and counts the failure
+#  here. Each entry point (safety_evaluate_rule, safety_engine_check_*,
+#  injection_detector_check) compares the count before and after its
+#  work and, if it moved, returns the prebuilt "safety: allocation
+#  failed" Blocked verdict whatever the rules decided, so a buffer that
+#  could not be built never reads as a clean check. The verdict is built
+#  with the engine, before memory runs out; treat it as read-only.
+var _safety_alloc_failures = 0;
+var _safety_oom_verdict = 0;
+
+fn _safety_alloc(n) {
+    var p = alloc(n);
+    if (p == 0) { _safety_alloc_failures = _safety_alloc_failures + 1; }
+    return p;
+}
+
+fn _safety_oom_blocked() {
+    if (_safety_oom_verdict == 0) {
+        _safety_oom_verdict = _safety_blocked_hard("safety: allocation failed", "safety-engine");
+    }
+    return _safety_oom_verdict;
+}
+
+#  ============================================================
 #  PromptInjectionDetector  --  heuristic substring checks
 #  ============================================================
 #
 #  Input is normalised (injection_normalize) before matching, so
 #  invisible format characters and whitespace variants cannot split a
-#  phrase. Result carries a basis-point confidence (0..=1000) and a
-#  cstring-list of matched pattern labels.
-#
-#  DEFERRED: Unicode confusables are not folded -- a Cyrillic U+043E in
-#  place of Latin `o` ("ignоre previous instructions") still slips
-#  past the phrase checks.
+#  phrase, and a Cyrillic, Greek or fullwidth letter cannot stand in for
+#  the Latin one it looks like. Result carries a basis-point confidence
+#  (0..=1000) and a cstring-list of matched pattern labels.
 
 #  Max bytes between verb -> qualifier -> object in the windowed
 #  "ignore previous instructions" matcher.
@@ -435,7 +466,8 @@ var SAFETY_INJ_WINDOW = 40;
 #    +16  detected        vec<cstring>
 
 fn injection_result_new(safe, confidence_bp, detected) {
-    var r = alloc(24);
+    var r = _safety_alloc(24);
+    if (r == 0) { return 0; }
     store64(r,      safe);
     store64(r + 8,  confidence_bp);
     store64(r + 16, detected);
@@ -502,19 +534,107 @@ fn _safety_inj_space_len(s, i, n) {
     return 0;
 }
 
+#  Confusable letters, folded to the Latin letter each imitates. The
+#  pairs are UTS #39's confusables data for U+0100..U+053F (Latin
+#  extensions, IPA, Greek, Cyrillic) where the prototype is one ASCII
+#  letter; a lookalike of I or l maps to the letter it stands in for.
+#  The table is indexed by the two UTF-8 bytes (lead 0xC4..0xD4), built
+#  on first use; 0 = no fold.
+var _safety_conf_tab = 0;
+var SAFETY_CONF_LEAD0 = 0xC4;
+var SAFETY_CONF_SIZE  = 1088;           #  17 lead bytes x 64
+
+fn _safety_conf_put(t, cp, ch) {
+    store8(t + ((0xC0 | (cp >> 6)) - SAFETY_CONF_LEAD0) * 64 + (cp & 0x3F), ch);
+    return 0;
+}
+
+fn _safety_conf_build() {
+    var t = _safety_alloc(SAFETY_CONF_SIZE);
+    if (t == 0) { return 0; }
+    memset(t, 0, SAFETY_CONF_SIZE);
+    #  Latin extensions and IPA
+    _safety_conf_put(t, 0x0131, 105);   #  ı dotless i
+    _safety_conf_put(t, 0x01C0, 108);   #  ǀ dental click
+    _safety_conf_put(t, 0x0251, 97);    #  ɑ alpha
+    _safety_conf_put(t, 0x0261, 103);   #  ɡ script g
+    _safety_conf_put(t, 0x0269, 105);   #  ɩ iota
+    #  Greek capitals
+    _safety_conf_put(t, 0x0391, 65);  _safety_conf_put(t, 0x0392, 66);
+    _safety_conf_put(t, 0x0395, 69);  _safety_conf_put(t, 0x0396, 90);
+    _safety_conf_put(t, 0x0397, 72);  _safety_conf_put(t, 0x0399, 73);
+    _safety_conf_put(t, 0x039A, 75);  _safety_conf_put(t, 0x039C, 77);
+    _safety_conf_put(t, 0x039D, 78);  _safety_conf_put(t, 0x039F, 79);
+    _safety_conf_put(t, 0x03A1, 80);  _safety_conf_put(t, 0x03A4, 84);
+    _safety_conf_put(t, 0x03A5, 89);  _safety_conf_put(t, 0x03A7, 88);
+    _safety_conf_put(t, 0x03F9, 67);    #  Ϲ lunate sigma
+    #  Greek small
+    _safety_conf_put(t, 0x03B1, 97);  _safety_conf_put(t, 0x03B9, 105);
+    _safety_conf_put(t, 0x03BD, 118); _safety_conf_put(t, 0x03BF, 111);
+    _safety_conf_put(t, 0x03C1, 112); _safety_conf_put(t, 0x03C5, 117);
+    _safety_conf_put(t, 0x03F2, 99);  _safety_conf_put(t, 0x03F3, 106);
+    #  Cyrillic capitals
+    _safety_conf_put(t, 0x0405, 83);  _safety_conf_put(t, 0x0406, 73);
+    _safety_conf_put(t, 0x0408, 74);  _safety_conf_put(t, 0x0410, 65);
+    _safety_conf_put(t, 0x0412, 66);  _safety_conf_put(t, 0x0415, 69);
+    _safety_conf_put(t, 0x041A, 75);  _safety_conf_put(t, 0x041C, 77);
+    _safety_conf_put(t, 0x041D, 72);  _safety_conf_put(t, 0x041E, 79);
+    _safety_conf_put(t, 0x0420, 80);  _safety_conf_put(t, 0x0421, 67);
+    _safety_conf_put(t, 0x0422, 84);  _safety_conf_put(t, 0x0425, 88);
+    _safety_conf_put(t, 0x04AE, 89);  _safety_conf_put(t, 0x04C0, 108);
+    #  Cyrillic small
+    _safety_conf_put(t, 0x0430, 97);  _safety_conf_put(t, 0x0435, 101);
+    _safety_conf_put(t, 0x043E, 111); _safety_conf_put(t, 0x0440, 112);
+    _safety_conf_put(t, 0x0441, 99);  _safety_conf_put(t, 0x0443, 121);
+    _safety_conf_put(t, 0x0445, 120); _safety_conf_put(t, 0x0455, 115);
+    _safety_conf_put(t, 0x0456, 105); _safety_conf_put(t, 0x0458, 106);
+    _safety_conf_put(t, 0x04BB, 104); _safety_conf_put(t, 0x04CF, 108);
+    _safety_conf_put(t, 0x0501, 100); _safety_conf_put(t, 0x051B, 113);
+    _safety_conf_put(t, 0x051D, 119);
+    _safety_conf_tab = t;
+    return t;
+}
+
+#  (byte length, ASCII letter) of the confusable at s+i, or (0, 0):
+#  a letter from the table above, or a fullwidth Latin letter
+#  (U+FF21..U+FF3A, U+FF41..U+FF5A, which NFKC maps to ASCII).
+fn _safety_inj_confusable(s, i, n) {
+    var c = load8(s + i) & 0xFF;
+    if (c < SAFETY_CONF_LEAD0) { return (0, 0); }
+    if (i + 1 >= n) { return (0, 0); }
+    var c2 = load8(s + i + 1) & 0xFF;
+    if (c <= 0xD4) {
+        if (c2 < 0x80 || c2 > 0xBF) { return (0, 0); }
+        var t = _safety_conf_tab;
+        if (t == 0) { t = _safety_conf_build(); }
+        if (t == 0) { return (0, 0); }
+        var ch = load8(t + (c - SAFETY_CONF_LEAD0) * 64 + (c2 - 0x80)) & 0xFF;
+        if (ch == 0) { return (0, 0); }
+        return (2, ch);
+    }
+    if (c == 0xEF && i + 2 < n) {
+        var c3 = load8(s + i + 2) & 0xFF;
+        if (c2 == 0xBC && c3 >= 0xA1 && c3 <= 0xBA) { return (3, c3 - 0xA1 + 65); }
+        if (c2 == 0xBD && c3 >= 0x81 && c3 <= 0x9A) { return (3, c3 - 0x81 + 97); }
+    }
+    return (0, 0);
+}
+
 #  Normalise for matching (byte-level UTF-8):
 #    * drop invisible format characters -- U+00AD, U+034F, U+180E,
 #      U+200B..U+200F, U+202A..U+202E, U+2060..U+2064, U+2066..U+2069,
 #      U+FE00..U+FE0F, U+FEFF and the tag block U+E0000..U+E007F;
 #    * map whitespace -- ASCII TAB/LF/VT/FF/CR/SP, U+00A0,
 #      U+2000..U+200A, U+2028, U+2029, U+202F, U+205F, U+3000 -- to a
-#      space, collapsing each run to one space.
+#      space, collapsing each run to one space;
+#    * fold confusable letters to ASCII (_safety_inj_confusable).
 #  Visible punctuation (U+2010..U+2027: dashes, curly quotes) is kept.
 #  Any other byte, including a truncated sequence, is copied as is.
 fn injection_normalize(input) {
     if (input == 0) { input = ""; }
     var n = strlen(input);
-    var out = alloc(n + 1);
+    var out = _safety_alloc(n + 1);
+    if (out == 0) { return ""; }
     var j = 0;
     var i = 0;
     var in_space = 0;
@@ -528,7 +648,12 @@ fn injection_normalize(input) {
                 if (in_space == 0) { store8(out + j, 32); j = j + 1; in_space = 1; }
                 i = i + k;
             } else {
-                store8(out + j, load8(input + i)); j = j + 1; in_space = 0; i = i + 1;
+                var fk, fc = _safety_inj_confusable(input, i, n);
+                if (fk > 0) {
+                    store8(out + j, fc); j = j + 1; in_space = 0; i = i + fk;
+                } else {
+                    store8(out + j, load8(input + i)); j = j + 1; in_space = 0; i = i + 1;
+                }
             }
         }
     }
@@ -764,7 +889,7 @@ fn _safety_check_delimiter(s) {
 
 #  Run all six patterns; return InjectionResult ptr. A null input is
 #  unsafe (pattern "null_input", full confidence).
-fn injection_detector_check(input) {
+fn _safety_injection_scan(input) {
     var patterns = vec_new();
     if (input == 0) {
         vec_push(patterns, "null_input");
@@ -790,6 +915,28 @@ fn injection_detector_check(input) {
         if (conf_bp > 1000) { conf_bp = 1000; }
     }
     return injection_result_new(safe, conf_bp, patterns);
+}
+
+#  Unsafe, full confidence, pattern "allocation_failed": what the
+#  detector returns when a buffer could not be allocated. Built on the
+#  first check, before the scan; treat it as read-only.
+var _safety_oom_injection = 0;
+
+fn _safety_oom_injection_result() {
+    if (_safety_oom_injection == 0) {
+        var pats = vec_new();
+        vec_push(pats, "allocation_failed");
+        _safety_oom_injection = injection_result_new(0, 1000, pats);
+    }
+    return _safety_oom_injection;
+}
+
+fn injection_detector_check(input) {
+    var oom = _safety_oom_injection_result();
+    var before = _safety_alloc_failures;
+    var r = _safety_injection_scan(input);
+    if (_safety_alloc_failures != before) { return oom; }
+    return r;
 }
 
 #  ============================================================
@@ -954,6 +1101,7 @@ fn safety_circuit_breaker_reset(b) {
 #                        with the number of distinct (agent, rule) pairs.
 
 fn safety_engine_new() {
+    _safety_oom_blocked();
     var e = alloc(24);
     store64(e,      vec_new());
     store64(e + 8,  vec_new());
@@ -1045,9 +1193,11 @@ fn _safety_rate_key_write(buf, agent_id, rule) {
     return off;
 }
 
-#  Owned copy of the bucket key for (agent, rule).
+#  Owned copy of the bucket key for (agent, rule); 0 when it cannot be
+#  allocated.
 fn _safety_rate_key(agent_id, rule) {
-    var buf = alloc(_safety_rate_key_bound(agent_id, rule));
+    var buf = _safety_alloc(_safety_rate_key_bound(agent_id, rule));
+    if (buf == 0) { return 0; }
     _safety_rate_key_write(buf, agent_id, rule);
     return buf;
 }
@@ -1064,12 +1214,17 @@ fn _safety_rate_admit(e, agent_id, rule) {
     var m = load64(e + 16);
     var key = &kb;
     var bound = _safety_rate_key_bound(agent_id, rule);
-    if (bound > 256) { key = alloc(bound); }
+    if (bound > 256) {
+        key = _safety_alloc(bound);
+        if (key == 0) { return 0; }
+    }
     var klen = _safety_rate_key_write(key, agent_id, rule);
     var bucket = map_get(m, key);
     if (bucket == 0) {
+        var owned = _safety_dup_n(key, klen);
+        if (owned == 0) { return 0; }
         bucket = vec_new();
-        map_set(m, _safety_dup_n(key, klen), bucket);
+        map_set(m, owned, bucket);
     }
     var now = clock_now_ns();
     var n = _safety_prune_ts(bucket, now - 60000000000);
@@ -1096,7 +1251,8 @@ fn _safety_path_norm(p) {
     if (p == 0) { return 0; }
     var n = strlen(p);
     if (n == 0 || load8(p) != 47) { return 0; }
-    var out = alloc(n + 2);
+    var out = _safety_alloc(n + 2);
+    if (out == 0) { return 0; }
     store8(out, 47);
     var olen = 1;
     var i = 0;
@@ -1327,8 +1483,9 @@ fn _safety_ifs_len(s, i, n) {
 #  Tokens live in one buffer sized from the input.
 fn _safety_cmd_tokens(s, braces) {
     var n = strlen(s);
-    var buf = alloc(n + 2);
+    var buf = _safety_alloc(n + 2);
     var toks = vec_new();
+    if (buf == 0) { return toks; }
     var j = 0;
     var start = 0 - 1;
     var i = 0;
@@ -1576,7 +1733,8 @@ fn _safety_detect_cmd(s, kind) {
 #  target + " " + every non-null parameter value (`total` = their
 #  summed lengths plus separators).
 fn _safety_join_values(target, vals, total) {
-    var buf = alloc(total + 1);
+    var buf = _safety_alloc(total + 1);
+    if (buf == 0) { return ""; }
     var tl = strlen(target);
     memcpy(buf, target, tl);
     var off = tl;
@@ -1627,7 +1785,8 @@ fn _safety_destructive_action(action, kind) {
 #  so `rm  -rf  '/'` reads as `rm -rf /`. Applied to the pattern too.
 fn _safety_squash(s) {
     var n = strlen(s);
-    var out = alloc(n + 1);
+    var out = _safety_alloc(n + 1);
+    if (out == 0) { return ""; }
     var j = 0;
     var sp = 0;
     var i = 0;
@@ -1745,7 +1904,7 @@ fn _safety_ci_eq_trim(a, b) {
 
 #  Evaluate a single rule against an action; returns verdict ptr or 0 if
 #  the rule did not trigger.
-fn safety_evaluate_rule(e, agent_id, action, rule) {
+fn _safety_evaluate_rule_body(e, agent_id, action, rule) {
     if (rule == 0) { return _safety_blocked_hard("Null safety rule", "safety-engine"); }
     var rid = safety_rule_id(rule);
     if (action == 0) { return _safety_blocked_hard("Null safety action", rid); }
@@ -1855,6 +2014,14 @@ fn safety_evaluate_rule(e, agent_id, action, rule) {
     return _safety_blocked_hard("Unknown safety rule type", rid);
 }
 
+#  Fails closed on an allocation failure (see "Allocation failure").
+fn safety_evaluate_rule(e, agent_id, action, rule) {
+    var before = _safety_alloc_failures;
+    var v = _safety_evaluate_rule_body(e, agent_id, action, rule);
+    if (_safety_alloc_failures != before) { return _safety_log_blocked(_safety_oom_blocked()); }
+    return v;
+}
+
 #  Apply the policy's enforcement to a triggered rule's verdict:
 #  SE_WARN turns it into a Warning (0 when a Warning or stronger already
 #  stands), SE_AUDIT_ONLY drops it after logging, anything else --
@@ -1879,7 +2046,7 @@ fn _safety_enforce(policy, rule, v, best_rank) {
 #  > RateLimited > Warning; the first at a given strength wins. Blocked
 #  returns at once. No enabled policy, or a null agent id / action /
 #  target, is Blocked.
-fn safety_engine_check_action(e, agent_id, action) {
+fn _safety_check_action_body(e, agent_id, action) {
     if (agent_id == 0 || action == 0) {
         return _safety_log_blocked(_safety_blocked_hard("Null agent id or action", "safety-engine"));
     }
@@ -1920,6 +2087,50 @@ fn safety_engine_check_action(e, agent_id, action) {
     return safety_verdict_allowed();
 }
 
+#  Fails closed on an allocation failure (see "Allocation failure").
+fn safety_engine_check_action(e, agent_id, action) {
+    var before = _safety_alloc_failures;
+    var v = _safety_check_action_body(e, agent_id, action);
+    if (_safety_alloc_failures != before) { return _safety_log_blocked(_safety_oom_blocked()); }
+    return v;
+}
+
+#  1 if s[0..n) is well-formed UTF-8, else 0: the byte sequences of the
+#  Unicode Standard's Table 3-7, so no overlong form, no surrogate
+#  (U+D800..U+DFFF), nothing past U+10FFFF and no truncated sequence.
+fn _safety_utf8_valid(s, n) {
+    var i = 0;
+    while (i < n) {
+        var c = load8(s + i) & 0xFF;
+        if (c < 0x80) { i = i + 1; }
+        else {
+            var k = 0;                      #  continuation bytes that follow
+            var lo = 0x80;                  #  range of the second byte
+            var hi = 0xBF;
+            if (c >= 0xC2 && c <= 0xDF)      { k = 1; }
+            elif (c == 0xE0)                 { k = 2; lo = 0xA0; }
+            elif (c >= 0xE1 && c <= 0xEC)    { k = 2; }
+            elif (c == 0xED)                 { k = 2; hi = 0x9F; }
+            elif (c >= 0xEE && c <= 0xEF)    { k = 2; }
+            elif (c == 0xF0)                 { k = 3; lo = 0x90; }
+            elif (c >= 0xF1 && c <= 0xF3)    { k = 3; }
+            elif (c == 0xF4)                 { k = 3; hi = 0x8F; }
+            else { return 0; }              #  0x80..0xC1, 0xF5..0xFF never lead
+            if (i + k >= n) { return 0; }
+            var c2 = load8(s + i + 1) & 0xFF;
+            if (c2 < lo || c2 > hi) { return 0; }
+            var j = 2;
+            while (j <= k) {
+                var cj = load8(s + i + j) & 0xFF;
+                if (cj < 0x80 || cj > 0xBF) { return 0; }
+                j = j + 1;
+            }
+            i = i + k + 1;
+        }
+    }
+    return 1;
+}
+
 #  One rule against output text; returns verdict ptr or 0. Rules of
 #  the action-only types do not apply; an unknown type is Blocked.
 fn _safety_output_rule(rule, output, olen) {
@@ -1942,6 +2153,7 @@ fn _safety_output_rule(rule, output, olen) {
     }
     elif (rt == SRT_OUTPUT_VALIDATION) {
         if (olen > safety_rule_int(rule)) { triggered = 1; }
+        elif (safety_rule_require_utf8(rule) != 0 && _safety_utf8_valid(output, olen) == 0) { triggered = 1; }
     }
     if (triggered == 1) {
         var reason = _safety_concat("Output violates rule: ", safety_rule_description(rule));
@@ -1953,7 +2165,7 @@ fn _safety_output_rule(rule, output, olen) {
 #  Check output (text) against content-filter + output-validation
 #  rules, with the same priority order, strongest-verdict selection and
 #  fail-closed cases as safety_engine_check_action.
-fn safety_engine_check_output(e, agent_id, output) {
+fn _safety_check_output_body(e, agent_id, output) {
     if (output == 0) {
         return _safety_log_blocked(_safety_blocked_hard("Null output", "safety-engine"));
     }
@@ -1990,6 +2202,14 @@ fn safety_engine_check_output(e, agent_id, output) {
     }
     if (best != 0) { return best; }
     return safety_verdict_allowed();
+}
+
+#  Fails closed on an allocation failure (see "Allocation failure").
+fn safety_engine_check_output(e, agent_id, output) {
+    var before = _safety_alloc_failures;
+    var v = _safety_check_output_body(e, agent_id, output);
+    if (_safety_alloc_failures != before) { return _safety_log_blocked(_safety_oom_blocked()); }
+    return v;
 }
 
 fn safety_engine_record_violation(e, v) {
@@ -2062,9 +2282,10 @@ fn _starts_with_cstr(s, prefix) {
     return memeq(s, prefix, pn);
 }
 
-#  Owned copy of the first n bytes of s.
+#  Owned copy of the first n bytes of s; 0 when it cannot be allocated.
 fn _safety_dup_n(s, n) {
-    var out = alloc(n + 1);
+    var out = _safety_alloc(n + 1);
+    if (out == 0) { return 0; }
     memcpy(out, s, n);
     store8(out + n, 0);
     return out;
@@ -2075,7 +2296,8 @@ fn _safety_concat(prefix, suffix) {
     var s = _safety_s(suffix);
     var pn = strlen(p);
     var sn = strlen(s);
-    var buf = alloc(pn + sn + 1);
+    var buf = _safety_alloc(pn + sn + 1);
+    if (buf == 0) { return p; }
     memcpy(buf, p, pn);
     memcpy(buf + pn, s, sn);
     store8(buf + pn + sn, 0);
@@ -2087,7 +2309,8 @@ fn _safety_format_warn(rule_id, description) {
     var desc = _safety_s(description);
     var idn = strlen(id);
     var dn  = strlen(desc);
-    var buf = alloc(idn + dn + 32);
+    var buf = _safety_alloc(idn + dn + 32);
+    if (buf == 0) { return "Rule triggered (warn)"; }
     var off = 0;
     memcpy(buf + off, "Rule ", 5); off = off + 5;
     memcpy(buf + off, id, idn); off = off + idn;
@@ -2102,7 +2325,8 @@ fn _safety_format_escalation(from_level, to_level) {
     var t = _safety_s(to_level);
     var fn_ = strlen(f);
     var tn  = strlen(t);
-    var buf = alloc(fn_ + tn + 64);
+    var buf = _safety_alloc(fn_ + tn + 64);
+    if (buf == 0) { return "Privilege escalation requires approval"; }
     var off = 0;
     memcpy(buf + off, "Privilege escalation from ", 26); off = off + 26;
     memcpy(buf + off, f, fn_); off = off + fn_;
@@ -2117,7 +2341,8 @@ fn _safety_format_resource(resource, val, max_val) {
     var nb[24];
     var mb[24];
     var rn = strlen(resource);
-    var buf = alloc(rn + 96);
+    var buf = _safety_alloc(rn + 96);
+    if (buf == 0) { return "Resource limit exceeded"; }
     var off = 0;
     memcpy(buf + off, "Resource ", 9); off = off + 9;
     memcpy(buf + off, resource, rn); off = off + rn;

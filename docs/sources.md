@@ -56,6 +56,28 @@ and cryptographic modules; keep it current as specifications evolve.
   JSON value t-ron writes.
   <https://datatracker.ietf.org/doc/html/rfc8259#section-7>
 
+## Unicode
+
+- **Well-formed UTF-8** — the Unicode Standard, §3.9, Table 3-7
+  ("Well-Formed UTF-8 Byte Sequences"), which matches RFC 3629 §4: no
+  overlong form, no surrogate (U+D800..U+DFFF), nothing past U+10FFFF.
+  `_safety_utf8_valid` in `src/safety.cyr` implements the table for
+  `require_utf8` output validation (`test_output_validation`).
+  <https://www.unicode.org/versions/latest/core-spec/chapter-3/#G31703>,
+  <https://datatracker.ietf.org/doc/html/rfc3629#section-4>
+- **Confusable letters** — UTS #39 (Unicode Security Mechanisms) §4 and
+  its `confusables.txt` data. The safety injection detector folds the
+  Cyrillic, Greek, Latin-extension and IPA letters in U+0100..U+053F that
+  the data pairs with a single Latin letter, mapping each to the letter
+  it imitates rather than to the skeleton prototype (which turns `I`
+  into `l`). The table is `_safety_conf_build`
+  (`test_injection_confusables`).
+  <https://www.unicode.org/reports/tr39/>
+- **Fullwidth Latin letters** — UAX #15 (Unicode Normalization Forms):
+  NFKC maps U+FF21..U+FF3A and U+FF41..U+FF5A to ASCII `A`..`Z` and
+  `a`..`z`, which the same fold applies.
+  <https://www.unicode.org/reports/tr15/>
+
 ## Attack classes (security audit)
 
 Every finding in `docs/audit/2026-04-14.md` cites the real-world

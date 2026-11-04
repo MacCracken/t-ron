@@ -1,6 +1,6 @@
 # Testing Guide
 
-**Current for t-ron 2.2.3** (cyrius 6.7.18).
+**Current for t-ron 2.2.4** (cyrius 6.7.18).
 
 > ⚠️ **Rewritten at 2.1.9.** Every prior revision of this file was the
 > **Rust-era** guide — `cargo test`, `make clippy`, `serde` round-trips,
@@ -15,20 +15,20 @@
 Four suites, run separately:
 
 ```sh
-cyrius test tests/t-ron.tcyr          # 386 assertions — core pipeline
+cyrius test tests/t-ron.tcyr          # 407 assertions — core pipeline
 cyrius test tests/t-ron-crypto.tcyr   #  64 assertions — signing, signal, crypto, export
-cyrius test tests/t-ron-safety.tcyr   # 205 assertions — AGNOS safety engine
+cyrius test tests/t-ron-safety.tcyr   # 239 assertions — AGNOS safety engine
 cyrius test tests/t-ron-detect.tcyr   # 192 assertions — scanner, pattern, correlation, LLM scan
 ```
 
-**847 assertions total** (386 + 64 + 205 + 192) across 225 groups. That total
+**902 assertions total** (407 + 64 + 239 + 192) across 231 groups. That total
 is the **floor**, per `CLAUDE.md`: a change may raise it, never lower
 it. Coverage target is 80 %.
 
 Benchmarks are a separate harness:
 
 ```sh
-cyrius bench tests/t-ron.bcyr         # 5 pipeline benchmarks
+cyrius bench tests/t-ron.bcyr         # 6 benchmarks: the pipeline and the safety injection check
 ./scripts/bench-history.sh            # same, and appends to bench-history.csv
 ```
 
@@ -36,14 +36,31 @@ cyrius bench tests/t-ron.bcyr         # 5 pipeline benchmarks
 
 | Suite | Groups | Assertions | Covers |
 |---|---:|---:|---|
-| `tests/t-ron.tcyr` | 127 | 386 | error codes, gate verdicts, policy engine and strict loader, rate limiter, scanner, pattern analyzer, audit ring buffer + libro chain, risk scoring, query API, correlation, middleware, MCP tool definitions and results |
+| `tests/t-ron.tcyr` | 130 | 407 | error codes, gate verdicts and the bounded identifier check, policy engine and strict loader, rate limiter, scanner, pattern analyzer, audit ring buffer + libro chain, risk scoring, query API, correlation, middleware (including a key named twice), MCP tool definitions and results, allocation failure |
 | `tests/t-ron-crypto.tcyr` | 20 | 64 | SIGHUP signalfd reload, ChaCha20, Ed25519 policy signing and signed mode, encrypted audit export round-trip, tamper rejection, escaping and sizing |
-| `tests/t-ron-safety.tcyr` | 40 | 205 | safety policies, severity, enforcement, rule types and destructive-command detectors, scope normalisation, circuit breaker, injection detector |
+| `tests/t-ron-safety.tcyr` | 43 | 239 | safety policies, severity, enforcement, rule types and destructive-command detectors, scope normalisation, circuit breaker, injection detector and lookalike folding, output validation, allocation failure |
 | `tests/t-ron-detect.tcyr` | 38 | 192 | scanner decoding and evasions, scanner DoS bounds, pattern hours, correlation, LLM-scan parsing and transport |
 
 Since 2.2.3 every regression test for a security fix is checked against
 the code before the fix: it must fail there, or the old code must crash.
 A test that passes on both is a "stays clean" guard and is named as one.
+
+## Testing failure paths
+
+Three techniques the suites use, each so the old code fails visibly:
+
+- **An allocation that fails.** `alloc` refuses any size above the
+  stdlib global `ALLOC_MAX`. Lower it below the buffer under test but
+  above the small fixed allocations around it (the suites use 3,000
+  bytes against a 4,000-byte input), make the call, then restore it.
+  Setting it to 0 fails every allocation, including the stdlib's own.
+- **A read past the end.** Map two pages with `mmap_anon`, make the
+  second unreadable with `cyr_mprotect(…, PROT_NONE)`, and place the
+  input against the boundary. Code that reads too far faults.
+- **A dependency's behaviour.** `cyrius test` re-vendors `lib/` from the
+  lock, so a hand-swapped bundle is overwritten. To run a test against
+  another dep version, use a copy whose `cyrius.cyml` and `cyrius.lock`
+  pin it.
 
 ## Writing tests
 

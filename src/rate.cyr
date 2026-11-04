@@ -144,6 +144,7 @@ fn _rate_bucket_key(agent_id, tool_name) {
     var alen = strlen(agent_id);
     var tlen = strlen(tool_name);
     var key  = alloc(alen + 1 + tlen + 1);
+    if (key == 0) { return 0; }
     memcpy(key, agent_id, alen);
     store8(key + alen, 0x1f);
     memcpy(key + alen + 1, tool_name, tlen);
@@ -184,13 +185,17 @@ fn rate_limiter_check(r, agent_id, tool_name) {
         b = map_get(buckets, &kb);
     }
     else {
-        b = map_get(buckets, _rate_bucket_key(agent_id, tool_name));
+        var hk = _rate_bucket_key(agent_id, tool_name);
+        if (hk == 0) { return 0; }
+        b = map_get(buckets, hk);
     }
     if (b == 0) {
         if (map_count(buckets) >= RATE_MAX_BUCKETS) { return 0; }
+        var nk = _rate_bucket_key(agent_id, tool_name);
+        if (nk == 0) { return 0; }
         b = bucket_new(_rate_effective_cpm(r, agent_id));
         if (b == 0) { return 0; }
-        map_set(buckets, _rate_bucket_key(agent_id, tool_name), b);
+        map_set(buckets, nk, b);
     }
     return bucket_try_consume(b);
 }
@@ -214,12 +219,14 @@ fn rate_limiter_clear_rates(r) {
 
 #  Set the rate limit for a specific agent (cpm).
 #  Applies immediately to existing buckets and is stored so future
-#  buckets for this agent also use the new rate.
+#  buckets for this agent also use the new rate. Returns 0, or -1 with
+#  nothing changed when the override's key cannot be allocated.
 fn rate_limiter_set_rate(r, agent_id, cpm) {
     #  Store per-agent override (copy into owned cstring so the hashmap
     #  keeps its own reference independent of caller lifetime).
     var alen = strlen(agent_id);
     var owned = alloc(alen + 1);
+    if (owned == 0) { return 0 - 1; }
     memcpy(owned, agent_id, alen);
     store8(owned + alen, 0);
     map_set(load64(r + 16), owned, cpm);

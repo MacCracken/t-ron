@@ -1,12 +1,12 @@
 # Integration Guide
 
 Step-by-step walkthrough for embedding t-ron in a bote-based MCP
-service. **Current for t-ron 2.2.3** (cyrius 6.7.18 · libro 2.11.3 ·
-bote-core 3.8.1 · sigil 3.13.15).
+service. **Current for t-ron 2.2.4** (cyrius 6.7.18 · libro 2.11.3 ·
+bote-core 3.8.9 · sigil 3.13.15).
 
 > **Every sample in this guide is verified.** §1–§2 and the §3–§7
 > program were built against `dist/t-ron.cyr` in a clean-room project
-> declaring only `[deps.t-ron]`, and run, at 2.2.3 on cyrius 6.7.18,
+> declaring only `[deps.t-ron]`, and run, at 2.2.4 on cyrius 6.7.18,
 > before being written down. The outputs quoted in §4 and §7 are that
 > run's.
 
@@ -28,7 +28,7 @@ output = "build/your-service"
 
 [deps.t-ron]
 git = "https://github.com/MacCracken/t-ron.git"
-tag = "2.2.3"
+tag = "2.2.4"
 modules = ["dist/t-ron.cyr"]
 ```
 

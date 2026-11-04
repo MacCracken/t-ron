@@ -6,7 +6,7 @@ type: state
 
 # Documentation Health — t-ron
 
-> **Last refresh**: 2026-11-03 (2.2.3 release — the P(-1) sweep; [audit report](audit/2026-11-03.md)). The documentation audit (P(-1) step 9) ran over every doc: `architecture/overview.md` and `development/threat-model.md` were rewritten from `src/` (both still described the Rust port), the integration guide's §3–§7 were rewritten as one program built and run as a clean-room consumer, three ADRs gained amendments, and `sources.md` and `benchmarks-rust-v-cyrius.md` were brought current. No doc is stale or outstanding after this pass. | **Refresh cadence**: when docs are touched, update the affected row.
+> **Last refresh**: 2026-11-04 (2.2.4 release — bote-core 3.8.9 and four audit follow-ups). Every doc that names a version, a pin, a count or a behaviour 2.2.4 changed was updated; the integration guide's program, its §2 snippet and the four examples were rebuilt and re-run against the new code. The 2.2.3 pass's rewrites (overview, threat model, integration §3–§7) still hold. No doc is stale or outstanding. | **Refresh cadence**: when docs are touched, update the affected row.
 > **Scope**: This repo only (`t-ron`) — root-level files (README, CHANGELOG, CLAUDE.md, etc.) plus the entire `docs/` tree. Cross-repo dep pin drift lives in CHANGELOG entries and the [roadmap](development/roadmap.md), not here.
 
 This is a **ledger**, not a one-time audit. Rewrite-in-place as
@@ -50,7 +50,7 @@ examples now are — see Tier 7.
 
 | Bucket | Count | What it means |
 |---|---|---|
-| ✅ **Fresh — verified in the 2.2.3 pass** | 21 | CHANGELOG, README, CLAUDE.md, DEPS-PATTERN.md, CONTRIBUTING, roadmap, threat model, overview, doc-health (this file), integration and testing guides, examples/README, sources, benchmarks-rust-v-cyrius, 6 ADRs, the new audit report — plus all 4 `.cyr` examples, **built + run on 6.7.18** |
+| ✅ **Fresh — verified in the 2.2.3 pass, refreshed at 2.2.4** | 21 | CHANGELOG, README, CLAUDE.md, DEPS-PATTERN.md, CONTRIBUTING, roadmap, threat model, overview, doc-health (this file), integration and testing guides, examples/README, sources, benchmarks-rust-v-cyrius, 6 ADRs, the new audit report — plus all 4 `.cyr` examples, **built + run on 6.7.18 / bote-core 3.8.9** |
 | 🔵 **No version-tied claims** | 3 | `SECURITY.md`, `CODE_OF_CONDUCT.md`, `LICENSE` |
 | 📦 **Date-stamped historical record** | 1 | `docs/audit/2026-04-14.md` |
 ---
@@ -59,14 +59,14 @@ examples now are — see Tier 7.
 
 | File | Last touched | Status | Notes |
 |---|---|---|---|
-| `README.md` | 2026-11-03 | ✅ Fresh | **2.2.3**: badge, headline (the audit and its upgrade note), Rust-vs-Cyrius column (684 KB / 222 ns / 17.3 µs; `src/` 6 862 lines), the four suites with their counts, benchmark table (scanner −89 % / −68 %), roadmap highlights → 2.2.4 next. Earlier passes: see the CHANGELOG entries |
-| `CHANGELOG.md` | 2026-11-03 | ✅ Fresh | 2.2.3 entry: the three criticals and the high items, every behaviour change callers will see, hygiene (CI gates, new suite, double lookups, `fs`, raw syscalls), the doc rewrites, performance with attribution, verification, and the deferred list; points at the audit report for the full table |
-| `CLAUDE.md` | 2026-11-03 | ✅ Fresh | 2.2.3: pin and re-verified lines → 2.2.3; the P(-1) test sweep names the fourth suite; assertion floor 426 → **847 (386 + 64 + 205 + 192)** |
-| `CONTRIBUTING.md` | 2026-11-03 | ✅ Fresh | 2.2.3: pin line; the command table and pre-PR list name all four suites with their counts |
+| `README.md` | 2026-11-04 | ✅ Fresh | **2.2.4**: badge, a 2.2.4 headline above the 2.2.3 audit note (kept: it carries the upgrade advice), roadmap highlight, bote tag 3.8.9 in the reference table, and the Benchmarks table from the 2.2.4 `bench-history.csv` row. The Rust-vs-Cyrius column stays 2.2.3's, labelled as measured on 2026-11-03 |
+| `CHANGELOG.md` | 2026-11-04 | ✅ Fresh | 2.2.4 entry: bote-core 3.8.9 and what its duplicate-key refusal means for the gate, P12 / C14 / S11 / S15, behaviour callers will see, the mutation results, the A/B table under load, and what stays open |
+| `CLAUDE.md` | 2026-11-04 | ✅ Fresh | 2.2.4: pin and re-verified lines → 2.2.4; assertion floor **902** (407 + 64 + 239 + 192) |
+| `CONTRIBUTING.md` | 2026-11-04 | ✅ Fresh | 2.2.4: pin line; the command table's per-suite counts (407 and 239 changed) |
 | `SECURITY.md` | 2026-04-14 | 🔵 No version-tied claims | Reporting policy + scope |
 | `CODE_OF_CONDUCT.md` | 2026-04-14 | 🔵 No version-tied claims | Standard |
-| `DEPS-PATTERN.md` | 2026-11-03 | ✅ Fresh | 2.2.3: tag → 2.2.3; sidecar unchanged (`regex net syscalls`). Consumer floor cyrius ≥ 6.7.2 (measured at 2.2.0 and 2.2.1) |
-| `VERSION` | 2026-11-03 | ✅ Fresh | `2.2.3` — single source of truth, read into `cyrius.cyml` via `${file:VERSION}` |
+| `DEPS-PATTERN.md` | 2026-11-04 | ✅ Fresh | 2.2.4: tag → 2.2.4; sidecar unchanged (`regex net syscalls`). Re-verified at 2.2.4 with a clean-room consumer (6 deps resolved; the guide's §2 snippet denies `ark_install` from an unregistered agent). Consumer floor cyrius ≥ 6.7.2 unchanged |
+| `VERSION` | 2026-11-04 | ✅ Fresh | `2.2.4` — single source of truth, read into `cyrius.cyml` via `${file:VERSION}` |
 | `LICENSE` | (initial commit) | 🔵 No version-tied claims | GPL-3.0-only |
 
 ---
@@ -75,8 +75,8 @@ examples now are — see Tier 7.
 
 | File | Last touched | Status | Notes |
 |---|---|---|---|
-| `roadmap.md` | 2026-11-03 | ✅ Fresh | 2.2.3: Current pointer; a 2.2.3 Shipped row; the scheduled 2.2.3 table replaced by **2.2.4 — audit follow-ups (proposed)** and the two items that need a minor (pattern-detector redesign, export envelope v2). 2.2.2: reorganized (versions, 2.3.x+ lines, re-checked blockers) |
-| `threat-model.md` | 2026-11-03 | ✅ Fresh | **Rewritten at 2.2.3** from `src/`: it still cited `toml::from_str`, the `regex` crate, `cargo-deny` and "zero `unsafe` blocks". Trust boundaries, an attack-surface table with each mitigation and the release that added it, known limitations (F10, unbounded per-agent state, the never-freed allocation, the export envelope, Linux-only SIGHUP), memory-safety discipline, supply chain |
+| `roadmap.md` | 2026-11-04 | ✅ Fresh | 2.2.4: Current pointer and capacity; a 2.2.4 Shipped row; the 2.2.4 table replaced by **Remaining patch-sized follow-ups** (D14/S16 with why a cap needs a decision, P10, and the injection detector's measured 26 µs); the description-hash blocker re-checked against bote 3.8.9's full bundle |
+| `threat-model.md` | 2026-11-04 | ✅ Fresh | Rewritten at 2.2.3 from `src/`. 2.2.4: rows for a key named twice, an unterminated identifier, allocation failure, lookalike letters and ill-formed UTF-8 output; the memory-safety section says which allocations are checked |
 
 ---
 
@@ -94,10 +94,10 @@ examples now are — see Tier 7.
 |---|---|---|---|
 | `adr-001-dual-audit.md` | 2026-04-14 | ✅ Fresh | Accepted. Ring buffer + libro chain duality. Holds |
 | `adr-002-default-deny.md` | 2026-11-03 | ✅ Fresh | Accepted. **2.2.3 amendment**: `DA_FLAG` no longer skips later checks; the sample is Cyrius, not Rust; an unknown `DefaultAction` denies |
-| `adr-003-bote-middleware.md` | 2026-04-14 | ✅ Fresh | Accepted. SecurityGate wraps bote Dispatcher. Carries unchanged through bote-core 3.8.1 — the middleware suite passes against it (MAJOR bumps were additive on the 2.0 handler ABI) |
+| `adr-003-bote-middleware.md` | 2026-04-14 | ✅ Fresh | Accepted. SecurityGate wraps bote Dispatcher. Carries unchanged through bote-core 3.8.9 — the middleware suite passes against it (MAJOR bumps were additive on the 2.0 handler ABI) |
 | `adr-004-cyrius-port.md` | 2026-04-14 | ✅ Fresh | Accepted. Historical decision, holds |
 | `adr-005-chacha20-ed25519-aead.md` | 2026-11-03 | ✅ Fresh | Accepted. **2.2.3 amendment**: what the audit confirmed and fixed (double sign, ignored sign result, wiping, nonce 0), and the three gaps that keep it short of a full AEAD (key binding, domain separation, replay) |
-| `adr-006-safety-submodule.md` | 2026-11-03 | ✅ Fresh | Accepted. **2.2.3 amendment**: fail closed everywhere, strongest verdict wins, destructive-command detectors, scope normalisation, action-type filters, bounded memory; what stays open |
+| `adr-006-safety-submodule.md` | 2026-11-04 | ✅ Fresh | Accepted. **2.2.3 amendment**: fail closed everywhere, strongest verdict wins, destructive-command detectors, path normalisation, action filters, bounded memory. **2.2.4 amendment**: lookalike folding, `require_utf8`, the allocation-failure verdict; rate-bucket bounds still open |
 
 **ADR posture today**: low decision-velocity. A 2.2.x amendment to
 ADR-003 may add a "claims-aware authorization" subsection.
@@ -109,7 +109,7 @@ ADR-003 may add a "claims-aware authorization" subsection.
 | File | Date | Status | Notes |
 |---|---|---|---|
 | `2026-04-14.md` | 2026-04-14 | 📦 Historical record | 2.0.0 P(-1) audit; 10 CVE-class fixes |
-| `2026-11-03.md` | 2026-11-03 | ✅ Fresh | **2.2.3 P(-1) audit.** Four independent reviews; 74 items, one row each with status and guard test; behaviour changes; verification; deferred items with proposed placement |
+| `2026-11-03.md` | 2026-11-04 | ✅ Fresh | **2.2.3 P(-1) audit.** Four independent reviews; 74 items, one row each with status and guarding test. 2.2.4 outcomes added to the P12, C14, S11 and S13–S18 rows, and a "Since" column on the deferred table; the findings themselves are left as written |
 
 The next full audit follows CLAUDE.md's P(-1) process at the next minor cut.
 
@@ -119,8 +119,8 @@ The next full audit follows CLAUDE.md's P(-1) process at the next minor cut.
 
 | File | Last touched | Status | Notes |
 |---|---|---|---|
-| `integration.md` | 2026-11-03 | ✅ Fresh | **2.2.3: §3–§7 rewritten** as one program built against `dist/t-ron.cyr` in a clean-room project and run; every JSON line it quotes matches that run byte for byte. Documents signed mode, the strict loader, decoded tool names, single-threaded use, `sighup_init` before threads; §5–§6 no longer include `src/` files; §2 drops `fs`. The whole guide is now verified |
-| `testing.md` | 2026-11-03 | ✅ Fresh | 2.2.3: four suites, **847 assertions across 225 groups**, the suite table, and the rule that a security regression test must fail against the pre-fix code |
+| `integration.md` | 2026-11-04 | ✅ Fresh | §3–§7 are one program built against `dist/t-ron.cyr` in a clean-room consumer. **Re-run at 2.2.4** on bote-core 3.8.9 (6 deps, 0 undefined, 0 warnings): the §4 and §7 outputs match byte for byte, §5's signed load and §6's SIGHUP setup return 0. Header and tag → 2.2.4 |
+| `testing.md` | 2026-11-04 | ✅ Fresh | 2.2.4: **902 assertions across 231 groups**, the suite table, six benches, and a new section on testing failure paths (`ALLOC_MAX`, guard pages, the lock re-vendoring `lib/`) |
 
 ---
 
@@ -137,10 +137,10 @@ a change (none registers t-ron's tool definitions). At 2.1.11, 01 and 02 needed 
 
 | File | Last touched | Status | Notes |
 |---|---|---|---|
-| `01-minimal-gate.cyr` | 2026-11-03 | ✅ Fresh | Builds + **runs** on 6.7.18: `web-agent tarang_probe -> allow`, unknown agent `-> deny`. Now includes `src/crypto_chacha20.cyr` |
-| `02-signed-policy.cyr` | 2026-11-03 | ✅ Fresh | Builds + **runs** on 6.7.18: Ed25519 signed policy loaded and enforced. Now includes `src/crypto_chacha20.cyr` |
-| `03-audit-export.cyr` | 2026-11-03 | ✅ Fresh | Builds + **runs** on 6.7.18: ChaCha20 + Ed25519 AEAD round-trip, 456-byte envelope |
-| `04-safety-check.cyr` | 2026-11-03 | ✅ Fresh | Builds + **runs** on 6.7.18: `ls -la /tmp` allowed, `rm -rf /` blocked |
+| `01-minimal-gate.cyr` | 2026-11-03 | ✅ Fresh | Builds + **runs** on 6.7.18 / bote-core 3.8.9 (re-run at 2.2.4): `web-agent tarang_probe -> allow`, unknown agent `-> deny` |
+| `02-signed-policy.cyr` | 2026-11-03 | ✅ Fresh | Builds + **runs** on 6.7.18 / bote-core 3.8.9 (re-run at 2.2.4): Ed25519 signed policy loaded and enforced |
+| `03-audit-export.cyr` | 2026-11-03 | ✅ Fresh | Builds + **runs** on 6.7.18 / bote-core 3.8.9 (re-run at 2.2.4): ChaCha20 + Ed25519 AEAD round-trip, 456-byte envelope |
+| `04-safety-check.cyr` | 2026-11-03 | ✅ Fresh | Builds + **runs** on 6.7.18 / bote-core 3.8.9 (re-run at 2.2.4): `ls -la /tmp` allowed, `rm -rf /` blocked |
 | `README.md` | 2026-09-23 | ✅ Fresh | Examples index. 2.1.11: the build note still named `cyrius.toml`; now `cyrius.cyml` |
 
 ---
@@ -149,7 +149,7 @@ a change (none registers t-ron's tool definitions). At 2.1.11, 01 and 02 needed 
 
 | File | Last touched | Status | Notes |
 |---|---|---|---|
-| `sources.md` | 2026-11-03 | ✅ Fresh | 2.2.3: RFC 8439 (obsoletes 7539) with the counter limit; RFC 8259 §7 for `json_text`; libro's UUID now from `random_bytes`; the export described as encrypt-then-sign with its gaps; TOML described as the strict subset |
+| `sources.md` | 2026-11-04 | ✅ Fresh | 2.2.3: RFC 8439 (obsoletes 7539) with the counter limit; RFC 8259 §7 for `json_text`. 2.2.4: a Unicode section — Table 3-7 / RFC 3629 for `require_utf8`, UTS #39 confusables and UAX #15 NFKC for the lookalike fold |
 | `benchmarks-rust-v-cyrius.md` | 2026-11-03 | ✅ Fresh | 2.2.3: a 2.2.3 column beside the 2.0.0 history (timings, binary, `src/` lines), with a warning that it was not measured alongside the Rust run. It no longer contradicts README |
 
 ---
@@ -199,7 +199,7 @@ table.
 
 ---
 
-*Last refresh: 2026-11-03 (2.2.3 release — the P(-1) sweep and its
-documentation audit; every doc fresh, every executable doc rebuilt and
-re-run on 6.7.18.)
+*Last refresh: 2026-11-04 (2.2.4 release — bote-core 3.8.9 and four
+audit follow-ups; every doc fresh, every executable doc rebuilt and
+re-run on 6.7.18 / bote-core 3.8.9.)
 Refresh in place when docs are touched.*

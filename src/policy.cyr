@@ -146,6 +146,7 @@ fn _policy_format_deny(agent_id, tool_name) {
     var alen = strlen(agent_id);
     var tlen = strlen(tool_name);
     var buf  = alloc(alen + tlen + 48);
+    if (buf == 0) { return "tool denied by policy"; }
     var off  = 0;
     memcpy(buf + off, "tool '", 6); off = off + 6;
     memcpy(buf + off, tool_name, tlen); off = off + tlen;
@@ -191,10 +192,12 @@ fn _skip_to_eol(src, i, n) {
     return i;
 }
 
-#  Copy src[start..end] into a fresh null-terminated buffer.
+#  Copy src[start..end] into a fresh null-terminated buffer; 0 when it
+#  cannot be allocated, which the parser reads as a failed load.
 fn _dup_cstr(src, start, end) {
     var len = end - start;
     var buf = alloc(len + 1);
+    if (buf == 0) { return 0; }
     memcpy(buf, src + start, len);
     store8(buf + len, 0);
     return buf;
@@ -236,6 +239,7 @@ fn _parse_qstring(src, i, n) {
     }
     if (i >= n) { return (0 - 1, 0); }
     var s = _dup_cstr(src, start, i);
+    if (s == 0) { return (0 - 1, 0); }
     return (i + 1, s);
 }
 
@@ -370,6 +374,7 @@ fn policy_load_toml(e, src) {
                 i = i + 1;
             }
             var key = _dup_cstr(src, kstart, i);
+            if (key == 0) { return TRON_ERR_POLICY_CONFIG; }
             i = _skip_blank(src, i, n);
             if (i >= n || load8(src + i) != 61) { return TRON_ERR_POLICY_CONFIG; }
             i = _skip_blank(src, i + 1, n);

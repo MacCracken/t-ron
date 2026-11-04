@@ -1,24 +1,25 @@
 # t-ron Roadmap
 
-> **Current**: `2.2.3` (cyrius 6.7.18; libro 2.11.3, bote-core
-> 3.8.1 via the transport-free `dist/bote-core.cyr` profile, sigil
+> **Current**: `2.2.4` (cyrius 6.7.18; libro 2.11.3, bote-core
+> 3.8.9 via the transport-free `dist/bote-core.cyr` profile, sigil
 > 3.13.15 pinned first-party via `[deps.sigil]` — full
 > `dist/sigil.cyr`; majra 2.13.0 / patra 1.16.6 transitively). Full
-> pipeline (`tron_check_allow`) **~17.3 µs**, `audit_log` **~10.5
-> µs**, `policy_check` **~222 ns**, scanner **~0.4 µs**; **847
-> assertions** across four test suites; a **684 KB** static binary;
-> `dist/t-ron.cyr` single-file consumer bundle (6 849 lines, 19
-> modules); CI resolves `cyrius deps --locked` and runs two failing
-> security gates.
+> pipeline (`tron_check_allow`) **~17.2 µs**, `audit_log` **~10.5
+> µs**, `policy_check` **~210 ns**, scanner **~0.4 µs**, safety
+> injection check **~26 µs**; **902 assertions** across four test
+> suites; a **689 KB** static binary; `dist/t-ron.cyr` single-file
+> consumer bundle (7 116 lines, 19 modules); CI resolves `cyrius deps
+> --locked` and runs two failing security gates.
 >
 > **2.2.3 was the P(-1) sweep**: four independent reviews of every
 > module, 74 items, every critical and high one fixed
-> ([audit report](../audit/2026-11-03.md)). **Next: 2.2.4**, the audit's
-> patch-sized follow-ups (below), then feature work from **2.3.x**.
+> ([audit report](../audit/2026-11-03.md)). **2.2.4** moved bote-core
+> to 3.8.9 and closed four of its five patch-sized follow-ups. The
+> rest are below, then feature work from **2.3.x**.
 >
-> **Capacity is comfortable on every dimension**: `fn_table` **5 902
-> / 131 072 (4 %)**, `identifiers` **167 196 / 8 388 608 (2 %)**,
-> `code_size` **158 960 / 67 108 864 (0.2 %)**.
+> **Capacity is comfortable on every dimension**: `fn_table` **6 058
+> / 131 072 (5 %)**, `identifiers` **170 445 / 8 388 608 (2 %)**,
+> `code_size` **157 560 / 67 108 864 (0.2 %)**.
 >
 > **Full release history**: [CHANGELOG.md](../../CHANGELOG.md).
 > Rust archive preserved at git tag `0.90.0` under `rust-old/`.
@@ -73,6 +74,8 @@
 | **2.2.2** | **bote-core 3.8.1 + the quick-item bundle.** `policy_check` does one hash lookup, not two (**−27 %**, 290 → 211 ns, isolated by an A/B). The crypto test's raw `syscall(39/62)` replaced with `sys_getpid` / `sys_kill` — the last warning in any build. CI's dist gate also diffs `dist/t-ron.deps` and no longer swallows a `distlib` failure (mutation-checked). `src/main.cyr` comments rewritten as present-tense rules. The assert-quirk watch row closed. The roadmap reorganized into 2.2.3 + feature lines. 426 assertions |
 | **2.2.3** | **The P(-1) sweep.** Four independent reviews of all 19 modules; 74 items, 3 critical and 16 high, all fixed: the gate checked tool names undecoded while bote ran them decoded (an escaped name passed a deny entry); SIGHUP reload skipped the signature check (now signed mode); the scanner never decoded JSON escapes; `DA_FLAG` skipped every later check; the TOML loader read comments as content and wiped the policy on a bad file (now strict and atomic); two more audit-log heap overruns; LLM scan read every real reply as clean and leaked its socket; the safety submodule failed open, leaked and was bypassable. New `src/json_text.cyr`, `tests/t-ron-detect.tcyr`, and two failing CI security gates. Scanner 9× faster. 847 assertions ([report](../audit/2026-11-03.md)) |
 
+| **2.2.4** | **bote-core 3.8.9 + four audit follow-ups.** bote 3.8.6's refusal of a request that names a key twice now covers what the gate forwards (pinned by a test that fails on 3.8.1). The identifier check reads at most 257 bytes (P12). Every input-sized buffer in `src/` that was written unchecked fails closed when it cannot be allocated: fixed deny reasons on the gate path, and a "safety: allocation failed" Blocked verdict from the safety engine (C14; 15 sites, each crashing 2.2.3). The safety injection detector folds 59 Cyrillic, Greek and Latin-extension lookalikes and the fullwidth letters to ASCII (S11). `require_utf8` output validation (S15; `SafetyRule` 80 → 88 bytes). 902 assertions |
+
 See [CHANGELOG.md](../../CHANGELOG.md) for the full detail per release.
 
 **The 2.1.x modernization arc (2.1.0–2.1.12) is closed.** It took
@@ -82,18 +85,16 @@ feature item, real-time alerts via daimon, moved to 2.4.x below.
 
 ---
 
-## 2.2.4 — audit follow-ups (proposed, next)
+## Remaining patch-sized follow-ups (unscheduled)
 
-The patch-sized items the 2.2.3 audit deferred. IDs refer to the
-[report](../audit/2026-11-03.md).
+What the 2.2.3 audit deferred and 2.2.4 left open, plus what 2.2.4
+measured. IDs refer to the [report](../audit/2026-11-03.md).
 
 | Item | IDs |
 |---|---|
-| Bound per-agent state: the pattern analyzer, the correlation detector and their intern tables; evict idle safety rate buckets | D14, S16 |
-| Unicode confusable mapping in the safety injection detector (a Cyrillic `о` still evades it) | S11 |
-| `require_utf8` output validation, which the Rust original had | S15 |
-| Scan identifiers only up to the 256-byte cap; check the remaining unchecked allocations in `src/` | P12, C14 |
+| Bound per-agent state: the pattern analyzer, the correlation detector and their intern tables, and the safety rate buckets. The allocator never frees, so evicting idle entries reclaims nothing; only a cap bounds the memory, and what a full table does (refuse a new agent, or stop tracking it) needs a decision | D14, S16 |
 | The per-call allocation t-ron never frees (~1 KB per `tron_check`, most of it the libro entry): an arena or freelist, or a documented restart budget | P10 |
+| The safety injection detector takes ~26 µs for a clean 117-byte prompt, 70× the payload scanner (`safety_injection_check`, first measured at 2.2.4) | — |
 
 **Needing a minor** (each changes behaviour or a format; placement is
 the maintainer's call):
@@ -115,7 +116,7 @@ Blockers were re-checked against the sibling repos on 2026-11-03.
 |---|---|
 | **Tool titles and output schemas** | `tron_status`, `tron_risk` and `tron_audit` return a JSON document inside a text block. bote 3.8.0's `outputSchema` / `structuredContent` and 3.8.1's `tool_def_with_title` let them declare that shape, so a client can read it without parsing text. Changes what `tools/list` and each result carry. **Unblocked** |
 | **Audit-tool authorization** | Gate `tron_audit` / `tron_policy` on caller identity read from `claims`, which the 2.1.0 handler-ABI change already plumbs through. The bote side is ready: 3.6.x verifies JWTs (RS256 / ES256 from a JWK Set, audience, `403 insufficient_scope`). **Blocked** on the agnosticos claims schema; agnosticos's own planning (`native-display-protocol.md`) still says "real auth waits on the claims schema" |
-| **Description-hash pinning** (audit F1 follow-up) | Integrate when bote has the primitive. **Blocked upstream**: bote 3.8.1's `src/` has no description-hash symbol |
+| **Description-hash pinning** (audit F1 follow-up) | Integrate when bote has the primitive. **Blocked upstream**: bote 3.8.9's full bundle (`dist/bote.cyr`, all of `src/`) has no description-hash symbol |
 
 ### 2.4.x — Ecosystem integration
 
