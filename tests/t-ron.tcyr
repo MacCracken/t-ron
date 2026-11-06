@@ -135,7 +135,7 @@ fn test_verdicts() {
 
 fn test_policy_core() {
     test_group("policy grant and check");
-    var eng = policy_engine_new();
+    var eng = tron_policy_engine_new();
     policy_grant(eng, "agent-1", "tarang_*");
     var k1, r1 = policy_check(eng, "agent-1", "tarang_probe");
     assert_eq(k1, PR_ALLOW, "allow tarang_probe");
@@ -161,7 +161,7 @@ fn test_policy_core() {
 
 fn test_policy_toml() {
     test_group("policy TOML loader");
-    var eng = policy_engine_new();
+    var eng = tron_policy_engine_new();
     var toml1 = "[agent.\"web\"]\nallow = [\"tarang_*\", \"rasa_*\"]\ndeny = [\"aegis_*\"]\n";
     policy_load_toml(eng, toml1);
     var k1, r1 = policy_check(eng, "web", "tarang_probe");
@@ -174,14 +174,14 @@ fn test_policy_toml() {
     assert_eq(k4, PR_UNKNOWN_TOOL, "toml unknown tool");
 
     test_group("policy TOML rate limit");
-    var eng2 = policy_engine_new();
+    var eng2 = tron_policy_engine_new();
     var toml2 = "[agent.\"limited\"]\nallow = [\"*\"]\n[agent.\"limited\".rate_limit]\ncalls_per_minute = 10\n[agent.\"unlimited\"]\nallow = [\"*\"]\n";
     policy_load_toml(eng2, toml2);
     assert_eq(agent_policy_rate_cpm(policy_get(eng2, "limited")),   10, "rate cpm = 10");
     assert_eq(agent_policy_rate_cpm(policy_get(eng2, "unlimited")),  0, "rate cpm = 0 (unset)");
 
     test_group("policy TOML reload replaces");
-    var eng3 = policy_engine_new();
+    var eng3 = tron_policy_engine_new();
     policy_grant(eng3, "old-agent", "tarang_*");
     policy_load_toml(eng3, "[agent.\"new-agent\"]\nallow = [\"*\"]\n");
     var k5, r5 = policy_check(eng3, "old-agent", "anything");
@@ -190,7 +190,7 @@ fn test_policy_toml() {
     assert_eq(k6, PR_ALLOW, "reload loads new agent");
 
     test_group("policy deny-only");
-    var eng4 = policy_engine_new();
+    var eng4 = tron_policy_engine_new();
     policy_load_toml(eng4, "[agent.\"lockdown\"]\ndeny = [\"*\"]\n");
     var k7, r7 = policy_check(eng4, "lockdown", "anything");
     assert_eq(k7, PR_DENY, "deny-only policy");

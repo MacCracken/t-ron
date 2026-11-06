@@ -76,7 +76,7 @@ fn tron_config_set_enable_correlation(c, v)    { store64(c + 40, v); return 0; }
 
 fn tron_new(config) {
     var t = alloc(72);
-    store64(t,      policy_engine_new());
+    store64(t,      tron_policy_engine_new());
     store64(t + 8,  rate_limiter_new());
     store64(t + 16, pattern_analyzer_new());
     store64(t + 24, correlation_detector_new());

@@ -81,7 +81,7 @@ it identify the case, not restate the operator.
 ### Testing policy
 
 ```cyrius
-var eng = policy_engine_new();
+var eng = tron_policy_engine_new();
 policy_grant(eng, "test-agent", "my_tool");
 
 var call = tool_call_new("test-agent", "my_tool", "{}", 0);

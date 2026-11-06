@@ -6,7 +6,7 @@ type: state
 
 # Documentation Health — t-ron
 
-> **Last refresh**: 2026-11-04 (2.2.4 release — bote-core 3.8.9 and four audit follow-ups). Every doc that names a version, a pin, a count or a behaviour 2.2.4 changed was updated; the integration guide's program, its §2 snippet and the four examples were rebuilt and re-run against the new code. The 2.2.3 pass's rewrites (overview, threat model, integration §3–§7) still hold. No doc is stale or outstanding. | **Refresh cadence**: when docs are touched, update the affected row.
+> **Last refresh**: 2026-11-06 (2.2.5: bote-core 3.8.15 and the two renamed constructors; CHANGELOG, README, roadmap, testing guide. Samples not re-run). Before that, 2026-11-04 (2.2.4 release — bote-core 3.8.9 and four audit follow-ups). Every doc that names a version, a pin, a count or a behaviour 2.2.4 changed was updated; the integration guide's program, its §2 snippet and the four examples were rebuilt and re-run against the new code. The 2.2.3 pass's rewrites (overview, threat model, integration §3–§7) still hold. No doc is stale or outstanding. | **Refresh cadence**: when docs are touched, update the affected row.
 > **Scope**: This repo only (`t-ron`) — root-level files (README, CHANGELOG, CLAUDE.md, etc.) plus the entire `docs/` tree. Cross-repo dep pin drift lives in CHANGELOG entries and the [roadmap](development/roadmap.md), not here.
 
 This is a **ledger**, not a one-time audit. Rewrite-in-place as

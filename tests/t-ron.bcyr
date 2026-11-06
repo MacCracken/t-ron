@@ -63,7 +63,7 @@ var _b_permissive_cfg = 0;
 var _b_tron     = 0;
 
 fn _b_setup() {
-    _b_eng = policy_engine_new();
+    _b_eng = tron_policy_engine_new();
     policy_grant(_b_eng, "agent-1", "tarang_*");
     _b_rate = rate_limiter_new();
     _b_audit = audit_logger_new();

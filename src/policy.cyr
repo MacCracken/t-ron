@@ -32,7 +32,7 @@ enum PolicyResult {
 #    +8   deny      vec<cstring>   deny-list patterns
 #    +16  rate_cpm  i64            calls per minute (0 = the limiter's default)
 
-fn agent_policy_new() {
+fn tron_agent_policy_new() {
     var p = alloc(24);
     store64(p,      vec_new());
     store64(p + 8,  vec_new());
@@ -65,7 +65,7 @@ fn agent_policy_set_rate(p, cpm) {
 #
 #  Layout (8 bytes): just a hashmap pointer.
 
-fn policy_engine_new() {
+fn tron_policy_engine_new() {
     var e = alloc(8);
     store64(e, map_new());
     return e;
@@ -86,7 +86,7 @@ fn policy_get_or_create(e, agent_id) {
     var m = load64(e);
     var p = map_get(m, agent_id);
     if (p != 0) { return p; }
-    p = agent_policy_new();
+    p = tron_agent_policy_new();
     map_set(m, agent_id, p);
     return p;
 }
@@ -342,7 +342,7 @@ fn _section_result(new_i, is_agent, rate_flag, name) {
 fn policy_load_toml(e, src) {
     if (src == 0) { return TRON_ERR_POLICY_CONFIG; }
     var n = strlen(src);
-    var fresh = policy_engine_new();
+    var fresh = tron_policy_engine_new();
     var agents = 0;
     var cur_agent  = 0;        #  AgentPolicy ptr of current section
     var in_rate    = 0;        #  1 if inside [...rate_limit]

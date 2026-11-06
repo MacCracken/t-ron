@@ -1,7 +1,7 @@
 # t-ron Roadmap
 
-> **Current**: `2.2.4` (cyrius 6.7.18; libro 2.11.3, bote-core
-> 3.8.9 via the transport-free `dist/bote-core.cyr` profile, sigil
+> **Current**: `2.2.5` (cyrius 6.7.18; libro 2.11.3, bote-core
+> 3.8.15 via the transport-free `dist/bote-core.cyr` profile, sigil
 > 3.13.15 pinned first-party via `[deps.sigil]` — full
 > `dist/sigil.cyr`; majra 2.13.0 / patra 1.16.6 transitively). Full
 > pipeline (`tron_check_allow`) **~17.2 µs**, `audit_log` **~10.5
@@ -74,6 +74,7 @@
 | **2.2.2** | **bote-core 3.8.1 + the quick-item bundle.** `policy_check` does one hash lookup, not two (**−27 %**, 290 → 211 ns, isolated by an A/B). The crypto test's raw `syscall(39/62)` replaced with `sys_getpid` / `sys_kill` — the last warning in any build. CI's dist gate also diffs `dist/t-ron.deps` and no longer swallows a `distlib` failure (mutation-checked). `src/main.cyr` comments rewritten as present-tense rules. The assert-quirk watch row closed. The roadmap reorganized into 2.2.3 + feature lines. 426 assertions |
 | **2.2.3** | **The P(-1) sweep.** Four independent reviews of all 19 modules; 74 items, 3 critical and 16 high, all fixed: the gate checked tool names undecoded while bote ran them decoded (an escaped name passed a deny entry); SIGHUP reload skipped the signature check (now signed mode); the scanner never decoded JSON escapes; `DA_FLAG` skipped every later check; the TOML loader read comments as content and wiped the policy on a bad file (now strict and atomic); two more audit-log heap overruns; LLM scan read every real reply as clean and leaked its socket; the safety submodule failed open, leaked and was bypassable. New `src/json_text.cyr`, `tests/t-ron-detect.tcyr`, and two failing CI security gates. Scanner 9× faster. 847 assertions ([report](../audit/2026-11-03.md)) |
 
+| **2.2.5** | **bote-core 3.8.15; two constructors renamed so a host can link t-ron beside nein** (filed by daimon). No behaviour change. |
 | **2.2.4** | **bote-core 3.8.9 + four audit follow-ups.** bote 3.8.6's refusal of a request that names a key twice now covers what the gate forwards (pinned by a test that fails on 3.8.1). The identifier check reads at most 257 bytes (P12). Every input-sized buffer in `src/` that was written unchecked fails closed when it cannot be allocated: fixed deny reasons on the gate path, and a "safety: allocation failed" Blocked verdict from the safety engine (C14; 15 sites, each crashing 2.2.3). The safety injection detector folds 59 Cyrillic, Greek and Latin-extension lookalikes and the fullwidth letters to ASCII (S11). `require_utf8` output validation (S15; `SafetyRule` 80 → 88 bytes). 902 assertions |
 
 See [CHANGELOG.md](../../CHANGELOG.md) for the full detail per release.

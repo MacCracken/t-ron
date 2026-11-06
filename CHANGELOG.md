@@ -16,6 +16,41 @@ top. Mirrors bote 2.7.0's flow.
 
 _(empty)_
 
+## [2.2.5] — 2026-11-06 · Two constructors renamed, so a host can link t-ron beside nein; bote-core 3.8.15
+
+**902 assertions** (t-ron 407 · crypto 64 · safety 239 · detect 192), unchanged, all passing, and every build
+prints zero warnings. No behaviour changes.
+
+### Fixed
+
+- **t-ron could not be linked beside nein.** Both defined `agent_policy_new` and `policy_engine_new`, in one global
+  scope. In daimon the first was a compile error by arity. The second has one arity and two meanings, so
+  alone it would have compiled, and `tron_new` would have stored nein's vec-shaped engine where `policy_check` reads
+  a hashmap. They are now **`tron_agent_policy_new`** and **`tron_policy_engine_new`**. Filed by daimon:
+  [`docs/development/issues/2026-11-06-policy-constructors-collide-with-nein.md`](docs/development/issues/2026-11-06-policy-constructors-collide-with-nein.md).
+
+### Changed — API
+
+- ⚠ **The two constructors above are renamed.** They were internal: t-ron's own source and tests were their only
+  callers, and a host builds through `tron_new`. A consumer that called either directly renames the call.
+
+### Changed — dependencies
+
+- **bote-core 3.8.9 → 3.8.15.** `cyrius.lock` moves by bote-core's hash and commit pin (66 entries, 5 commit pins), and
+  `dist/t-ron.deps` is unchanged. All 902 assertions pass on it. The other pins are unchanged (cyrius 6.7.18, libro
+  2.11.3, sigil 3.13.15; majra 2.13.0 and patra 1.16.6 transitive).
+
+### Verification
+
+- `cyrius distlib` regenerated `dist/t-ron.cyr`; `cyrius deps --locked` says lib and lock are what the tags resolve;
+  `cyrius fuzz` passes 1 of 1.
+- **Linked into daimon** (nein 1.9.1, bote 3.8.15, libro 2.11.3, sigil 3.13.15): it builds with no duplicate warning.
+- **Performance**: 2.2.4 against 2.2.5, 6 interleaved runs, at a load average of about 1: 5 of 6 rows within ±3%.
+  `policy_check` 196 → 193 ns. `scanner_sql_detect` 340 → 356 ns (+4.7%), in code this release did not touch.
+
+⚠ The samples in `docs/guides/integration.md` and `docs/examples/` were not re-run: their verification lines still
+say 2.2.4 and bote-core 3.8.9, which is what they were run on.
+
 ## [2.2.4] — 2026-11-04 · bote-core 3.8.9, and four of the audit's follow-ups
 
 bote-core moves 3.8.1 → 3.8.9, and four of the five patch-sized items the

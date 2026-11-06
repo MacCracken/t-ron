@@ -4,10 +4,14 @@
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)](LICENSE)
 [![Language: Cyrius](https://img.shields.io/badge/Language-Cyrius-brightgreen.svg)](https://github.com/MacCracken/cyrius)
-[![Version: 2.2.4](https://img.shields.io/badge/Version-2.2.4-informational.svg)](VERSION)
+[![Version: 2.2.5](https://img.shields.io/badge/Version-2.2.5-informational.svg)](VERSION)
 
 T-Ron is a [Cyrius](https://github.com/MacCracken/cyrius) security-middleware module set that sits between [bote](https://github.com/MacCracken/bote) (MCP protocol layer) and tool handlers, enforcing per-agent permissions, rate limiting, payload scanning, anomaly detection, and auditing every verdict to a tamper-proof [libro](https://github.com/MacCracken/libro) hash chain. Named after Tron, the security program that fights the Master Control Program.
 
+> **2.2.5 — bote-core 3.8.15, and t-ron now links beside nein.** Two internal constructors are renamed
+> (`tron_agent_policy_new`, `tron_policy_engine_new`), because they collided with nein's in one global scope. No
+> behaviour changes. See the [CHANGELOG](CHANGELOG.md).
+>
 > **2.2.4 — bote-core 3.8.9, and four of the audit's follow-ups.** The safety injection detector folds Cyrillic, Greek and fullwidth lookalike letters to Latin, output validation gains `require_utf8`, the identifier check reads no further than its 256-byte cap, and a buffer that cannot be allocated now fails closed instead of crashing the host. See the [CHANGELOG](CHANGELOG.md).
 >
 > **2.2.3 — the P(-1) audit.** Four independent reviews of every module found 74 items, 3 critical and 16 high, all fixed: an escaped tool name could pass a deny entry, SIGHUP reload skipped the signature check, the scanner never decoded JSON escapes, `DA_FLAG` skipped every later check, the policy loader read comments as content, and more. See the [audit report](docs/audit/2026-11-03.md). **Upgrade if you run 2.2.2 or earlier.** Signed mode and the strict policy loader change behaviour; the [CHANGELOG](CHANGELOG.md) lists every change callers will see.
@@ -240,7 +244,7 @@ the full roadmap. Highlights:
 
 | Source | Relevance | Location |
 |---|---|---|
-| [bote](https://github.com/MacCracken/bote) | MCP protocol layer — t-ron wraps its Dispatcher via SecurityGate | `../bote` (tag 3.8.9, `dist/bote-core.cyr`) |
+| [bote](https://github.com/MacCracken/bote) | MCP protocol layer — t-ron wraps its Dispatcher via SecurityGate | `../bote` (tag 3.8.15, `dist/bote-core.cyr`) |
 | [libro](https://github.com/MacCracken/libro) | Cryptographic audit chain — t-ron writes every verdict to libro | `../libro` (tag 2.11.3) |
 | [cyrius](https://github.com/MacCracken/cyrius) | Language toolchain | 6.7.18 |
 | [hoosh](https://github.com/MacCracken/hoosh) | LLM-assisted prompt injection detection | `../hoosh` (HTTP API, tag 2.0.0) |
